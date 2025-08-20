@@ -15,6 +15,11 @@ RUN useradd -m -s /bin/bash dev && \
 
 USER dev
 
+# Ensures the .ssh directory has the correct permissions
+RUN mkdir -p /home/dev/.ssh && \
+    chown -R dev:dev /home/dev/.ssh && \
+    chmod 700 /home/dev/.ssh
+
 COPY requirements.txt .
 RUN python3 -m pip install --upgrade pip && \
     python3 -m pip install -r requirements.txt

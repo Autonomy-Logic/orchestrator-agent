@@ -3,6 +3,9 @@
     "build": {
         "dockerfile": "Dockerfile"
     },
+    "mounts": [
+        "source=${env:HOME}/.ssh,target=/home/dev/.ssh,type=bind"
+    ],
     "features": {
         "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
     },
@@ -18,7 +21,7 @@
             ]
         }
     },
-    "forwardPorts": [7676],
+    "forwardPorts": [22, 7676],
     "postCreateCommand": "",
     "remoteUser": "dev",
     "runArgs": ["--name", "orchestrator-agent-devcontainer"]
