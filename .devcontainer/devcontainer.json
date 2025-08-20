@@ -1,0 +1,25 @@
+{
+    "name": "Orchestrator Agent Dev Container",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "features": {
+        "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
+    },
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "terminal.integrated.shell.linux": "/bin/bash"
+            },
+            "extensions": [
+                "ms-vscode.cpptools",
+                "ms-python.python",
+                "esbenp.prettier-vscode"
+            ]
+        }
+    },
+    "forwardPorts": [7676],
+    "postCreateCommand": "",
+    "remoteUser": "dev",
+    "runArgs": ["--name", "orchestrator-agent-devcontainer"]
+}

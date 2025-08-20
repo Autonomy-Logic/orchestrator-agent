@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>GET Request Buttons</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 2rem;
+    }
+    button {
+      margin: 0.5rem;
+      padding: 1rem 2rem;
+      font-size: 1rem;
+      border: none;
+      border-radius: 8px;
+      background-color: #28a745;
+      color: white;
+      cursor: pointer;
+      transition: background 0.3s;
+    }
+    button:hover {
+      background-color: #1e7e34;
+    }
+    #output {
+      margin-top: 2rem;
+      padding: 1rem;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      background: #f9f9f9;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h1>Trigger GET Requests (Fetch)</h1>
+
+  <button onclick="makeRequest('/create_container/AHYBFN762KMN')">Fetch /create_container</button>
+  <button onclick="makeRequest('/task2/AHYBFN762KMN')">Fetch /task2</button>
+  <button onclick="makeRequest('/task3/AHYBFN762KMN')">Fetch /task3</button>
+
+  <div id="output">Response will appear here...</div>
+
+  <script>
+    function makeRequest(path) {
+      fetch(path)
+        .then(response => response.text())
+        .then(data => {
+          document.getElementById('output').textContent = `Response from ${path}:\n\n` + data;
+        })
+        .catch(error => {
+          document.getElementById('output').textContent = `Error: ${error}`;
+        });
+    }
+  </script>
+</body>
+</html>
