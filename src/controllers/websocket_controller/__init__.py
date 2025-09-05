@@ -1,4 +1,4 @@
-# from tools.ssl import ssl_context ## Uncomment this when SSL implemented
+from tools.ssl import ssl_context
 from tools.logger import *
 import websockets
 from .topics import handle_topic, register_topic, create_new_runtime
@@ -63,18 +63,20 @@ async def handler(websocket):
 
 
 async def main(host: str = "localhost", port: int = 7676):
-    async with websockets.connect(f"ws://{host}:{port}") as websocket:
+    async with websockets.connect(
+        f"wss://{host}:{port}/ws", ssl=ssl_context
+    ) as websocket:
         websocket.start_keepalive()
         await handler(websocket)
 
 
 def init():
     """
-    Initialize the TLS controller by registering necessary topics.
+    Initialize the Websocket controller by registering necessary topics.
     """
-    log_info("Initializing TLS Controller...")
+    log_info("Initializing Websocket Controller...")
 
-    # Register any topics or perform any setup needed for the TLS controller
+    # Register any topics or perform any setup needed for the Websocket controller
     register_topic(create_new_runtime.NAME, create_new_runtime.callback)
 
-    log_info("TLS Controller initialized successfully.")
+    log_info("Websocket Controller initialized successfully.")

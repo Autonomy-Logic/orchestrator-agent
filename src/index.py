@@ -1,11 +1,12 @@
 ## Main Execution Script
-from controllers.tls_controller import (
-    init as init_tls_controller,
-    main as main_tls_controller,
+from controllers.websocket_controller import (
+    init as init_websocket_controller,
+    main as main_websocket_controller,
 )
 from tools.logger import *
 import argparse
 import asyncio
+from time import sleep
 
 ## AWS Dummy Server Address
 SERVER_HOST = "ec2-18-119-156-107.us-east-2.compute.amazonaws.com"
@@ -24,9 +25,15 @@ if __name__ == "__main__":
     set_log_level(args.log_level)
 
     ## First test script
-    init_tls_controller()
+    init_websocket_controller()
 
-    try:
-        asyncio.run(main_tls_controller(host=SERVER_HOST, port=7676))
-    except KeyboardInterrupt:
-        log_warning("Keyboard interrupt received. Closing connection and exiting.")
+    while True:
+        try:
+            log_info(f"Attempting to connect to server at {SERVER_HOST}:7676...")
+            asyncio.run(main_websocket_controller(host=SERVER_HOST, port=7676))
+        except KeyboardInterrupt:
+            log_warning("Keyboard interrupt received. Closing connection and exiting.")
+            break
+        except Exception as e:
+            log_error("Error connecting to server. Retrying...")
+        sleep(1)
