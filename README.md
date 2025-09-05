@@ -26,12 +26,42 @@ It is responsible for:
 - 📡 **WebRTC**
 - 🐳 **Docker + VSCode Devcontainers**
 
-## ⚙️ Installation
-1. Create a directory for TLS certificates and keys and copy your TLS certificates and keys into this folder.
-```bash
-mkdir -p ~/.mtls
-```
-2. Open the repository in **VSCode** and start the **devcontainer**.
+ ## ⚙️ Installation
+ 1. Create a directory for TLS certificates and keys
+ ```bash
+ mkdir -p ~/.mtls
+ ```
+ 2. Navigate to the directory
+ ```bash
+ cd ~/.mtls
+ ```
+ 3. Generate TLS certificates using OpenSSL:
+    - Create a Certificate Authority
+        - Generate the CA private key:
+        ```bash
+        openssl genrsa -out ca.key 4096
+        ```
+        - Generate the CA certificate (self-signed, valid for 10 years):
+        ```bash
+        openssl req -x509 -new -nodes -key ca.key -sha256 -days 3650 -out ca.crt \
+        -subj "/C=US/ST=State/L=City/O=MyOrg/OU=CA/CN=MyRootCA"
+        ```
+    - Create the Client Certi
+        - Generate the client private key:
+        ```bash
+        openssl genrsa -out client.key 4096
+        ```
+        - Generate a Certificate Signing Request (CSR):
+        ```bash
+        openssl req -new -key client.key -out client.csr \
+        -subj "/C=US/ST=State/L=City/O=MyOrg/OU=Client/CN=client1"
+        ```
+        - Sign the client certificate with the CA:
+        ```bash
+        openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key \
+        -CAcreateserial -out client.crt -days 365 -sha256
+        ```
+4. Open the repository in **VSCode** and start the **devcontainer**.
 
 ## 🚀 Running the Agent
 Inside the devcontainer:
