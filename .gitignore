@@ -3,7 +3,7 @@ __pycache__/
 *.py[codz]
 *$py.class
 
-# Dummy Server Files
+# Dummy test server
 dummy_server/
 
 # C extensions

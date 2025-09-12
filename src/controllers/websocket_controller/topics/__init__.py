@@ -19,13 +19,15 @@ TOPICS: list[Topic] = []
 def register_topic(name: str, callback: callable) -> None:
     topic = Topic(name, callback)
     TOPICS.append(topic)
-    log_info(f"TLS Interface: Registered new topic: {name}")
+    log_info(f"Websocket Interface: Registered new topic: {name}")
 
 
 async def handle_topic(name: str, **kwargs) -> None:
     for topic in TOPICS:
         if topic.name() == name:
-            log_debug(f"TLS Interface: Handling topic: {name} with args: {kwargs}")
+            log_debug(
+                f"Websocket Interface: Handling topic: {name} with args: {kwargs}"
+            )
             return await topic.callback(**kwargs)
-    log_warning(f"TLS Interface: No topic found with name: {name}")
+    log_warning(f"Websocket Interface: No topic found with name: {name}")
     return None

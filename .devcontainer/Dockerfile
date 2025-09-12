@@ -20,6 +20,11 @@ RUN mkdir -p /home/dev/.ssh && \
     chown -R dev:dev /home/dev/.ssh && \
     chmod 700 /home/dev/.ssh
 
+# Ensures the .mtls directory has the correct permissions
+RUN mkdir -p /home/dev/.mtls && \
+    chown -R dev:dev /home/dev/.mtls && \
+    chmod 700 /home/dev/.mtls
+
 COPY requirements.txt .
 RUN python3 -m pip install --upgrade pip && \
     python3 -m pip install -r requirements.txt
