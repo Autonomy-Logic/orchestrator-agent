@@ -1,0 +1,30 @@
+{
+    "name": "Orchestrator Agent Dev Container",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "mounts": [
+        "source=${env:HOME}/.ssh,target=/home/dev/.ssh,type=bind",
+        "source=${env:HOME}/.mtls,target=/home/dev/.mtls,type=bind"
+    ],
+    "features": {
+        "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
+    },
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "terminal.integrated.shell.linux": "/bin/bash"
+            },
+            "extensions": [
+                "ms-vscode.cpptools",
+                "ms-python.python",
+                "esbenp.prettier-vscode",
+                "mahatolalit.readme-previewer"
+            ]
+        }
+    },
+    "forwardPorts": [22, 7676],
+    "postCreateCommand": "",
+    "remoteUser": "dev",
+    "runArgs": ["--name", "orchestrator-agent-devcontainer"]
+}
