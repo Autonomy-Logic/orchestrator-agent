@@ -1,15 +1,46 @@
 import docker
+import os
+import json
 
 CLIENT = docker.from_env()
 
-## TODO: remove this hardcoding when creating installer
-HOST_NAME = "orchestrator-agent-devcontainer"
+HOST_NAME = os.getenv("HOST_NAME", "orchestrator-agent-devcontainer")
+CLIENTS_FILE = os.getenv("CLIENTS_FILE", "/var/orchestrator/data/clients.json")
 
-CLIENTS = {}
 
-def addClient(clientName: str, ip: str):
+def load_clients_from_file():
+    if not os.path.exists(CLIENTS_FILE):
+        return {}
+    with open(CLIENTS_FILE, "r") as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return {}
+
+
+CLIENTS = load_clients_from_file()
+
+
+def ensure_clients_file_exists():
+    if not os.path.exists(CLIENTS_FILE):
+        os.makedirs(os.path.dirname(CLIENTS_FILE), exist_ok=True)
+        with open(CLIENTS_FILE, "w") as f:
+            f.write("{}")
+
+
+def write_clients_to_file():
+    ensure_clients_file_exists()
+    with open(CLIENTS_FILE, "w") as f:
+        json.dump(CLIENTS, f, indent=4)
+
+
+def add_client(clientName: str, ip: str):
     # TODO: Define structure of CLIENTS better
-    CLIENTS[clientName] = {
-        "ip": ip,
-        "name": clientName
-    }
+    CLIENTS[clientName] = {"ip": ip, "name": clientName}
+    write_clients_to_file()
+
+
+def remove_client(clientName: str):
+    if clientName in CLIENTS:
+        del CLIENTS[clientName]
+        write_clients_to_file()

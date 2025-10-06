@@ -3,3 +3,4 @@ docker
 logger
 colorlog
 websockets
+requests
