@@ -29,12 +29,10 @@ def ensure_clients_file_exists():
             os.makedirs(dir_name, exist_ok=True)
         with open(CLIENTS_FILE, "w") as f:
             f.write("{}")
-    return True
 
 
 def write_clients_to_file():
-    if not ensure_clients_file_exists():
-        return
+    ensure_clients_file_exists()
     with open(CLIENTS_FILE, "w") as f:
         json.dump(CLIENTS, f, indent=4)
 
