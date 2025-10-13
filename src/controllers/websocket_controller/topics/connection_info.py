@@ -8,4 +8,4 @@ def callback(event, _, connected_at):
     if event == "connection.established":
         log_info("Connection established successfully at " + connected_at)
     else:
-        log_warning(f"Unknown event.")
+        log_warning(f"Unknown event: {event}")

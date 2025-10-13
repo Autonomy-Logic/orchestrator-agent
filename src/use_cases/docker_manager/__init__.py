@@ -27,9 +27,6 @@ def ensure_clients_file_exists():
         dir_name = os.path.dirname(CLIENTS_FILE)
         if dir_name:
             os.makedirs(dir_name, exist_ok=True)
-        else:
-            log_error(f"Invalid directory for CLIENTS_FILE: {CLIENTS_FILE}")
-            return False
         with open(CLIENTS_FILE, "w") as f:
             f.write("{}")
     return True

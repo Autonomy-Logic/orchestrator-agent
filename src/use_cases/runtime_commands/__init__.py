@@ -1,5 +1,6 @@
 from requests import get, post, delete, put
 from tools.logger import log_error
+from json import JSONDecodeError
 
 
 def check_instance(instance):
@@ -15,7 +16,7 @@ def process_response(response):
         return None
     try:
         return response.json()
-    except ValueError:
+    except JSONDecodeError:
         log_error("Response is not in JSON format")
         return None
 
