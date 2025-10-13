@@ -1,7 +1,13 @@
 from tools.ssl import ssl_context
 from tools.logger import *
 import websockets
-from .topics import handle_topic, register_topic, create_new_runtime
+from .topics import (
+    handle_topic,
+    register_topic,
+    create_new_runtime,
+    run_command,
+    connection_info,
+)
 import json
 import asyncio
 from datetime import datetime
@@ -77,6 +83,8 @@ def init():
     log_info("Initializing Websocket Controller...")
 
     # Register any topics or perform any setup needed for the Websocket controller
+    register_topic(connection_info.NAME, connection_info.callback)
     register_topic(create_new_runtime.NAME, create_new_runtime.callback)
+    register_topic(run_command.NAME, run_command.callback)
 
     log_info("Websocket Controller initialized successfully.")

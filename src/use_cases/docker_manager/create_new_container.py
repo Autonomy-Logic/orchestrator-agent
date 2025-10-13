@@ -1,5 +1,6 @@
-from . import CLIENT, CLIENTS, HOST_NAME, addClient
+from . import CLIENT, CLIENTS, HOST_NAME, add_client
 from tools.logger import *
+
 
 def run_new_container(image_name: str, container_name: str):
     """
@@ -28,7 +29,7 @@ def run_new_container(image_name: str, container_name: str):
             image=image_name,
             name=container_name,
             detach=True,
-            restart_policy={"Name": "always"}
+            restart_policy={"Name": "always"},
         )
         log_info(f"Container {container_name} created successfully")
 
@@ -46,7 +47,7 @@ def run_new_container(image_name: str, container_name: str):
         network_settings = container.attrs["NetworkSettings"]["Networks"]
         ip_addr = network_settings[network_name]["IPAddress"]
 
-        addClient(container_name, ip_addr)
+        add_client(container_name, ip_addr)
         log_info(f"Container {container_name} has IP {ip_addr}")
 
     except Exception as e:

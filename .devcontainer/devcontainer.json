@@ -5,7 +5,8 @@
     },
     "mounts": [
         "source=${env:HOME}/.ssh,target=/home/dev/.ssh,type=bind",
-        "source=${env:HOME}/.mtls,target=/home/dev/.mtls,type=bind"
+        "source=${env:HOME}/.mtls,target=/home/dev/.mtls,type=bind",
+        "source=/var/orchestrator,target=/var/orchestrator,type=bind"
     ],
     "features": {
         "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
