@@ -1,6 +1,7 @@
 import docker
 import os
 import json
+from tools.logger import log_error
 
 CLIENT = docker.from_env()
 
@@ -23,13 +24,20 @@ CLIENTS = load_clients_from_file()
 
 def ensure_clients_file_exists():
     if not os.path.exists(CLIENTS_FILE):
-        os.makedirs(os.path.dirname(CLIENTS_FILE), exist_ok=True)
+        dir_name = os.path.dirname(CLIENTS_FILE)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
+        else:
+            log_error(f"Invalid directory for CLIENTS_FILE: {CLIENTS_FILE}")
+            return False
         with open(CLIENTS_FILE, "w") as f:
             f.write("{}")
+    return True
 
 
 def write_clients_to_file():
-    ensure_clients_file_exists()
+    if not ensure_clients_file_exists():
+        return
     with open(CLIENTS_FILE, "w") as f:
         json.dump(CLIENTS, f, indent=4)
 

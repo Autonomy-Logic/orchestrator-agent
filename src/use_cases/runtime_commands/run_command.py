@@ -6,7 +6,7 @@ def execute(instance, command):
     api = command.get("api")
     headers = command.get("headers", {})
     ip = instance.get("ip")
-    content_type = headers.get("content_type", "application/json")
+    content_type = headers.get("Content-Type", "application/json")
 
     content = {"headers": headers}
 

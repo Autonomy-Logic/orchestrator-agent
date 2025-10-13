@@ -10,7 +10,7 @@ def check_instance(instance):
 
 
 def process_response(response):
-    if response.status_code != 200:
+    if not response.ok:
         log_error(f"Error: {response.status_code} - {response.text}")
         return None
     try:
