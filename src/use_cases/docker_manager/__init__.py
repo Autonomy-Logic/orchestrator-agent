@@ -1,7 +1,6 @@
 import docker
 import os
 import json
-from tools.logger import log_error
 
 CLIENT = docker.from_env()
 
