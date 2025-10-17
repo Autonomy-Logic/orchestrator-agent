@@ -49,6 +49,7 @@ if [ ${#MISSING_PKGS[@]} -ne 0 ]; then
   sudo "$PKG_MANAGER" update -y >/dev/null 2>&1 || true
   sudo "$PKG_MANAGER" install -y "${MISSING_PKGS[@]}"
 fi
+
 ### --- STEP 1: CHECK DOCKER INSTALLATION --- ###
 echo "Checking Docker installation..."
 if ! command -v docker &> /dev/null; then
@@ -126,7 +127,7 @@ if [[ "$upload_response" -ne 200 ]]; then
   echo "[ERROR] Upload failed. HTTP code: $upload_response"
   echo "Server response:"
   cat /tmp/upload_resp.json
-  echo "\n"
+  echo
   exit 1
 fi
 
