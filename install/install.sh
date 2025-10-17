@@ -105,12 +105,14 @@ echo "[SUCCESS] Received ID: $CUSTOM_ID (expires in $EXPIRES_IN seconds, at $EXP
 ### --- STEP 5: GENERATE CLIENT CERTIFICATE --- ###
 echo "Generating mTLS certificate for ID: $CUSTOM_ID"
 mkdir -p "$MTLS_DIR"
+chmod 700 "$MTLS_DIR"
 
 openssl req -x509 -newkey rsa:4096 -nodes \
   -keyout "$KEY_PATH" \
   -out "$CRT_PATH" \
   -subj "/C=BR/ST=SP/L=SaoPaulo/O=AutonomyLogic/OU=Development/CN=${CUSTOM_ID}" \
   -days 365 >/dev/null 2>&1
+chmod 600 "$KEY_PATH"
 
 echo "[SUCCESS] Certificate generated: $CRT_PATH"
 
