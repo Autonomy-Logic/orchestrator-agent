@@ -13,7 +13,7 @@ KEY_PATH="$MTLS_DIR/client.key"
 CRT_PATH="$MTLS_DIR/client.crt"
 
 ### --- OS CHECK --- ###
-if [[ "$OSTYPE" != "linux-gnu"* ]]; then
+if [[ $OSTYPE != linux-gnu* ]]; then
   echo "[ERROR] This script supports Linux only. Aborting."
   exit 1
 fi
