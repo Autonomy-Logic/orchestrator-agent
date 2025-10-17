@@ -54,9 +54,21 @@ fi
 echo "Checking Docker installation..."
 if ! command -v docker &> /dev/null; then
     echo "Docker not found. Installing..."
-    curl -fsSL https://get.docker.com | sh
-    sudo systemctl enable docker
-    sudo systemctl start docker
+    DOCKER_INSTALL_SCRIPT="/tmp/get-docker.sh"
+    curl -fsSL https://get.docker.com -o "$DOCKER_INSTALL_SCRIPT"
+    echo "[INFO] Downloaded Docker install script to $DOCKER_INSTALL_SCRIPT"
+    SCRIPT_HASH=$(sha256sum "$DOCKER_INSTALL_SCRIPT" | awk '{print $1}')
+    echo "[INFO] SHA256 hash of downloaded script: $SCRIPT_HASH"
+    read -p "Review the script at $DOCKER_INSTALL_SCRIPT. Press 'y' to continue and install Docker, or any other key to abort: " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        sh "$DOCKER_INSTALL_SCRIPT"
+        sudo systemctl enable docker
+        sudo systemctl start docker
+    else
+        echo "[ABORTED] Docker installation cancelled by user."
+        exit 1
+    fi
 else
     echo "[SUCCESS] Docker is already installed."
 fi
