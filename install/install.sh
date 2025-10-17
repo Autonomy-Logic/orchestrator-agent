@@ -34,16 +34,21 @@ else
   exit 1
 fi
 
+MISSING_PKGS=()
 for cmd in curl jq openssl; do
   if ! command -v "$cmd" &>/dev/null; then
-    echo "Installing missing dependency: $cmd"
-    sudo "$PKG_MANAGER" update -y >/dev/null 2>&1 || true
-    sudo "$PKG_MANAGER" install -y "$cmd"
+    echo "Missing dependency: $cmd"
+    MISSING_PKGS+=("$cmd")
   else
     echo "[SUCCESS] $cmd is already installed."
   fi
 done
 
+if [ ${#MISSING_PKGS[@]} -ne 0 ]; then
+  echo "Updating package lists and installing missing dependencies: ${MISSING_PKGS[*]}"
+  sudo "$PKG_MANAGER" update -y >/dev/null 2>&1 || true
+  sudo "$PKG_MANAGER" install -y "${MISSING_PKGS[@]}"
+fi
 ### --- STEP 1: CHECK DOCKER INSTALLATION --- ###
 echo "Checking Docker installation..."
 if ! command -v docker &> /dev/null; then
