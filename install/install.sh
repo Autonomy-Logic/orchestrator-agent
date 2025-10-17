@@ -138,7 +138,7 @@ id_resp=$(jq -r '.data.id' /tmp/upload_resp.json)
 if [[ "$status" != "pending_confirmation" ]]; then
   echo "[WARNING] Unexpected server status: $status"
   cat /tmp/upload_resp.json
-  echo "\n"
+  echo
   exit 1
 fi
 
