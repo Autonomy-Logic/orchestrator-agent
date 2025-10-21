@@ -79,7 +79,7 @@ if ! getent group docker &>/dev/null; then
     sudo groupadd docker
 fi
 sudo usermod -aG docker "$USER"
-echo "[INFO]  You may need to log out and log back in for group permissions to take effect."
+echo "[INFO] You may need to log out and log back in for group permissions to take effect."
 
 ### --- STEP 3: PULL IMAGE AND CREATE CONTAINER --- ###
 echo "Pulling Docker image: $IMAGE_NAME"
