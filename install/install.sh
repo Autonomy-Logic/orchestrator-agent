@@ -145,10 +145,10 @@ fi
 
 # Extract fields from response JSON
 message=$(jq -r '.data.message' /tmp/upload_resp.json)
-status=$(jq -r '.data.status' /tmp/upload_resp.json)
+status=$(jq -r '.statusCode' /tmp/upload_resp.json)
 id_resp=$(jq -r '.data.id' /tmp/upload_resp.json)
 
-if [[ "$status" != "pending_confirmation" ]]; then
+if [[ $status != 200 ]]; then
   echo "[WARNING] Unexpected server status: $status"
   cat /tmp/upload_resp.json
   echo
