@@ -4,7 +4,7 @@ NAME = "connection_info"
 SUCCESS = "connection.established"
 
 
-def callback(event, _, connected_at):
+def callback(event, client_id, connected_at):
     if event == "connection.established":
         log_info("Connection established successfully at " + connected_at)
     else:

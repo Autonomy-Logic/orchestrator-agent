@@ -56,7 +56,6 @@ async def receive_messages(websocket: websockets.ClientConnection):
         except Exception as e:
             log_error(f"An unexpected error occurred. Error: {e}")
 
-
 async def handler(websocket):
     send_task = asyncio.create_task(send_heartbeat(websocket))
     receive_task = asyncio.create_task(receive_messages(websocket))
@@ -68,9 +67,12 @@ async def handler(websocket):
         log_error(f"An error occurred in the handler: {e}")
 
 
-async def main(host: str = "localhost", port: int = 7676):
+async def main(host: str = "localhost", port = None):
+    address = f"wss://{host}"
+    if port:
+        address += f":{port}"
     async with websockets.connect(
-        f"wss://{host}:{port}/ws", ssl=ssl_context
+        address, ssl=ssl_context
     ) as websocket:
         websocket.start_keepalive()
         await handler(websocket)

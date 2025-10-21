@@ -29,8 +29,8 @@ if __name__ == "__main__":
 
     while True:
         try:
-            log_info(f"Attempting to connect to server at {SERVER_HOST}:7676...")
-            asyncio.run(main_websocket_controller(host=SERVER_HOST, port=7676))
+            log_info(f"Attempting to connect to server at {server_string}...")
+            asyncio.run(main_websocket_controller(**kwargs))
         except KeyboardInterrupt:
             log_warning("Keyboard interrupt received. Closing connection and exiting.")
             break
