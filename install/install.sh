@@ -5,7 +5,7 @@ set -euo pipefail
 IMAGE_NAME="hello-world"                       # <-- change to your desired image
 CONTAINER_NAME="custom_container"              # <-- change to your desired container name
 SERVER_DNS="server-dns"                        # <-- change to your desired server DNS
-SERVER_URL="https://$SERVER_DNS/orchestrator"
+SERVER_URL="https://$SERVER_DNS/orchestrators"
 GET_ID_URL="$SERVER_URL/id"
 UPLOAD_CERT_URL="$SERVER_URL/register-certificate"
 MTLS_DIR="$HOME/.mtls"

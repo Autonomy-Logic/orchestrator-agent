@@ -1,33 +1,13 @@
-from tools.logger import *
+from .receivers.connect import init as init_connect
+from .receivers.create_new_runtime import init as init_create_new_runtime
+from .receivers.run_command import init as init_run_command
+from .receivers.disconnect import init as init_disconnect
 
 
-class Topic:
-    def __init__(self, name: str, callback: callable):
-        self.__name = name
-        self.__callback = callback
+def initialize_all(client):
 
-    def name(self) -> str:
-        return self.__name
-
-    async def callback(self, **kwargs) -> callable:
-        return self.__callback(**kwargs)
-
-
-TOPICS: list[Topic] = []
-
-
-def register_topic(name: str, callback: callable) -> None:
-    topic = Topic(name, callback)
-    TOPICS.append(topic)
-    log_info(f"Websocket Interface: Registered new topic: {name}")
-
-
-async def handle_topic(name: str, **kwargs) -> None:
-    for topic in TOPICS:
-        if topic.name() == name:
-            log_debug(
-                f"Websocket Interface: Handling topic: {name} with args: {kwargs}"
-            )
-            return await topic.callback(**kwargs)
-    log_warning(f"Websocket Interface: No topic found with name: {name}")
-    return None
+    # Initialize all topic receivers
+    init_connect(client)
+    init_create_new_runtime(client)
+    init_run_command(client)
+    init_disconnect(client)
