@@ -2,12 +2,12 @@
 set -euo pipefail
 
 ### --- CONFIGURATION --- ###
-IMAGE_NAME="hello-world"                       # <-- change to your desired image
-CONTAINER_NAME="custom_container"              # <-- change to your desired container name
-SERVER_DNS="server-dns"                        # <-- change to your desired server DNS
-SERVER_URL="https://$SERVER_DNS/orchestrators"
-GET_ID_URL="$SERVER_URL/id"
-UPLOAD_CERT_URL="$SERVER_URL/register-certificate"
+IMAGE_NAME="hello-world"                                      # <-- change to your desired image
+CONTAINER_NAME="custom_container"                             # <-- change to your desired container name
+SERVER_DNS="tegcayxzurngxjwexsha.supabase.co/functions/v1"    # <-- change to your desired server DNS
+SERVER_URL="https://$SERVER_DNS"
+GET_ID_URL="$SERVER_URL/generate-orchestrator-id"
+UPLOAD_CERT_URL="$SERVER_URL/upload-orchestrator-certificate"
 MTLS_DIR="$HOME/.mtls"
 KEY_PATH="$MTLS_DIR/client.key"
 CRT_PATH="$MTLS_DIR/client.crt"
@@ -34,54 +34,60 @@ else
   exit 1
 fi
 
+# Define package names per package manager
+declare -A PKG_MAP
+if [[ "$PKG_MANAGER" == "apt-get" ]]; then
+  PKG_MAP=(
+    [curl]="curl"
+    [jq]="jq"
+    [openssl]="openssl"
+    [docker]="docker.io"
+  )
+elif [[ "$PKG_MANAGER" == "dnf" ]]; then
+  PKG_MAP=(
+    [curl]="curl"
+    [jq]="jq"
+    [openssl]="openssl"
+    [docker]="docker"
+  )
+elif [[ "$PKG_MANAGER" == "yum" ]]; then
+  PKG_MAP=(
+    [curl]="curl"
+    [jq]="jq"
+    [openssl]="openssl"
+    [docker]="docker"
+  )
+fi
+
+# Collect missing packages
 MISSING_PKGS=()
-for cmd in curl jq openssl; do
+for cmd in curl jq openssl docker; do
   if ! command -v "$cmd" &>/dev/null; then
     echo "Missing dependency: $cmd"
-    MISSING_PKGS+=("$cmd")
+    MISSING_PKGS+=("${PKG_MAP[$cmd]}")
   else
     echo "[SUCCESS] $cmd is already installed."
   fi
 done
 
+# Install missing packages
 if [ ${#MISSING_PKGS[@]} -ne 0 ]; then
   echo "Updating package lists and installing missing dependencies: ${MISSING_PKGS[*]}"
-  sudo "$PKG_MANAGER" update -y >/dev/null 2>&1 || true
-  sudo "$PKG_MANAGER" install -y "${MISSING_PKGS[@]}"
+  case "$PKG_MANAGER" in
+    apt-get)
+      sudo apt-get update -y
+      sudo apt-get install -y "${MISSING_PKGS[@]}"
+      ;;
+    dnf)
+      sudo dnf install -y "${MISSING_PKGS[@]}"
+      ;;
+    yum)
+      sudo yum install -y "${MISSING_PKGS[@]}"
+      ;;
+  esac
 fi
 
-### --- STEP 1: CHECK DOCKER INSTALLATION --- ###
-echo "Checking Docker installation..."
-if ! command -v docker &> /dev/null; then
-    echo "Docker not found. Installing..."
-    DOCKER_INSTALL_SCRIPT="/tmp/get-docker.sh"
-    curl -fsSL https://get.docker.com -o "$DOCKER_INSTALL_SCRIPT"
-    echo "[INFO] Downloaded Docker install script to $DOCKER_INSTALL_SCRIPT"
-    SCRIPT_HASH=$(sha256sum "$DOCKER_INSTALL_SCRIPT" | awk '{print $1}')
-    echo "[INFO] SHA256 hash of downloaded script: $SCRIPT_HASH"
-    read -p "Review the script at $DOCKER_INSTALL_SCRIPT. Press 'y' to continue and install Docker, or any other key to abort: " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        sh "$DOCKER_INSTALL_SCRIPT"
-        sudo systemctl enable docker
-        sudo systemctl start docker
-    else
-        echo "[ABORTED] Docker installation cancelled by user."
-        exit 1
-    fi
-else
-    echo "[SUCCESS] Docker is already installed."
-fi
-
-### --- STEP 2: SETUP USER PERMISSIONS --- ###
-echo "Setting up Docker user permissions..."
-if ! getent group docker &>/dev/null; then
-    sudo groupadd docker
-fi
-sudo usermod -aG docker "$USER"
-echo "[INFO] You may need to log out and log back in for group permissions to take effect."
-
-### --- STEP 3: PULL IMAGE AND CREATE CONTAINER --- ###
+### --- STEP 1: PULL IMAGE AND CREATE CONTAINER --- ###
 echo "Pulling Docker image: $IMAGE_NAME"
 docker pull "$IMAGE_NAME"
 
@@ -93,7 +99,7 @@ else
     docker run -d --name "$CONTAINER_NAME" "$IMAGE_NAME"
 fi
 
-### --- STEP 4: REQUEST CUSTOM ID --- ###
+### --- STEP 2: REQUEST CUSTOM ID --- ###
 echo "Requesting ID from $GET_ID_URL..."
 response=$(curl -fsSL "$GET_ID_URL")
 
@@ -115,7 +121,7 @@ fi
 
 echo "[SUCCESS] Received ID: $CUSTOM_ID (expires in $EXPIRES_IN seconds, at $EXPIRES_AT)"
 
-### --- STEP 5: GENERATE CLIENT CERTIFICATE --- ###
+### --- STEP 3: GENERATE CLIENT CERTIFICATE --- ###
 echo "Generating mTLS certificate for ID: $CUSTOM_ID"
 mkdir -p "$MTLS_DIR"
 chmod 700 "$MTLS_DIR"
@@ -129,11 +135,12 @@ chmod 600 "$KEY_PATH"
 
 echo "[SUCCESS] Certificate generated: $CRT_PATH"
 
-### --- STEP 6: UPLOAD CERTIFICATE --- ###
+### --- STEP 5: UPLOAD CERTIFICATE --- ###
 echo "Uploading certificate to $UPLOAD_CERT_URL..."
 upload_response=$(curl -s -w "%{http_code}" -o /tmp/upload_resp.json \
   -X POST "$UPLOAD_CERT_URL" \
-  -F "certificate=@$CRT_PATH")
+  -F "certificate=@$CRT_PATH" \
+  -F "id=$CUSTOM_ID")
 
 if [[ "$upload_response" -ne 200 ]]; then
   echo "[ERROR] Upload failed. HTTP code: $upload_response"
@@ -157,7 +164,7 @@ fi
 
 echo "[SUCCESS] Upload completed: $message (ID: $id_resp)"
 
-### --- STEP 7: RESTART CONTAINER --- ###
+### --- STEP 6: RESTART CONTAINER --- ###
 echo "Restarting container: $CONTAINER_NAME"
 docker restart "$CONTAINER_NAME" >/dev/null
 echo "[SUCCESS] Container successfully restarted."
