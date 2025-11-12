@@ -1,6 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+### --- OS CHECK --- ###
+if [[ $OSTYPE != linux-gnu* ]]; then
+  echo "[ERROR] This script supports Linux only. Aborting."
+  exit 1
+fi
+
+# --- Auto-save if running from a pipe ---
+if [ -p /dev/stdin ]; then
+    TMP_SCRIPT="/tmp/install-edge.sh"
+    echo "[INFO] Detected script running from a pipe. Saving to $TMP_SCRIPT..."
+    cat > "$TMP_SCRIPT"
+    chmod +x "$TMP_SCRIPT"
+
+    echo "[INFO] Re-running saved script..."
+    exec "$TMP_SCRIPT" "$@"
+fi
+
 ### --- CONFIGURATION --- ###
 IMAGE_NAME="hello-world"                                      # <-- change to your desired image
 CONTAINER_NAME="custom_container"                             # <-- change to your desired container name
@@ -11,12 +28,6 @@ UPLOAD_CERT_URL="$SERVER_URL/upload-orchestrator-certificate"
 MTLS_DIR="$HOME/.mtls"
 KEY_PATH="$MTLS_DIR/client.key"
 CRT_PATH="$MTLS_DIR/client.crt"
-
-### --- OS CHECK --- ###
-if [[ $OSTYPE != linux-gnu* ]]; then
-  echo "[ERROR] This script supports Linux only. Aborting."
-  exit 1
-fi
 
 # Check for root privileges
 check_root() 
