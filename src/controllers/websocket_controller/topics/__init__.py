@@ -1,7 +1,16 @@
 from .receivers.connect import init as init_connect
 from .receivers.create_new_runtime import init as init_create_new_runtime
-from .receivers.run_command import init as init_run_command
+from .receivers.delete_device import init as init_delete_device
+from .receivers.delete_orchestrator import init as init_delete_orchestrator
 from .receivers.disconnect import init as init_disconnect
+from .receivers.get_consumption_device import init as init_get_consumption_device
+from .receivers.get_consumption_orchestrator import (
+    init as init_get_consumption_orchestrator,
+)
+from .receivers.restart_device import init as init_restart_device
+from .receivers.run_command import init as init_run_command
+from .receivers.start_device import init as init_start_device
+from .receivers.stop_device import init as init_stop_device
 
 
 def initialize_all(client):
@@ -11,3 +20,10 @@ def initialize_all(client):
     init_create_new_runtime(client)
     init_run_command(client)
     init_disconnect(client)
+    init_delete_device(client)
+    init_delete_orchestrator(client)
+    init_get_consumption_device(client)
+    init_get_consumption_orchestrator(client)
+    init_restart_device(client)
+    init_start_device(client)
+    init_stop_device(client)
