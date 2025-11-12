@@ -18,6 +18,20 @@ if [[ $OSTYPE != linux-gnu* ]]; then
   exit 1
 fi
 
+# Check for root privileges
+check_root() 
+{
+    if [[ $EUID -ne 0 ]]; then
+        echo "[INFO] Root privileges are required. Trying to elevate with sudo..."
+        # Re-run the script with sudo, passing all original arguments
+        exec sudo "$0" "$@"
+        # exec replaces the current shell with the new command, so the rest of the script continues as root
+    fi
+}
+
+# Make sure we are root before proceeding
+check_root "$@"
+
 ### --- DEPENDENCIES --- ###
 echo "Checking and installing required dependencies..."
 PKG_MANAGER=""
@@ -119,8 +133,6 @@ if [[ -z "$CUSTOM_ID" || "$CUSTOM_ID" == "null" ]]; then
   exit 1
 fi
 
-echo "[SUCCESS] Received ID: $CUSTOM_ID (expires in $EXPIRES_IN seconds, at $EXPIRES_AT)"
-
 ### --- STEP 3: GENERATE CLIENT CERTIFICATE --- ###
 echo "Generating mTLS certificate for ID: $CUSTOM_ID"
 mkdir -p "$MTLS_DIR"
@@ -169,4 +181,31 @@ echo "Restarting container: $CONTAINER_NAME"
 docker restart "$CONTAINER_NAME" >/dev/null
 echo "[SUCCESS] Container successfully restarted."
 
-echo "[SUCCESS] All steps completed successfully!"
+# Detect color support
+if [ -t 1 ] && command -v tput >/dev/null && [ "$(tput colors 2>/dev/null)" -ge 8 ]; then
+  GREEN="$(tput setaf 2)"
+  CYAN="$(tput setaf 6)"
+  YELLOW="$(tput setaf 3)"
+  GRAY="$(tput setaf 8)"
+  BOLD="$(tput bold)"
+  RESET="$(tput sgr0)"
+else
+  GREEN=""
+  CYAN=""
+  YELLOW=""
+  GRAY=""
+  BOLD=""
+  RESET=""
+fi
+
+echo
+echo
+echo -e "${BOLD}${GREEN}INSTALLATION COMPLETE${RESET}"
+echo -e "${GRAY}=====================================================${RESET}"
+echo
+echo -e "Orchestrator ID: ${BOLD}${CYAN}${CUSTOM_ID}${RESET}"
+echo -e "Expires in: ${YELLOW}${EXPIRES_IN} seconds${RESET} (at ${YELLOW}${EXPIRES_AT}${RESET})"
+echo
+echo "Copy the Orchestrator ID above and paste it into the "
+echo "Autonomy Edge app to link your device."
+echo -e "${GRAY}=====================================================${RESET}"
