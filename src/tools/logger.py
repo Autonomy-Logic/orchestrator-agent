@@ -2,6 +2,7 @@ import logging
 from datetime import datetime
 import inspect
 from colorlog import ColoredFormatter
+import os
 
 __all__ = ["log_error", "log_info", "log_warning", "log_debug", "set_log_level"]
 
@@ -22,6 +23,10 @@ stream_handler.setLevel(level)
 stream_handler.setFormatter(log_format)
 stream_handler.set_name("stream_handler")
 LOGGER.addHandler(stream_handler)
+
+## Create log directories if they don't exist
+os.makedirs("/var/orchestrator/logs", exist_ok=True)
+os.makedirs("/var/orchestrator/debug", exist_ok=True)
 
 ## Configure debug logging file
 debugger_handler = logging.FileHandler(
