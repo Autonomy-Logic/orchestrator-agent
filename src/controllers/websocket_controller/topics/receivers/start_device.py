@@ -4,11 +4,7 @@ from . import topic
 
 NAME = "start_device"
 
-MESSAGE_TYPE = {
-    "correlation_id": NumberType,
-    "action": StringType,
-    "requested_at": DateType,
-}
+MESSAGE_TYPE = {**BASE_DEVICE}
 
 DUMMY_PAYLOAD = {"action": "start_device", "success": True}
 

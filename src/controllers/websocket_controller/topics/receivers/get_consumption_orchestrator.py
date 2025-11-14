@@ -4,13 +4,7 @@ from . import topic
 
 NAME = "get_consumption_orchestrator"
 
-MESSAGE_TYPE = {
-    "correlation_id": NumberType,
-    "action": StringType,
-    "cpuPeriod": StringType,
-    "memoryPeriod": StringType,
-    "requested_at": DateType,
-}
+MESSAGE_TYPE = {**BASE_MESSAGE, "cpuPeriod": StringType, "memoryPeriod": StringType}
 
 DUMMY_PAYLOAD = {
     "action": "get_consumption_device",

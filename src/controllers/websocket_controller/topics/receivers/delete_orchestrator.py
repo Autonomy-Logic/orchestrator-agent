@@ -5,11 +5,7 @@ from use_cases.docker_manager.selfdestruct import self_destruct
 
 NAME = "delete_orchestrator"
 
-MESSAGE_TYPE = {
-    "correlation_id": NumberType,
-    "action": StringType,
-    "requested_at": DateType,
-}
+MESSAGE_TYPE = {**BASE_MESSAGE}
 
 
 @topic(NAME)

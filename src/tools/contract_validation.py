@@ -54,6 +54,15 @@ class ListType(BaseType):
             self.item_type.validate(item)
 
 
+BASE_MESSAGE = {
+    "correlation_id": NumberType,
+    "action": StringType,
+    "requested_at": DateType,
+}
+
+BASE_DEVICE = {**BASE_MESSAGE, "device_id": StringType}
+
+
 def validate_contract(contract, data):
     for key, value in contract.items():
         if key not in data:

@@ -5,11 +5,9 @@ from . import topic
 NAME = "get_consumption_device"
 
 MESSAGE_TYPE = {
-    "correlation_id": NumberType,
-    "action": StringType,
+    **BASE_DEVICE,
     "cpuPeriod": StringType,
     "memoryPeriod": StringType,
-    "requested_at": DateType,
 }
 
 DUMMY_PAYLOAD = {
