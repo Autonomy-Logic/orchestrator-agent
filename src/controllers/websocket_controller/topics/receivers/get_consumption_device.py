@@ -2,18 +2,19 @@ from tools.logger import *
 from tools.contract_validation import *
 from . import topic
 
-NAME = "get_consumption_orchestrator"
+NAME = "get_consumption_device"
 
-MESSAGE_TYPE = {**BASE_MESSAGE, "cpuPeriod": StringType, "memoryPeriod": StringType}
+MESSAGE_TYPE = {
+    **BASE_DEVICE,
+    "cpuPeriod": StringType,
+    "memoryPeriod": StringType,
+}
 
 DUMMY_PAYLOAD = {
     "action": "get_consumption_device",
-    "correlation_id": "1ce0-0339-f942",
-    "ip_address": "120.2.345.3",
+    "correlation_id": 123,
     "memory": "16384",
-    "os": "Ubuntu 22.04 LTS",
-    "cpu": "8 vCPU",
-    "disk": "256 GB SSD",
+    "cpu": "1 vCPU",
     "cpu_usage": [
         {"registered_at": "2025-10-10T17:00:00Z", "cpu": 23.5},
         {"registered_at": "2025-10-10T17:01:00Z", "cpu": 41.2},
@@ -34,7 +35,7 @@ DUMMY_PAYLOAD = {
 @topic(NAME)
 def init(client):
     """
-    Handle the 'get_consumption_orchestrator' topic to send consumption data.
+    Handle the 'get_consumption_device' topic to send consumption data.
     """
 
     @client.on(NAME)
