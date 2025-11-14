@@ -20,49 +20,66 @@ def get_cpu_usage() -> float:
     return psutil.cpu_percent(interval=1)
 
 
-def get_memory_usage() -> int:
+def get_memory_usage() -> float:
     """
-    Get the current system memory usage in megabytes (MB).
+    Get the current system memory usage in gigabytes (GB).
 
     Returns:
-        int: Memory usage in MB
+        float: Memory usage in GB (rounded to 1 decimal place)
     """
     memory = psutil.virtual_memory()
-    return int(memory.used / (1024 * 1024))
+    return round(memory.used / (1024 * 1024 * 1024), 1)
 
 
-def get_disk_usage() -> List[Dict[str, any]]:
+def get_memory_total() -> float:
     """
-    Get disk usage information for all mounted disks.
+    Get the total system memory in gigabytes (GB).
 
     Returns:
-        List[Dict]: List of dictionaries containing disk information:
-            - mountpoint: str - The mount point of the disk
-            - total: int - Total disk space in MB
-            - used: int - Used disk space in MB
-            - free: int - Free disk space in MB
-            - percent: float - Percentage of disk used
+        float: Total memory in GB (rounded to 1 decimal place)
     """
-    disk_info = []
+    memory = psutil.virtual_memory()
+    return round(memory.total / (1024 * 1024 * 1024), 1)
 
+
+def get_disk_usage() -> float:
+    """
+    Get total disk usage across all mounted disks in gigabytes (GB).
+
+    Returns:
+        float: Total disk usage in GB (rounded to 1 decimal place)
+    """
+    total_used = 0
     partitions = psutil.disk_partitions()
 
     for partition in partitions:
         try:
             usage = psutil.disk_usage(partition.mountpoint)
-            disk_info.append(
-                {
-                    "mountpoint": partition.mountpoint,
-                    "total": int(usage.total / (1024 * 1024)),  # Convert to MB
-                    "used": int(usage.used / (1024 * 1024)),  # Convert to MB
-                    "free": int(usage.free / (1024 * 1024)),  # Convert to MB
-                    "percent": usage.percent,
-                }
-            )
+            total_used += usage.used
         except PermissionError:
             continue
 
-    return disk_info
+    return round(total_used / (1024 * 1024 * 1024), 1)
+
+
+def get_disk_total() -> float:
+    """
+    Get total disk space across all mounted disks in gigabytes (GB).
+
+    Returns:
+        float: Total disk space in GB (rounded to 1 decimal place)
+    """
+    total_space = 0
+    partitions = psutil.disk_partitions()
+
+    for partition in partitions:
+        try:
+            usage = psutil.disk_usage(partition.mountpoint)
+            total_space += usage.total
+        except PermissionError:
+            continue
+
+    return round(total_space / (1024 * 1024 * 1024), 1)
 
 
 def get_uptime() -> int:
@@ -93,15 +110,19 @@ def get_all_metrics() -> Dict:
     Returns:
         Dict: Dictionary containing all system metrics:
             - cpu_usage: float - CPU utilization percentage (0-100)
-            - memory_usage: int - Memory usage in MB
-            - disk_usage: List[Dict] - List of disk usage information
+            - memory_usage: float - Memory usage in GB
+            - memory_total: float - Total memory in GB
+            - disk_usage: float - Total disk usage in GB
+            - disk_total: float - Total disk space in GB
             - uptime: int - Agent uptime in seconds
             - status: str - Agent status ("active" or "stopped")
     """
     return {
         "cpu_usage": get_cpu_usage(),
         "memory_usage": get_memory_usage(),
+        "memory_total": get_memory_total(),
         "disk_usage": get_disk_usage(),
+        "disk_total": get_disk_total(),
         "uptime": get_uptime(),
         "status": get_status(),
     }
