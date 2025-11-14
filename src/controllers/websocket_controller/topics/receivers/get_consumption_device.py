@@ -35,7 +35,7 @@ DUMMY_PAYLOAD = {
 @topic(NAME)
 def init(client):
     """
-    Handle the 'get_consumption_orchestrator' topic to send consumption data.
+    Handle the 'get_consumption_device' topic to send consumption data.
     """
 
     @client.on(NAME)

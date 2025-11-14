@@ -6,12 +6,14 @@ class BaseType:
     def __init__(self):
         raise Exception("Cannot instantiate")
 
+    @staticmethod
     def validate():
         raise NotImplementedError("Subclasses should implement this!")
 
 
 class NumberType(BaseType):
 
+    @staticmethod
     def validate(value):
         if not isinstance(value, (int, float)):
             raise TypeError("Value must be a number.")
@@ -19,6 +21,7 @@ class NumberType(BaseType):
 
 class StringType(BaseType):
 
+    @staticmethod
     def validate(value):
         if not isinstance(value, str):
             raise TypeError("Value must be a string.")
@@ -26,6 +29,7 @@ class StringType(BaseType):
 
 class DateType(BaseType):
 
+    @staticmethod
     def validate(value):
         try:
             datetime.fromisoformat(value)
@@ -35,6 +39,7 @@ class DateType(BaseType):
 
 class BooleanType(BaseType):
 
+    @staticmethod
     def validate(value):
         if not isinstance(value, bool):
             raise TypeError("Value must be a boolean.")

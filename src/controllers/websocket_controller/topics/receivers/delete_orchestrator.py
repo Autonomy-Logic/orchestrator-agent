@@ -32,6 +32,6 @@ def init(client):
 
         try:
             await client.emit("delete_orchestrator_response", response)
-            await self_destruct()
+            self_destruct()
         except Exception as e:
             log_error(f"Error occurred: {e}")

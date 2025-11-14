@@ -1,5 +1,5 @@
 from . import HOST_NAME
-from tools.logger import log_info
+from tools.logger import log_info, log_error
 import docker
 
 
@@ -15,6 +15,6 @@ def self_destruct():
         container.remove(force=True)
         log_info(f"Container '{HOST_NAME}' removed successfully.")
     except docker.errors.NotFound:
-        log_info(f"Container '{HOST_NAME}' not found.")
+        log_error(f"Container '{HOST_NAME}' not found.")
     except Exception as e:
-        log_info(f"Error removing container '{HOST_NAME}': {e}")
+        log_error(f"Error removing container '{HOST_NAME}': {e}")
