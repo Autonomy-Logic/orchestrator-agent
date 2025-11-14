@@ -1,4 +1,5 @@
 from tools.logger import *
+from tools.system_metrics import get_all_metrics
 import asyncio
 from datetime import datetime
 
@@ -10,11 +11,15 @@ async def emit_heartbeat(client):
     while True:
         await asyncio.sleep(5)  # Heartbeat interval in seconds
 
+        metrics = get_all_metrics()
+
         heartbeat_data = {
-            "cpu_usage": 0.5,  # Example CPU usage
-            "memory_usage": 256,  # Example memory usage in MB
-            "disk_usage": 1024,  # Example disk usage in MB
-            "timestamp": datetime.now().isoformat(),  # Current timestamp
+            "cpu_usage": metrics["cpu_usage"],
+            "memory_usage": metrics["memory_usage"],
+            "disk_usage": metrics["disk_usage"],
+            "uptime": metrics["uptime"],
+            "status": metrics["status"],
+            "timestamp": datetime.now().isoformat(),
         }
 
         try:

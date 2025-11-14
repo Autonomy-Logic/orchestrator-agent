@@ -5,3 +5,4 @@ colorlog
 python-socketio[client]
 requests
 aiohttp
+psutil
