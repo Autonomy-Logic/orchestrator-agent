@@ -9,6 +9,8 @@ from typing import Dict, List
 
 _start_time = time.time()
 
+psutil.cpu_percent(interval=None)
+
 
 def _calculate_memory_total() -> float:
     """Calculate total system memory at module load time."""
@@ -17,15 +19,50 @@ def _calculate_memory_total() -> float:
 
 
 def _calculate_disk_total() -> float:
-    """Calculate total disk space at module load time."""
+    """
+    Calculate total disk space at module load time.
+    Filters out virtual/ephemeral filesystems and deduplicates by device
+    to avoid double-counting bind mounts and overlapping mount points.
+    """
     total_space = 0
-    partitions = psutil.disk_partitions()
+    seen_devices = set()
+
+    SKIP_FSTYPES = {
+        "tmpfs",
+        "devtmpfs",
+        "overlay",
+        "squashfs",
+        "ramfs",
+        "proc",
+        "sysfs",
+        "cgroup",
+        "cgroup2",
+        "debugfs",
+        "tracefs",
+        "pstore",
+        "autofs",
+        "devpts",
+        "mqueue",
+        "hugetlbfs",
+        "fusectl",
+        "none",
+    }
+
+    partitions = psutil.disk_partitions(all=False)
 
     for partition in partitions:
+        if partition.fstype.lower() in SKIP_FSTYPES:
+            continue
+
+        if not partition.device or partition.device in seen_devices:
+            continue
+
+        seen_devices.add(partition.device)
+
         try:
             usage = psutil.disk_usage(partition.mountpoint)
             total_space += usage.total
-        except PermissionError:
+        except (PermissionError, OSError):
             continue
 
     return round(total_space / (1024 * 1024 * 1024), 1)
@@ -38,11 +75,12 @@ _disk_total = _calculate_disk_total()
 def get_cpu_usage() -> float:
     """
     Get the current system CPU utilization as a percentage (0-100).
+    Uses non-blocking sampling to avoid blocking the async event loop.
 
     Returns:
         float: CPU utilization percentage (0-100)
     """
-    return psutil.cpu_percent(interval=1)
+    return psutil.cpu_percent(interval=None)
 
 
 def get_memory_usage() -> float:
@@ -70,18 +108,51 @@ def get_memory_total() -> float:
 def get_disk_usage() -> float:
     """
     Get total disk usage across all mounted disks in gigabytes (GB).
+    Filters out virtual/ephemeral filesystems and deduplicates by device
+    to avoid double-counting bind mounts and overlapping mount points.
 
     Returns:
         float: Total disk usage in GB (rounded to 1 decimal place)
     """
     total_used = 0
-    partitions = psutil.disk_partitions()
+    seen_devices = set()
+
+    SKIP_FSTYPES = {
+        "tmpfs",
+        "devtmpfs",
+        "overlay",
+        "squashfs",
+        "ramfs",
+        "proc",
+        "sysfs",
+        "cgroup",
+        "cgroup2",
+        "debugfs",
+        "tracefs",
+        "pstore",
+        "autofs",
+        "devpts",
+        "mqueue",
+        "hugetlbfs",
+        "fusectl",
+        "none",
+    }
+
+    partitions = psutil.disk_partitions(all=False)
 
     for partition in partitions:
+        if partition.fstype.lower() in SKIP_FSTYPES:
+            continue
+
+        if not partition.device or partition.device in seen_devices:
+            continue
+
+        seen_devices.add(partition.device)
+
         try:
             usage = psutil.disk_usage(partition.mountpoint)
             total_used += usage.used
-        except PermissionError:
+        except (PermissionError, OSError):
             continue
 
     return round(total_used / (1024 * 1024 * 1024), 1)
