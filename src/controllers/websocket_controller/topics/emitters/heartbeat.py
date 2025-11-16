@@ -1,4 +1,6 @@
 from tools.logger import *
+from tools.system_metrics import get_all_metrics
+from tools.ssl import get_agent_id
 import asyncio
 from datetime import datetime
 
@@ -7,14 +9,23 @@ async def emit_heartbeat(client):
     """
     Emit a heartbeat message at regular intervals.
     """
+    agent_id = get_agent_id()
+
     while True:
-        await asyncio.sleep(5)  # Heartbeat interval in seconds
+        await asyncio.sleep(5)
+
+        metrics = get_all_metrics()
 
         heartbeat_data = {
-            "cpu_usage": 0.5,  # Example CPU usage
-            "memory_usage": 256,  # Example memory usage in MB
-            "disk_usage": 1024,  # Example disk usage in MB
-            "timestamp": datetime.now().isoformat(),  # Current timestamp
+            "agent_id": agent_id,
+            "cpu_usage": metrics["cpu_usage"],
+            "memory_usage": metrics["memory_usage"],
+            "memory_total": metrics["memory_total"],
+            "disk_usage": metrics["disk_usage"],
+            "disk_total": metrics["disk_total"],
+            "uptime": metrics["uptime"],
+            "status": metrics["status"],
+            "timestamp": datetime.now().isoformat(),
         }
 
         try:
