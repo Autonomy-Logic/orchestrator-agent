@@ -57,7 +57,9 @@ elif command -v yum &>/dev/null; then
   PKG_MANAGER="yum"
 else
   echo "[ERROR] No supported package manager found (apt, dnf, or yum). Install dependencies manually."
-  exit 1
+  echo "Required packages: curl, jq, openssl, docker"
+  echo "Attempting to continue without automatic dependency installation..."
+  PKG_MANAGER="none"
 fi
 
 # Define package names per package manager
@@ -109,6 +111,10 @@ if [ ${#MISSING_PKGS[@]} -ne 0 ]; then
       ;;
     yum)
       sudo yum install -y "${MISSING_PKGS[@]}"
+      ;;
+    none)
+      echo "[ERROR] Cannot install dependencies automatically. Please install: ${MISSING_PKGS[*]}"
+      exit 1
       ;;
   esac
 fi
