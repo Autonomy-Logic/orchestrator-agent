@@ -10,6 +10,31 @@ from typing import Dict, List
 _start_time = time.time()
 
 
+def _calculate_memory_total() -> float:
+    """Calculate total system memory at module load time."""
+    memory = psutil.virtual_memory()
+    return round(memory.total / (1024 * 1024 * 1024), 1)
+
+
+def _calculate_disk_total() -> float:
+    """Calculate total disk space at module load time."""
+    total_space = 0
+    partitions = psutil.disk_partitions()
+
+    for partition in partitions:
+        try:
+            usage = psutil.disk_usage(partition.mountpoint)
+            total_space += usage.total
+        except PermissionError:
+            continue
+
+    return round(total_space / (1024 * 1024 * 1024), 1)
+
+
+_memory_total = _calculate_memory_total()
+_disk_total = _calculate_disk_total()
+
+
 def get_cpu_usage() -> float:
     """
     Get the current system CPU utilization as a percentage (0-100).
@@ -34,12 +59,12 @@ def get_memory_usage() -> float:
 def get_memory_total() -> float:
     """
     Get the total system memory in gigabytes (GB).
+    This value is cached at module load time for efficiency.
 
     Returns:
         float: Total memory in GB (rounded to 1 decimal place)
     """
-    memory = psutil.virtual_memory()
-    return round(memory.total / (1024 * 1024 * 1024), 1)
+    return _memory_total
 
 
 def get_disk_usage() -> float:
@@ -65,21 +90,12 @@ def get_disk_usage() -> float:
 def get_disk_total() -> float:
     """
     Get total disk space across all mounted disks in gigabytes (GB).
+    This value is cached at module load time for efficiency.
 
     Returns:
         float: Total disk space in GB (rounded to 1 decimal place)
     """
-    total_space = 0
-    partitions = psutil.disk_partitions()
-
-    for partition in partitions:
-        try:
-            usage = psutil.disk_usage(partition.mountpoint)
-            total_space += usage.total
-        except PermissionError:
-            continue
-
-    return round(total_space / (1024 * 1024 * 1024), 1)
+    return _disk_total
 
 
 def get_uptime() -> int:
