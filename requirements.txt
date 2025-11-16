@@ -1,0 +1,9 @@
+black
+docker
+logger
+colorlog
+python-socketio[client]
+requests
+aiohttp
+psutil
+cryptography
