@@ -1,15 +1,12 @@
 ## Main Execution Script
-from controllers.websocket_controller import (
-    init as init_websocket_controller,
-    main as main_websocket_controller,
-)
+from controllers import main_websocket_task
 from tools.logger import *
 import argparse
 import asyncio
 from time import sleep
 
 ## AWS Dummy Server Address
-SERVER_HOST = "ec2-18-119-156-107.us-east-2.compute.amazonaws.com"
+SERVER_HOST = "api.getedge.me"
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Orchestrator Agent")
@@ -24,16 +21,14 @@ if __name__ == "__main__":
 
     set_log_level(args.log_level)
 
-    ## First test script
-    init_websocket_controller()
-
     while True:
         try:
-            log_info(f"Attempting to connect to server at {SERVER_HOST}:7676...")
-            asyncio.run(main_websocket_controller(host=SERVER_HOST, port=7676))
+            log_info(f"Attempting to connect to server at {SERVER_HOST}...")
+            asyncio.run(main_websocket_task(SERVER_HOST))
         except KeyboardInterrupt:
             log_warning("Keyboard interrupt received. Closing connection and exiting.")
             break
         except Exception as e:
-            log_error("Error connecting to server. Retrying...")
+            log_error(f"Error on websocket interface: {e}")
+        log_warning("Reconnecting in 1 second...")
         sleep(1)

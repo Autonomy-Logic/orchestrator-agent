@@ -1,0 +1,52 @@
+from tools.logger import *
+from tools.contract_validation import *
+from . import topic
+
+NAME = "get_consumption_orchestrator"
+
+MESSAGE_TYPE = {**BASE_MESSAGE, "cpuPeriod": StringType, "memoryPeriod": StringType}
+
+DUMMY_PAYLOAD = {
+    "action": "get_consumption_device",
+    "correlation_id": "1ce0-0339-f942",
+    "ip_address": "120.2.345.3",
+    "memory": "16384",
+    "os": "Ubuntu 22.04 LTS",
+    "cpu": "8 vCPU",
+    "disk": "256 GB SSD",
+    "cpu_usage": [
+        {"registered_at": "2025-10-10T17:00:00Z", "cpu": 23.5},
+        {"registered_at": "2025-10-10T17:01:00Z", "cpu": 41.2},
+        {"registered_at": "2025-10-10T17:02:00Z", "cpu": 56.8},
+        {"registered_at": "2025-10-10T17:03:00Z", "cpu": 37.4},
+        {"registered_at": "2025-10-10T17:04:00Z", "cpu": 49.9},
+    ],
+    "memory_usage": [
+        {"registered_at": "2025-10-10T17:00:00Z", "memory": 8234},
+        {"registered_at": "2025-10-10T17:01:00Z", "memory": 8456},
+        {"registered_at": "2025-10-10T17:02:00Z", "memory": 8612},
+        {"registered_at": "2025-10-10T17:03:00Z", "memory": 8798},
+        {"registered_at": "2025-10-10T17:04:00Z", "memory": 8920},
+    ],
+}
+
+
+@topic(NAME)
+def init(client):
+    """
+    Handle the 'get_consumption_orchestrator' topic to send consumption data.
+    """
+
+    @client.on(NAME)
+    async def callback(message):
+        try:
+            validate_contract(MESSAGE_TYPE, message)
+        except Exception as e:
+            log_error(f"Contract validation error: {e}")
+            return
+
+        log_info(f"Responding: {message}")
+        corr_id = message.get("correlation_id")
+        response = DUMMY_PAYLOAD.copy()
+        response["correlation_id"] = corr_id
+        await client.emit(NAME, response)

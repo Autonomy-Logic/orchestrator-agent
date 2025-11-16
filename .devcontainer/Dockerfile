@@ -29,5 +29,5 @@ COPY requirements.txt .
 RUN python3 -m pip install --upgrade pip && \
     python3 -m pip install -r requirements.txt
 
-RUN sudo mkdir -p /var/orchestrator && sudo mkdir -p /var/orchestrator/logs && sudo mkdir -p /var/orchestrator/debug
-RUN sudo chown -R dev:dev /var/orchestrator
+RUN sudo mkdir -p /var/orchestrator/{logs,debug,data} && \
+    sudo chown -R dev:dev /var/orchestrator

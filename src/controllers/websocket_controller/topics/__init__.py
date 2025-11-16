@@ -1,33 +1,29 @@
-from tools.logger import *
+from .receivers.connect import init as init_connect
+from .receivers.create_new_runtime import init as init_create_new_runtime
+from .receivers.delete_device import init as init_delete_device
+from .receivers.delete_orchestrator import init as init_delete_orchestrator
+from .receivers.disconnect import init as init_disconnect
+from .receivers.get_consumption_device import init as init_get_consumption_device
+from .receivers.get_consumption_orchestrator import (
+    init as init_get_consumption_orchestrator,
+)
+from .receivers.restart_device import init as init_restart_device
+from .receivers.run_command import init as init_run_command
+from .receivers.start_device import init as init_start_device
+from .receivers.stop_device import init as init_stop_device
 
 
-class Topic:
-    def __init__(self, name: str, callback: callable):
-        self.__name = name
-        self.__callback = callback
+def initialize_all(client):
 
-    def name(self) -> str:
-        return self.__name
-
-    async def callback(self, **kwargs) -> callable:
-        return self.__callback(**kwargs)
-
-
-TOPICS: list[Topic] = []
-
-
-def register_topic(name: str, callback: callable) -> None:
-    topic = Topic(name, callback)
-    TOPICS.append(topic)
-    log_info(f"Websocket Interface: Registered new topic: {name}")
-
-
-async def handle_topic(name: str, **kwargs) -> None:
-    for topic in TOPICS:
-        if topic.name() == name:
-            log_debug(
-                f"Websocket Interface: Handling topic: {name} with args: {kwargs}"
-            )
-            return await topic.callback(**kwargs)
-    log_warning(f"Websocket Interface: No topic found with name: {name}")
-    return None
+    # Initialize all topic receivers
+    init_connect(client)
+    init_create_new_runtime(client)
+    init_run_command(client)
+    init_disconnect(client)
+    init_delete_device(client)
+    init_delete_orchestrator(client)
+    init_get_consumption_device(client)
+    init_get_consumption_orchestrator(client)
+    init_restart_device(client)
+    init_start_device(client)
+    init_stop_device(client)

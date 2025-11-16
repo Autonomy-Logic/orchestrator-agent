@@ -2,4 +2,8 @@ black
 docker
 logger
 colorlog
-websockets
+python-socketio[client]
+requests
+aiohttp
+psutil
+cryptography
