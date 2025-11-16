@@ -19,9 +19,10 @@ if [ -p /dev/stdin ]; then
 fi
 
 ### --- CONFIGURATION --- ###
-IMAGE_NAME="hello-world"                                      # <-- change to your desired image
-CONTAINER_NAME="custom_container"                             # <-- change to your desired container name
-SERVER_DNS="tegcayxzurngxjwexsha.supabase.co/functions/v1"    # <-- change to your desired server DNS
+IMAGE_NAME="ghcr.io/autonomy-logic/orchestrator-agent:latest"
+CONTAINER_NAME="orchestrator_agent"
+SOURCE_DIR="/tmp/orchestrator-agent"
+SERVER_DNS="tegcayxzurngxjwexsha.supabase.co/functions/v1"
 SERVER_URL="https://$SERVER_DNS"
 GET_ID_URL="$SERVER_URL/generate-orchestrator-id"
 UPLOAD_CERT_URL="$SERVER_URL/upload-orchestrator-certificate"
@@ -114,14 +115,34 @@ fi
 
 ### --- STEP 1: PULL IMAGE AND CREATE CONTAINER --- ###
 echo "Pulling Docker image: $IMAGE_NAME"
-docker pull "$IMAGE_NAME"
+if docker pull "$IMAGE_NAME"; then
+    echo "Pulled image: $IMAGE_NAME"
+else
+    echo "[WARNING] No prebuilt image found for this host architecture. Falling back to local build..."
+    # Clone or update the source tree
+    if [ -d "$SOURCE_DIR/.git" ]; then
+        info "Updating existing source clone..."
+        git -C "$SOURCE_DIR" fetch --all --tags --prune
+        git -C "$SOURCE_DIR" reset --hard origin/main || git -C "$SOURCE_DIR" reset --hard origin/master || true
+    else
+        info "Cloning source to $SOURCE_DIR..."
+        git clone https://github.com/autonomy-logic/orchestrator-agent.git "$SOURCE_DIR"
+    fi
+
+    # Build locally for the host architecture
+    # Use 'docker build' which builds for the local machine arch (simplest and most reliable for fallback)
+    info "Building Docker image locally for this host architecture..."
+    docker build -t "$IMAGE_NAME" "$SOURCE_DIR"
+
+    info "Local build completed: $IMAGE_NAME"
+fi
 
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
     echo "Existing container detected. Restarting..."
     docker restart "$CONTAINER_NAME"
 else
     echo "Creating new container: $CONTAINER_NAME"
-    docker run -d --name "$CONTAINER_NAME" "$IMAGE_NAME"
+    docker run -d --name "$CONTAINER_NAME" -v "$MTLS_DIR:/root/.mtls:ro" -v /var/run/docker.sock:/var/run/docker.sock "$IMAGE_NAME"
 fi
 
 ### --- STEP 2: REQUEST CUSTOM ID --- ###
