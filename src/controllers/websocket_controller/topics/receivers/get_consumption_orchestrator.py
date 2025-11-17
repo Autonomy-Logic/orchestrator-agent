@@ -1,34 +1,53 @@
 from tools.logger import *
 from tools.contract_validation import *
+from tools.system_info import get_cached_system_info
+from tools.usage_buffer import get_usage_buffer
 from . import topic
+import time
+from datetime import datetime, timedelta
 
 NAME = "get_consumption_orchestrator"
 
 MESSAGE_TYPE = {**BASE_MESSAGE, "cpuPeriod": StringType, "memoryPeriod": StringType}
 
-DUMMY_PAYLOAD = {
-    "action": "get_consumption_device",
-    "correlation_id": "1ce0-0339-f942",
-    "ip_address": "120.2.345.3",
-    "memory": "16384",
-    "os": "Ubuntu 22.04 LTS",
-    "cpu": "8 vCPU",
-    "disk": "256 GB SSD",
-    "cpu_usage": [
-        {"registered_at": "2025-10-10T17:00:00Z", "cpu": 23.5},
-        {"registered_at": "2025-10-10T17:01:00Z", "cpu": 41.2},
-        {"registered_at": "2025-10-10T17:02:00Z", "cpu": 56.8},
-        {"registered_at": "2025-10-10T17:03:00Z", "cpu": 37.4},
-        {"registered_at": "2025-10-10T17:04:00Z", "cpu": 49.9},
-    ],
-    "memory_usage": [
-        {"registered_at": "2025-10-10T17:00:00Z", "memory": 8234},
-        {"registered_at": "2025-10-10T17:01:00Z", "memory": 8456},
-        {"registered_at": "2025-10-10T17:02:00Z", "memory": 8612},
-        {"registered_at": "2025-10-10T17:03:00Z", "memory": 8798},
-        {"registered_at": "2025-10-10T17:04:00Z", "memory": 8920},
-    ],
-}
+
+def parse_period(period_str: str) -> tuple:
+    """
+    Parse a period string and return start and end timestamps.
+
+    Args:
+        period_str: Period string in format "start_timestamp,end_timestamp" (Unix timestamps in seconds)
+                   or "duration" (e.g., "1h", "24h", "48h")
+
+    Returns:
+        tuple: (start_timestamp, end_timestamp) as integers
+    """
+    try:
+        if "," in period_str:
+            parts = period_str.split(",")
+            start_time = int(parts[0])
+            end_time = int(parts[1])
+            return (start_time, end_time)
+        else:
+            end_time = int(time.time())
+            if period_str.endswith("h"):
+                hours = int(period_str[:-1])
+                start_time = end_time - (hours * 3600)
+            elif period_str.endswith("m"):
+                minutes = int(period_str[:-1])
+                start_time = end_time - (minutes * 60)
+            elif period_str.endswith("d"):
+                days = int(period_str[:-1])
+                start_time = end_time - (days * 86400)
+            else:
+                seconds = int(period_str)
+                start_time = end_time - seconds
+            return (start_time, end_time)
+    except Exception as e:
+        log_error(f"Error parsing period '{period_str}': {e}")
+        end_time = int(time.time())
+        start_time = end_time - 3600
+        return (start_time, end_time)
 
 
 @topic(NAME)
@@ -45,8 +64,35 @@ def init(client):
             log_error(f"Contract validation error: {e}")
             return
 
-        log_info(f"Responding: {message}")
+        log_info(f"Received get_consumption_orchestrator request: {message}")
+
         corr_id = message.get("correlation_id")
-        response = DUMMY_PAYLOAD.copy()
-        response["correlation_id"] = corr_id
+        cpu_period = message.get("cpuPeriod", "1h")
+        memory_period = message.get("memoryPeriod", "1h")
+
+        system_info = get_cached_system_info()
+        usage_buffer = get_usage_buffer()
+
+        cpu_start, cpu_end = parse_period(cpu_period)
+        memory_start, memory_end = parse_period(memory_period)
+
+        cpu_usage_data = usage_buffer.get_cpu_usage(cpu_start, cpu_end)
+        memory_usage_data = usage_buffer.get_memory_usage(memory_start, memory_end)
+
+        response = {
+            "action": NAME,
+            "correlation_id": corr_id,
+            "ip_addresses": system_info["ip_addresses"],
+            "memory": system_info["memory"],
+            "cpu": system_info["cpu"],
+            "os": system_info["os"],
+            "kernel": system_info["kernel"],
+            "disk": system_info["disk"],
+            "cpu_usage": cpu_usage_data,
+            "memory_usage": memory_usage_data,
+        }
+
+        log_info(
+            f"Sending get_consumption_orchestrator response with {len(cpu_usage_data)} CPU samples and {len(memory_usage_data)} memory samples"
+        )
         await client.emit(NAME, response)
