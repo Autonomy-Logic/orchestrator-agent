@@ -93,6 +93,6 @@ def init(client):
         }
 
         log_info(
-            f"Sending get_consumption_orchestrator response with {len(cpu_usage_data)} CPU samples and {len(memory_usage_data)} memory samples"
+            f"Returning get_consumption_orchestrator response with {len(cpu_usage_data)} CPU samples and {len(memory_usage_data)} memory samples"
         )
-        await client.emit(NAME, response)
+        return response
