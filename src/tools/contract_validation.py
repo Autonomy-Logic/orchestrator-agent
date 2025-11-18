@@ -32,6 +32,10 @@ class DateType(BaseType):
     @staticmethod
     def validate(value):
         try:
+            if not isinstance(value, str):
+                raise TypeError()
+            if value.endswith('Z'):
+                value = value.replace('Z', '+00:00')
             datetime.fromisoformat(value)
         except (TypeError, ValueError):
             raise TypeError("Value must be a valid ISO datetime string.")
