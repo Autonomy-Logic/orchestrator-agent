@@ -2,6 +2,7 @@ import asyncio
 import json
 import socket
 import os
+from typing import Optional, Tuple, Dict, List
 from tools.logger import *
 from use_cases.docker_manager.vnic_persistence import load_vnic_configs
 from use_cases.docker_manager.create_runtime_container import (
@@ -11,6 +12,31 @@ from use_cases.docker_manager.create_runtime_container import (
 
 SOCKET_PATH = "/var/orchestrator/netmon.sock"
 DEBOUNCE_SECONDS = 3
+
+INTERFACE_CACHE: Dict[str, dict] = {}
+
+
+def get_interface_network(parent_interface: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Get network information for an interface from the netmon discovery cache.
+
+    Returns:
+        Tuple of (subnet, gateway) or (None, None) if interface not found in cache
+    """
+    if parent_interface not in INTERFACE_CACHE:
+        log_debug(f"Interface {parent_interface} not found in netmon discovery cache")
+        return None, None
+
+    iface_data = INTERFACE_CACHE[parent_interface]
+    subnet = iface_data.get("subnet")
+    gateway = iface_data.get("gateway")
+
+    log_debug(
+        f"Retrieved network info for {parent_interface} from cache: "
+        f"subnet={subnet}, gateway={gateway}"
+    )
+
+    return subnet, gateway
 
 
 class NetworkEventListener:
@@ -98,12 +124,26 @@ class NetworkEventListener:
                 log_info("Received network discovery event")
                 interfaces = event_data.get("data", {}).get("interfaces", [])
                 log_info(f"Discovered {len(interfaces)} network interfaces")
+
                 for iface in interfaces:
-                    log_debug(
-                        f"Interface {iface['interface']}: "
-                        f"{len(iface['ipv4_addresses'])} IPv4 address(es), "
-                        f"gateway: {iface.get('gateway', 'none')}"
-                    )
+                    interface_name = iface.get("interface")
+                    ipv4_addresses = iface.get("ipv4_addresses", [])
+                    gateway = iface.get("gateway")
+
+                    if interface_name and ipv4_addresses:
+                        subnet = ipv4_addresses[0].get("subnet")
+
+                        INTERFACE_CACHE[interface_name] = {
+                            "subnet": subnet,
+                            "gateway": gateway,
+                            "addresses": ipv4_addresses,
+                        }
+
+                        log_debug(
+                            f"Cached interface {interface_name}: "
+                            f"subnet={subnet}, gateway={gateway}, "
+                            f"{len(ipv4_addresses)} IPv4 address(es)"
+                        )
 
             elif event_type == "network_change":
                 log_info("Received network change event")
@@ -116,6 +156,16 @@ class NetworkEventListener:
                     log_info(
                         f"Network change detected on {interface}: "
                         f"{len(ipv4_addresses)} IPv4 address(es), gateway: {gateway}"
+                    )
+
+                    subnet = ipv4_addresses[0].get("subnet")
+                    INTERFACE_CACHE[interface] = {
+                        "subnet": subnet,
+                        "gateway": gateway,
+                        "addresses": ipv4_addresses,
+                    }
+                    log_debug(
+                        f"Updated cache for interface {interface}: subnet={subnet}, gateway={gateway}"
                     )
 
                     self.pending_changes[interface] = iface_data

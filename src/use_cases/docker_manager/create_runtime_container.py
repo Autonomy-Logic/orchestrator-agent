@@ -1,85 +1,46 @@
 from . import CLIENT, CLIENTS, HOST_NAME, add_client
 from tools.logger import *
 from .vnic_persistence import save_vnic_configs
+from use_cases.network_monitor.network_event_listener import get_interface_network
 import docker
-import subprocess
-import json
-import re
-import ipaddress
+import asyncio
+import time
 
 
 def detect_interface_network(parent_interface: str):
     """
-    Detect the subnet and gateway for a parent interface by querying the host.
+    Detect the subnet and gateway for a parent interface using netmon discovery cache.
     Returns (subnet, gateway) tuple or (None, None) if detection fails.
+
+    This function reads from the interface cache populated by the netmon sidecar.
+    If the cache is empty, it waits briefly for the initial discovery to arrive.
     """
-    try:
-        result = subprocess.run(
-            ["ip", "-j", "addr", "show", "dev", parent_interface],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode != 0:
-            log_warning(
-                f"Failed to query interface {parent_interface}: {result.stderr}"
+    max_wait_seconds = 3
+    retry_interval = 0.5
+    start_time = time.time()
+
+    while time.time() - start_time < max_wait_seconds:
+        subnet, gateway = get_interface_network(parent_interface)
+
+        if subnet:
+            log_info(
+                f"Detected network for interface {parent_interface}: "
+                f"subnet={subnet}, gateway={gateway}"
             )
-            return None, None
+            return subnet, gateway
 
-        data = json.loads(result.stdout)
-        if not data or not data[0].get("addr_info"):
-            log_warning(f"No address info found for interface {parent_interface}")
-            return None, None
+        if time.time() - start_time < max_wait_seconds:
+            log_debug(
+                f"Interface {parent_interface} not yet in cache, "
+                f"waiting for netmon discovery..."
+            )
+            time.sleep(retry_interval)
 
-        for addr in data[0]["addr_info"]:
-            if addr.get("family") == "inet":
-                ip_address = addr.get("local")
-                prefix_len = addr.get("prefixlen")
-                if ip_address and prefix_len:
-                    try:
-                        network = ipaddress.ip_network(
-                            f"{ip_address}/{prefix_len}", strict=False
-                        )
-                        subnet = str(network.with_prefixlen)
-                        log_debug(
-                            f"Detected subnet {subnet} for interface {parent_interface}"
-                        )
-
-                        route_result = subprocess.run(
-                            ["ip", "-j", "route", "list", "default"],
-                            capture_output=True,
-                            text=True,
-                            timeout=5,
-                        )
-                        gateway = None
-                        if route_result.returncode == 0:
-                            try:
-                                routes = json.loads(route_result.stdout)
-                                for route in routes:
-                                    if route.get("dev") == parent_interface:
-                                        gateway = route.get("gateway")
-                                        if gateway:
-                                            log_debug(
-                                                f"Detected gateway {gateway} for interface {parent_interface}"
-                                            )
-                                            break
-                            except json.JSONDecodeError:
-                                log_warning(
-                                    f"Failed to parse route JSON for {parent_interface}"
-                                )
-
-                        return subnet, gateway
-                    except ValueError as e:
-                        log_warning(
-                            f"Failed to parse IP address {ip_address}/{prefix_len}: {e}"
-                        )
-
-        log_warning(f"No IPv4 address found for interface {parent_interface}")
-        return None, None
-
-    except Exception as e:
-        log_error(f"Failed to detect network for interface {parent_interface}: {e}")
-        return None, None
+    log_warning(
+        f"Interface {parent_interface} not found in netmon discovery cache after "
+        f"{max_wait_seconds}s. The interface may not exist or netmon may not be running."
+    )
+    return None, None
 
 
 def get_or_create_macvlan_network(
