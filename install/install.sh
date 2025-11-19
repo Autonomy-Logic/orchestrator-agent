@@ -142,8 +142,14 @@ else
   
   if [ -d "$SOURCE_DIR/.git" ]; then
     echo "Updating existing source clone..."
-    git -C "$SOURCE_DIR" fetch --all --tags --prune
-    git -C "$SOURCE_DIR" reset --hard origin/main || git -C "$SOURCE_DIR" reset --hard origin/master || true
+    if ! git -C "$SOURCE_DIR" pull --rebase; then
+      echo "Pull failed, stashing local changes and retrying..."
+      git -C "$SOURCE_DIR" stash push --include-untracked -m "installer-auto-stash $(date +%s)" || true
+      if ! git -C "$SOURCE_DIR" pull --rebase; then
+        echo "[ERROR] git pull still failing after stash. Please inspect $SOURCE_DIR."
+        exit 1
+      fi
+    fi
   else
     echo "Cloning source to $SOURCE_DIR..."
     git clone https://github.com/autonomy-logic/orchestrator-agent.git "$SOURCE_DIR"
@@ -177,11 +183,17 @@ else
     echo "[WARNING] No prebuilt image found for this host architecture. Falling back to local build..."
     # Clone or update the source tree
     if [ -d "$SOURCE_DIR/.git" ]; then
-        info "Updating existing source clone..."
-        git -C "$SOURCE_DIR" fetch --all --tags --prune
-        git -C "$SOURCE_DIR" reset --hard origin/main || git -C "$SOURCE_DIR" reset --hard origin/master || true
+        echo "Updating existing source clone..."
+        if ! git -C "$SOURCE_DIR" pull --rebase; then
+            echo "Pull failed, stashing local changes and retrying..."
+            git -C "$SOURCE_DIR" stash push --include-untracked -m "installer-auto-stash $(date +%s)" || true
+            if ! git -C "$SOURCE_DIR" pull --rebase; then
+                echo "[ERROR] git pull still failing after stash. Please inspect $SOURCE_DIR."
+                exit 1
+            fi
+        fi
     else
-        info "Cloning source to $SOURCE_DIR..."
+        echo "Cloning source to $SOURCE_DIR..."
         git clone https://github.com/autonomy-logic/orchestrator-agent.git "$SOURCE_DIR"
     fi
 
