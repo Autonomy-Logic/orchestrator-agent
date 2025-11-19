@@ -195,17 +195,23 @@ class NetworkMonitor:
             ]:
                 idx = msg.get("index")
                 if idx:
-                    links = self.ipr.get_links(idx)
-                    if links:
-                        ifname = links[0].get_attr("IFLA_IFNAME")
-                        if (
-                            ifname
-                            and not ifname.startswith("veth")
-                            and ifname not in ["lo", "docker0"]
-                        ):
-                            self.pending_changes.add(ifname)
-                            self.last_event_time = time.time()
-                            logger.debug(f"Network event on {ifname}: {event_type}")
+                    try:
+                        links = self.ipr.get_links(idx)
+                        if links:
+                            ifname = links[0].get_attr("IFLA_IFNAME")
+                            if (
+                                ifname
+                                and not ifname.startswith("veth")
+                                and ifname not in ["lo", "docker0"]
+                            ):
+                                self.pending_changes.add(ifname)
+                                self.last_event_time = time.time()
+                                logger.debug(f"Network event on {ifname}: {event_type}")
+                    except NetlinkError as e:
+                        if e.code == 19:
+                            logger.debug(f"Interface no longer exists (ENODEV): {e}")
+                        else:
+                            logger.error(f"Netlink error handling event: {e}")
 
         except Exception as e:
             logger.error(f"Error handling netlink event: {e}")

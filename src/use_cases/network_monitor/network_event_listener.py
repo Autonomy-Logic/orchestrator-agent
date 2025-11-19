@@ -50,8 +50,12 @@ class NetworkEventListener:
     async def start(self):
         """Start the network event listener"""
         if self.running:
-            log_warning("Network event listener is already running")
-            return
+            if self.listener_task is None or self.listener_task.done():
+                log_debug("Network event listener task is stale, restarting...")
+                self.running = False
+            else:
+                log_debug("Network event listener is already running")
+                return
 
         self.running = True
         self.listener_task = asyncio.create_task(self._listen_loop())
@@ -70,50 +74,59 @@ class NetworkEventListener:
 
     async def _listen_loop(self):
         """Main event listening loop"""
-        while self.running:
-            try:
-                if not os.path.exists(self.socket_path):
-                    log_debug(
-                        f"Network monitor socket not found at {self.socket_path}, "
-                        f"waiting for network monitor daemon..."
+        try:
+            while self.running:
+                try:
+                    if not os.path.exists(self.socket_path):
+                        log_debug(
+                            f"Network monitor socket not found at {self.socket_path}, "
+                            f"waiting for network monitor daemon..."
+                        )
+                        await asyncio.sleep(5)
+                        continue
+
+                    log_info(f"Connecting to network monitor at {self.socket_path}")
+                    reader, writer = await asyncio.open_unix_connection(
+                        self.socket_path
                     )
-                    await asyncio.sleep(5)
-                    continue
 
-                log_info(f"Connecting to network monitor at {self.socket_path}")
-                reader, writer = await asyncio.open_unix_connection(self.socket_path)
+                    log_info("Connected to network monitor, listening for events...")
 
-                log_info("Connected to network monitor, listening for events...")
+                    while self.running:
+                        try:
+                            line = await asyncio.wait_for(
+                                reader.readline(), timeout=1.0
+                            )
+                            if not line:
+                                log_warning("Network monitor connection closed")
+                                break
 
-                while self.running:
-                    try:
-                        line = await asyncio.wait_for(reader.readline(), timeout=1.0)
-                        if not line:
-                            log_warning("Network monitor connection closed")
+                            event_data = json.loads(line.decode("utf-8"))
+                            await self._handle_event(event_data)
+
+                        except asyncio.TimeoutError:
+                            continue
+                        except json.JSONDecodeError as e:
+                            log_error(f"Failed to parse network event: {e}")
+                        except Exception as e:
+                            log_error(f"Error reading network event: {e}")
                             break
 
-                        event_data = json.loads(line.decode("utf-8"))
-                        await self._handle_event(event_data)
+                    writer.close()
+                    await writer.wait_closed()
 
-                    except asyncio.TimeoutError:
-                        continue
-                    except json.JSONDecodeError as e:
-                        log_error(f"Failed to parse network event: {e}")
-                    except Exception as e:
-                        log_error(f"Error reading network event: {e}")
-                        break
-
-                writer.close()
-                await writer.wait_closed()
-
-            except FileNotFoundError:
-                log_debug(
-                    f"Network monitor socket not found, waiting for daemon to start..."
-                )
-                await asyncio.sleep(5)
-            except Exception as e:
-                log_error(f"Error in network event listener: {e}")
-                await asyncio.sleep(5)
+                except FileNotFoundError:
+                    log_debug(
+                        f"Network monitor socket not found, waiting for daemon to start..."
+                    )
+                    await asyncio.sleep(5)
+                except Exception as e:
+                    log_error(f"Error in network event listener: {e}")
+                    await asyncio.sleep(5)
+        finally:
+            self.running = False
+            self.listener_task = None
+            log_debug("Network event listener loop exited, state reset")
 
     async def _handle_event(self, event_data: dict):
         """Handle a network event from the monitor"""
