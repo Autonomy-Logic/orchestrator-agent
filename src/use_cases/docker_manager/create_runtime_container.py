@@ -1,27 +1,119 @@
 from . import CLIENT, CLIENTS, HOST_NAME, add_client
 from tools.logger import *
 import docker
+import subprocess
+import json
+import re
 
 
-def get_or_create_macvlan_network(parent_interface: str):
+def detect_interface_network(parent_interface: str):
+    """
+    Detect the subnet and gateway for a parent interface by querying the host.
+    Returns (subnet, gateway) tuple or (None, None) if detection fails.
+    """
+    try:
+        result = subprocess.run(
+            ["ip", "-j", "addr", "show", "dev", parent_interface],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            log_warning(
+                f"Failed to query interface {parent_interface}: {result.stderr}"
+            )
+            return None, None
+
+        data = json.loads(result.stdout)
+        if not data or not data[0].get("addr_info"):
+            log_warning(f"No address info found for interface {parent_interface}")
+            return None, None
+
+        for addr in data[0]["addr_info"]:
+            if addr.get("family") == "inet":
+                ip_address = addr.get("local")
+                prefix_len = addr.get("prefixlen")
+                if ip_address and prefix_len:
+                    ip_parts = ip_address.split(".")
+                    if len(ip_parts) == 4:
+                        subnet = (
+                            f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.0/{prefix_len}"
+                        )
+                        log_debug(
+                            f"Detected subnet {subnet} for interface {parent_interface}"
+                        )
+
+                        route_result = subprocess.run(
+                            ["ip", "route", "show", "dev", parent_interface],
+                            capture_output=True,
+                            text=True,
+                            timeout=5,
+                        )
+                        gateway = None
+                        if route_result.returncode == 0:
+                            for line in route_result.stdout.split("\n"):
+                                if "default via" in line:
+                                    match = re.search(
+                                        r"via\s+(\d+\.\d+\.\d+\.\d+)", line
+                                    )
+                                    if match:
+                                        gateway = match.group(1)
+                                        log_debug(
+                                            f"Detected gateway {gateway} for interface {parent_interface}"
+                                        )
+                                        break
+
+                        return subnet, gateway
+
+        log_warning(f"No IPv4 address found for interface {parent_interface}")
+        return None, None
+
+    except Exception as e:
+        log_error(f"Failed to detect network for interface {parent_interface}: {e}")
+        return None, None
+
+
+def get_or_create_macvlan_network(
+    parent_interface: str, parent_subnet: str = None, parent_gateway: str = None
+):
     """
     Get existing MACVLAN network for a parent interface or create a new one.
+    If parent_subnet and parent_gateway are not provided, attempts to auto-detect them.
     Returns the network object.
     """
     network_name = f"macvlan_{parent_interface}"
+
+    if parent_subnet:
+        network_name = f"macvlan_{parent_interface}_{parent_subnet.replace('/', '_')}"
 
     try:
         network = CLIENT.networks.get(network_name)
         log_debug(f"MACVLAN network {network_name} already exists, reusing it")
         return network
     except docker.errors.NotFound:
+        if not parent_subnet:
+            log_info(
+                f"No subnet provided for {parent_interface}, attempting auto-detection"
+            )
+            parent_subnet, detected_gateway = detect_interface_network(parent_interface)
+            if not parent_subnet:
+                raise ValueError(
+                    f"Could not detect subnet for interface {parent_interface}. "
+                    f"Please provide parent_subnet and parent_gateway in the configuration."
+                )
+            if not parent_gateway:
+                parent_gateway = detected_gateway
+
         log_info(
-            f"Creating new MACVLAN network {network_name} for parent interface {parent_interface}"
+            f"Creating new MACVLAN network {network_name} for parent interface {parent_interface} "
+            f"with subnet {parent_subnet} and gateway {parent_gateway}"
         )
         try:
-            ipam_pool = docker.types.IPAMPool(
-                subnet="192.168.0.0/16", gateway="192.168.0.1"
-            )
+            ipam_pool_config = {"subnet": parent_subnet}
+            if parent_gateway:
+                ipam_pool_config["gateway"] = parent_gateway
+
+            ipam_pool = docker.types.IPAMPool(**ipam_pool_config)
             ipam_config = docker.types.IPAMConfig(pool_configs=[ipam_pool])
             network = CLIENT.networks.create(
                 name=network_name,
@@ -51,7 +143,7 @@ def create_internal_network(container_name: str):
         log_info(f"Creating internal network {network_name}")
         try:
             network = CLIENT.networks.create(
-                name=network_name, driver="bridge", internal=False
+                name=network_name, driver="bridge", internal=True
             )
             log_info(f"Internal network {network_name} created successfully")
             return network
@@ -99,17 +191,27 @@ async def create_runtime_container(container_name: str, vnic_configs: list):
         macvlan_networks = []
         endpoint_configs = {}
 
+        dns_servers = []
+
         for vnic_config in vnic_configs:
             vnic_name = vnic_config.get("name")
             parent_interface = vnic_config.get("parent_interface")
+            parent_subnet = vnic_config.get("parent_subnet")
+            parent_gateway = vnic_config.get("parent_gateway")
             network_mode = vnic_config.get("network_mode", "dhcp")
 
             log_debug(
                 f"Processing vNIC {vnic_name} for parent interface {parent_interface}"
             )
 
-            macvlan_network = get_or_create_macvlan_network(parent_interface)
+            macvlan_network = get_or_create_macvlan_network(
+                parent_interface, parent_subnet, parent_gateway
+            )
             macvlan_networks.append((macvlan_network, vnic_config))
+
+            vnic_dns = vnic_config.get("dns")
+            if vnic_dns and isinstance(vnic_dns, list):
+                dns_servers.extend(vnic_dns)
 
             endpoint_config = {}
 
@@ -142,13 +244,21 @@ async def create_runtime_container(container_name: str, vnic_configs: list):
         networking_config.update(endpoint_configs)
 
         log_info(f"Creating container {container_name}")
-        container = CLIENT.containers.create(
-            image=image_name,
-            name=container_name,
-            detach=True,
-            restart_policy={"Name": "always"},
-            networking_config={"EndpointsConfig": networking_config},
-        )
+
+        create_kwargs = {
+            "image": image_name,
+            "name": container_name,
+            "detach": True,
+            "restart_policy": {"Name": "always"},
+            "networking_config": {"EndpointsConfig": networking_config},
+        }
+
+        if dns_servers:
+            unique_dns = list(dict.fromkeys(dns_servers))
+            create_kwargs["dns"] = unique_dns
+            log_debug(f"Configuring DNS servers: {unique_dns}")
+
+        container = CLIENT.containers.create(**create_kwargs)
 
         container.start()
         log_info(f"Container {container_name} created and started successfully")

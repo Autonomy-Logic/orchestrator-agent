@@ -1,6 +1,11 @@
 from use_cases.docker_manager.create_runtime_container import create_runtime_container
 from tools.logger import *
-from tools.contract_validation import StringType, ListType, OptionalType, validate_contract
+from tools.contract_validation import (
+    StringType,
+    ListType,
+    OptionalType,
+    validate_contract,
+)
 from . import topic
 
 NAME = "create_new_runtime"
@@ -8,6 +13,8 @@ NAME = "create_new_runtime"
 VNIC_CONFIG_TYPE = {
     "name": StringType,
     "parent_interface": StringType,
+    "parent_subnet": OptionalType(StringType),
+    "parent_gateway": OptionalType(StringType),
     "network_mode": StringType,
     "ip_address": OptionalType(StringType),
     "subnet": OptionalType(StringType),
