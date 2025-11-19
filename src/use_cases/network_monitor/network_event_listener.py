@@ -2,41 +2,16 @@ import asyncio
 import json
 import socket
 import os
-from typing import Optional, Tuple, Dict, List
 from tools.logger import *
 from use_cases.docker_manager.vnic_persistence import load_vnic_configs
 from use_cases.docker_manager.create_runtime_container import (
     get_or_create_macvlan_network,
     CLIENT,
 )
+from .interface_cache import INTERFACE_CACHE
 
 SOCKET_PATH = "/var/orchestrator/netmon.sock"
 DEBOUNCE_SECONDS = 3
-
-INTERFACE_CACHE: Dict[str, dict] = {}
-
-
-def get_interface_network(parent_interface: str) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Get network information for an interface from the netmon discovery cache.
-
-    Returns:
-        Tuple of (subnet, gateway) or (None, None) if interface not found in cache
-    """
-    if parent_interface not in INTERFACE_CACHE:
-        log_debug(f"Interface {parent_interface} not found in netmon discovery cache")
-        return None, None
-
-    iface_data = INTERFACE_CACHE[parent_interface]
-    subnet = iface_data.get("subnet")
-    gateway = iface_data.get("gateway")
-
-    log_debug(
-        f"Retrieved network info for {parent_interface} from cache: "
-        f"subnet={subnet}, gateway={gateway}"
-    )
-
-    return subnet, gateway
 
 
 class NetworkEventListener:

@@ -1,7 +1,7 @@
 from . import CLIENT, CLIENTS, HOST_NAME, add_client
 from tools.logger import *
 from .vnic_persistence import save_vnic_configs
-from use_cases.network_monitor.network_event_listener import get_interface_network
+from use_cases.network_monitor.interface_cache import get_interface_network
 import docker
 import asyncio
 import time
