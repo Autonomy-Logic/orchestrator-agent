@@ -60,7 +60,20 @@ class ListType(BaseType):
             raise TypeError("Value must be a list.")
 
         for item in value:
-            self.item_type.validate(item)
+            if isinstance(self.item_type, dict):
+                validate_contract(self.item_type, item)
+            else:
+                self.item_type.validate(item)
+
+
+class OptionalType(BaseType):
+
+    def __init__(self, item_type):
+        self.item_type = item_type
+
+    def validate(self, value):
+        if value is not None:
+            self.item_type.validate(value)
 
 
 BASE_MESSAGE = {
@@ -75,6 +88,8 @@ BASE_DEVICE = {**BASE_MESSAGE, "device_id": StringType}
 def validate_contract(contract, data):
     for key, value in contract.items():
         if key not in data:
+            if isinstance(value, OptionalType):
+                continue
             raise KeyError(f"Missing key: {key}")
         if isinstance(value, dict):
             validate_contract(value, data[key])
