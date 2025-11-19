@@ -29,6 +29,9 @@ UPLOAD_CERT_URL="$SERVER_URL/upload-orchestrator-certificate"
 MTLS_DIR="$HOME/.mtls"
 KEY_PATH="$MTLS_DIR/client.key"
 CRT_PATH="$MTLS_DIR/client.crt"
+ORCHESTRATOR_DATA_DIR="/var/orchestrator"
+NETMON_SCRIPT="/usr/local/bin/autonomy-netmon"
+NETMON_SERVICE="/etc/systemd/system/autonomy-netmon.service"
 
 # Check for root privileges
 check_root() 
@@ -70,6 +73,8 @@ if [[ "$PKG_MANAGER" == "apt-get" ]]; then
     [jq]="jq"
     [openssl]="openssl"
     [docker]="docker.io"
+    [python3]="python3"
+    [pip3]="python3-pip"
   )
 elif [[ "$PKG_MANAGER" == "dnf" ]]; then
   PKG_MAP=(
@@ -77,6 +82,8 @@ elif [[ "$PKG_MANAGER" == "dnf" ]]; then
     [jq]="jq"
     [openssl]="openssl"
     [docker]="docker"
+    [python3]="python3"
+    [pip3]="python3-pip"
   )
 elif [[ "$PKG_MANAGER" == "yum" ]]; then
   PKG_MAP=(
@@ -84,15 +91,19 @@ elif [[ "$PKG_MANAGER" == "yum" ]]; then
     [jq]="jq"
     [openssl]="openssl"
     [docker]="docker"
+    [python3]="python3"
+    [pip3]="python3-pip"
   )
 fi
 
 # Collect missing packages
 MISSING_PKGS=()
-for cmd in curl jq openssl docker; do
+for cmd in curl jq openssl docker python3 pip3; do
   if ! command -v "$cmd" &>/dev/null; then
     echo "Missing dependency: $cmd"
-    MISSING_PKGS+=("${PKG_MAP[$cmd]}")
+    if [[ -n "${PKG_MAP[$cmd]}" ]]; then
+      MISSING_PKGS+=("${PKG_MAP[$cmd]}")
+    fi
   else
     echo "[SUCCESS] $cmd is already installed."
   fi
@@ -117,6 +128,65 @@ if [ ${#MISSING_PKGS[@]} -ne 0 ]; then
       exit 1
       ;;
   esac
+fi
+
+echo "Checking for systemd support..."
+if ! command -v systemctl &>/dev/null; then
+  echo "[ERROR] systemd is not available on this system."
+  echo "The network monitor daemon requires systemd to run."
+  exit 1
+fi
+echo "[SUCCESS] systemd is available."
+
+### --- INSTALL PYTHON DEPENDENCIES --- ###
+echo "Installing Python dependencies for network monitor..."
+if command -v pip3 &>/dev/null; then
+  echo "Installing pyroute2..."
+  pip3 install --quiet pyroute2 || {
+    echo "[ERROR] Failed to install pyroute2. Please install it manually: pip3 install pyroute2"
+    exit 1
+  }
+  echo "[SUCCESS] pyroute2 installed successfully."
+else
+  echo "[ERROR] pip3 is not available. Cannot install Python dependencies."
+  exit 1
+fi
+
+### --- DEPLOY NETWORK MONITOR --- ###
+echo "Deploying network monitor daemon..."
+
+mkdir -p "$ORCHESTRATOR_DATA_DIR"
+chmod 755 "$ORCHESTRATOR_DATA_DIR"
+echo "[SUCCESS] Created $ORCHESTRATOR_DATA_DIR"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [ -f "$SCRIPT_DIR/autonomy-netmon.py" ]; then
+  cp "$SCRIPT_DIR/autonomy-netmon.py" "$NETMON_SCRIPT"
+  chmod +x "$NETMON_SCRIPT"
+  echo "[SUCCESS] Deployed network monitor script to $NETMON_SCRIPT"
+else
+  echo "[ERROR] autonomy-netmon.py not found in $SCRIPT_DIR"
+  exit 1
+fi
+
+if [ -f "$SCRIPT_DIR/autonomy-netmon.service" ]; then
+  cp "$SCRIPT_DIR/autonomy-netmon.service" "$NETMON_SERVICE"
+  systemctl daemon-reload
+  systemctl enable autonomy-netmon.service
+  systemctl restart autonomy-netmon.service
+  echo "[SUCCESS] Network monitor service installed and started"
+else
+  echo "[ERROR] autonomy-netmon.service not found in $SCRIPT_DIR"
+  exit 1
+fi
+
+sleep 2
+if systemctl is-active --quiet autonomy-netmon.service; then
+  echo "[SUCCESS] Network monitor is running"
+else
+  echo "[WARNING] Network monitor service may not be running properly"
+  echo "Check status with: systemctl status autonomy-netmon.service"
 fi
 
 ### --- STEP 1: PULL IMAGE AND CREATE CONTAINER --- ###
@@ -144,12 +214,17 @@ else
 fi
 
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-    echo "Existing container detected. Restarting..."
-    docker restart "$CONTAINER_NAME"
-else
-    echo "Creating new container: $CONTAINER_NAME"
-    docker run -d --name "$CONTAINER_NAME" -v "$MTLS_DIR:/root/.mtls:ro" -v /var/run/docker.sock:/var/run/docker.sock "$IMAGE_NAME"
+    echo "Existing container detected. Removing and recreating..."
+    docker rm -f "$CONTAINER_NAME"
 fi
+
+echo "Creating new container: $CONTAINER_NAME"
+docker run -d \
+  --name "$CONTAINER_NAME" \
+  -v "$MTLS_DIR:/root/.mtls:ro" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$ORCHESTRATOR_DATA_DIR:$ORCHESTRATOR_DATA_DIR" \
+  "$IMAGE_NAME"
 
 ### --- STEP 2: REQUEST CUSTOM ID --- ###
 echo "Requesting ID from $GET_ID_URL..."

@@ -3,6 +3,7 @@ from .websocket_controller import (
     get_client as get_websocket_client,
 )
 from tools.logger import *
+from use_cases.network_monitor import network_event_listener
 
 
 async def main_websocket_task(server_url):
@@ -11,6 +12,10 @@ async def main_websocket_task(server_url):
     """
     client = await get_websocket_client()
     init_websocket_controller(client)
+
+    await network_event_listener.start()
+    log_info("Network event listener started")
+
     await client.connect(
         f"https://{server_url}",
     )

@@ -1,0 +1,95 @@
+import json
+import os
+from tools.logger import *
+
+VNIC_CONFIG_FILE = "/var/orchestrator/runtime_vnics.json"
+
+
+def ensure_config_dir():
+    """Ensure the configuration directory exists"""
+    config_dir = os.path.dirname(VNIC_CONFIG_FILE)
+    os.makedirs(config_dir, exist_ok=True)
+
+
+def save_vnic_configs(container_name: str, vnic_configs: list):
+    """
+    Save vNIC configurations for a runtime container.
+
+    Args:
+        container_name: Name of the runtime container
+        vnic_configs: List of vNIC configurations
+    """
+    try:
+        ensure_config_dir()
+
+        existing_configs = {}
+        if os.path.exists(VNIC_CONFIG_FILE):
+            try:
+                with open(VNIC_CONFIG_FILE, "r") as f:
+                    existing_configs = json.load(f)
+            except Exception as e:
+                log_warning(f"Failed to read existing vNIC configs: {e}")
+
+        existing_configs[container_name] = vnic_configs
+
+        with open(VNIC_CONFIG_FILE, "w") as f:
+            json.dump(existing_configs, f, indent=2)
+
+        log_debug(f"Saved vNIC configurations for container {container_name}")
+
+    except Exception as e:
+        log_error(f"Failed to save vNIC configurations for {container_name}: {e}")
+
+
+def load_vnic_configs(container_name: str = None):
+    """
+    Load vNIC configurations for a runtime container or all containers.
+
+    Args:
+        container_name: Name of the runtime container (optional)
+
+    Returns:
+        If container_name is provided, returns list of vNIC configs for that container.
+        If container_name is None, returns dict of all container vNIC configs.
+    """
+    try:
+        if not os.path.exists(VNIC_CONFIG_FILE):
+            return [] if container_name else {}
+
+        with open(VNIC_CONFIG_FILE, "r") as f:
+            all_configs = json.load(f)
+
+        if container_name:
+            return all_configs.get(container_name, [])
+        else:
+            return all_configs
+
+    except Exception as e:
+        log_error(f"Failed to load vNIC configurations: {e}")
+        return [] if container_name else {}
+
+
+def delete_vnic_configs(container_name: str):
+    """
+    Delete vNIC configurations for a runtime container.
+
+    Args:
+        container_name: Name of the runtime container
+    """
+    try:
+        if not os.path.exists(VNIC_CONFIG_FILE):
+            return
+
+        with open(VNIC_CONFIG_FILE, "r") as f:
+            all_configs = json.load(f)
+
+        if container_name in all_configs:
+            del all_configs[container_name]
+
+            with open(VNIC_CONFIG_FILE, "w") as f:
+                json.dump(all_configs, f, indent=2)
+
+            log_debug(f"Deleted vNIC configurations for container {container_name}")
+
+    except Exception as e:
+        log_error(f"Failed to delete vNIC configurations for {container_name}: {e}")

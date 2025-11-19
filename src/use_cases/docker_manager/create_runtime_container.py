@@ -1,9 +1,11 @@
 from . import CLIENT, CLIENTS, HOST_NAME, add_client
 from tools.logger import *
+from .vnic_persistence import save_vnic_configs
 import docker
 import subprocess
 import json
 import re
+import ipaddress
 
 
 def detect_interface_network(parent_interface: str):
@@ -34,36 +36,43 @@ def detect_interface_network(parent_interface: str):
                 ip_address = addr.get("local")
                 prefix_len = addr.get("prefixlen")
                 if ip_address and prefix_len:
-                    ip_parts = ip_address.split(".")
-                    if len(ip_parts) == 4:
-                        subnet = (
-                            f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.0/{prefix_len}"
+                    try:
+                        network = ipaddress.ip_network(
+                            f"{ip_address}/{prefix_len}", strict=False
                         )
+                        subnet = str(network.with_prefixlen)
                         log_debug(
                             f"Detected subnet {subnet} for interface {parent_interface}"
                         )
 
                         route_result = subprocess.run(
-                            ["ip", "route", "show", "dev", parent_interface],
+                            ["ip", "-j", "route", "list", "default"],
                             capture_output=True,
                             text=True,
                             timeout=5,
                         )
                         gateway = None
                         if route_result.returncode == 0:
-                            for line in route_result.stdout.split("\n"):
-                                if "default via" in line:
-                                    match = re.search(
-                                        r"via\s+(\d+\.\d+\.\d+\.\d+)", line
-                                    )
-                                    if match:
-                                        gateway = match.group(1)
-                                        log_debug(
-                                            f"Detected gateway {gateway} for interface {parent_interface}"
-                                        )
-                                        break
+                            try:
+                                routes = json.loads(route_result.stdout)
+                                for route in routes:
+                                    if route.get("dev") == parent_interface:
+                                        gateway = route.get("gateway")
+                                        if gateway:
+                                            log_debug(
+                                                f"Detected gateway {gateway} for interface {parent_interface}"
+                                            )
+                                            break
+                            except json.JSONDecodeError:
+                                log_warning(
+                                    f"Failed to parse route JSON for {parent_interface}"
+                                )
 
                         return subnet, gateway
+                    except ValueError as e:
+                        log_warning(
+                            f"Failed to parse IP address {ip_address}/{prefix_len}: {e}"
+                        )
 
         log_warning(f"No IPv4 address found for interface {parent_interface}")
         return None, None
@@ -123,9 +132,45 @@ def get_or_create_macvlan_network(
             )
             log_info(f"MACVLAN network {network_name} created successfully")
             return network
-        except Exception as e:
-            log_error(f"Failed to create MACVLAN network {network_name}: {e}")
-            raise
+        except docker.errors.APIError as e:
+            if "overlaps" in str(e).lower():
+                log_warning(
+                    f"Network overlap detected for subnet {parent_subnet}. "
+                    f"Searching for existing MACVLAN network to reuse..."
+                )
+
+                try:
+                    all_networks = CLIENT.networks.list()
+                    for net in all_networks:
+                        if net.attrs.get("Driver") == "macvlan":
+                            net_options = net.attrs.get("Options", {})
+                            net_parent = net_options.get("parent")
+
+                            ipam = net.attrs.get("IPAM", {})
+                            if ipam and ipam.get("Config"):
+                                for config in ipam["Config"]:
+                                    net_subnet = config.get("Subnet")
+                                    if (
+                                        net_subnet == parent_subnet
+                                        and net_parent == parent_interface
+                                    ):
+                                        log_info(
+                                            f"Found existing MACVLAN network {net.name} with matching "
+                                            f"subnet {parent_subnet} and parent {parent_interface}. Reusing it."
+                                        )
+                                        return net
+
+                    log_error(
+                        f"Network overlap error but could not find existing MACVLAN network "
+                        f"for subnet {parent_subnet} and parent {parent_interface}"
+                    )
+                    raise
+                except Exception as search_error:
+                    log_error(f"Error searching for existing networks: {search_error}")
+                    raise
+            else:
+                log_error(f"Failed to create MACVLAN network {network_name}: {e}")
+                raise
 
 
 def create_internal_network(container_name: str):
@@ -297,6 +342,8 @@ async def create_runtime_container(container_name: str, vnic_configs: list):
                 log_info(
                     f"vNIC {vnic_name} on {parent_interface}: IP={vnic_ip}, MAC={vnic_mac}"
                 )
+
+        save_vnic_configs(container_name, vnic_configs)
 
         log_info(
             f"Runtime container {container_name} created successfully with {len(vnic_configs)} virtual NICs"
