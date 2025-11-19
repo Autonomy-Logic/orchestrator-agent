@@ -20,8 +20,11 @@ fi
 
 ### --- CONFIGURATION --- ###
 IMAGE_NAME="ghcr.io/autonomy-logic/orchestrator-agent:latest"
+NETMON_IMAGE_NAME="ghcr.io/autonomy-logic/autonomy-netmon:latest"
 CONTAINER_NAME="orchestrator_agent"
+NETMON_CONTAINER_NAME="autonomy_netmon"
 SOURCE_DIR="/tmp/orchestrator-agent"
+SHARED_VOLUME="orchestrator-shared"
 SERVER_DNS="tegcayxzurngxjwexsha.supabase.co/functions/v1"
 SERVER_URL="https://$SERVER_DNS"
 GET_ID_URL="$SERVER_URL/generate-orchestrator-id"
@@ -92,7 +95,9 @@ MISSING_PKGS=()
 for cmd in curl jq openssl docker; do
   if ! command -v "$cmd" &>/dev/null; then
     echo "Missing dependency: $cmd"
-    MISSING_PKGS+=("${PKG_MAP[$cmd]}")
+    if [[ -n "${PKG_MAP[$cmd]}" ]]; then
+      MISSING_PKGS+=("${PKG_MAP[$cmd]}")
+    fi
   else
     echo "[SUCCESS] $cmd is already installed."
   fi
@@ -119,7 +124,58 @@ if [ ${#MISSING_PKGS[@]} -ne 0 ]; then
   esac
 fi
 
-### --- STEP 1: PULL IMAGE AND CREATE CONTAINER --- ###
+echo "Creating shared volume for container communication..."
+if docker volume inspect "$SHARED_VOLUME" &>/dev/null; then
+  echo "[SUCCESS] Shared volume $SHARED_VOLUME already exists"
+else
+  docker volume create "$SHARED_VOLUME"
+  echo "[SUCCESS] Created shared volume $SHARED_VOLUME"
+fi
+
+### --- DEPLOY NETWORK MONITOR SIDECAR --- ###
+echo "Deploying network monitor sidecar container..."
+
+if docker pull "$NETMON_IMAGE_NAME" 2>/dev/null; then
+  echo "[SUCCESS] Pulled network monitor image: $NETMON_IMAGE_NAME"
+else
+  echo "[WARNING] No prebuilt netmon image found. Falling back to local build..."
+  
+  if [ -d "$SOURCE_DIR/.git" ]; then
+    echo "Updating existing source clone..."
+    if ! git -C "$SOURCE_DIR" pull --rebase; then
+      echo "Pull failed, stashing local changes and retrying..."
+      git -C "$SOURCE_DIR" stash push --include-untracked -m "installer-auto-stash $(date +%s)" || true
+      if ! git -C "$SOURCE_DIR" pull --rebase; then
+        echo "[ERROR] git pull still failing after stash. Please inspect $SOURCE_DIR."
+        exit 1
+      fi
+    fi
+  else
+    echo "Cloning source to $SOURCE_DIR..."
+    git clone https://github.com/autonomy-logic/orchestrator-agent.git "$SOURCE_DIR"
+  fi
+  
+  echo "Building network monitor image locally..."
+  docker build -t "$NETMON_IMAGE_NAME" -f "$SOURCE_DIR/install/Dockerfile.netmon" "$SOURCE_DIR/install"
+  
+  echo "[SUCCESS] Local netmon build completed: $NETMON_IMAGE_NAME"
+fi
+
+if docker ps -a --format '{{.Names}}' | grep -q "^${NETMON_CONTAINER_NAME}$"; then
+  echo "Removing existing network monitor container..."
+  docker rm -f "$NETMON_CONTAINER_NAME"
+fi
+
+docker run -d \
+  --name "$NETMON_CONTAINER_NAME" \
+  --network=host \
+  --restart unless-stopped \
+  -v "$SHARED_VOLUME:/var/orchestrator" \
+  "$NETMON_IMAGE_NAME"
+
+echo "[SUCCESS] Network monitor sidecar started"
+
+### --- STEP 1: PULL ORCHESTRATOR AGENT IMAGE AND CREATE CONTAINER --- ###
 echo "Pulling Docker image: $IMAGE_NAME"
 if docker pull "$IMAGE_NAME"; then
     echo "Pulled image: $IMAGE_NAME"
@@ -127,11 +183,17 @@ else
     echo "[WARNING] No prebuilt image found for this host architecture. Falling back to local build..."
     # Clone or update the source tree
     if [ -d "$SOURCE_DIR/.git" ]; then
-        info "Updating existing source clone..."
-        git -C "$SOURCE_DIR" fetch --all --tags --prune
-        git -C "$SOURCE_DIR" reset --hard origin/main || git -C "$SOURCE_DIR" reset --hard origin/master || true
+        echo "Updating existing source clone..."
+        if ! git -C "$SOURCE_DIR" pull --rebase; then
+            echo "Pull failed, stashing local changes and retrying..."
+            git -C "$SOURCE_DIR" stash push --include-untracked -m "installer-auto-stash $(date +%s)" || true
+            if ! git -C "$SOURCE_DIR" pull --rebase; then
+                echo "[ERROR] git pull still failing after stash. Please inspect $SOURCE_DIR."
+                exit 1
+            fi
+        fi
     else
-        info "Cloning source to $SOURCE_DIR..."
+        echo "Cloning source to $SOURCE_DIR..."
         git clone https://github.com/autonomy-logic/orchestrator-agent.git "$SOURCE_DIR"
     fi
 
@@ -144,16 +206,18 @@ else
 fi
 
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-    echo "Existing container detected. Restarting..."
-    docker restart "$CONTAINER_NAME"
-else
-    echo "Creating new container: $CONTAINER_NAME"
-    docker run -d --name "$CONTAINER_NAME" \
-    --restart unless-stopped \
-    -v "$MTLS_DIR:/root/.mtls:ro" \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    "$IMAGE_NAME"
+    echo "Existing container detected. Removing and recreating..."
+    docker rm -f "$CONTAINER_NAME"
 fi
+
+echo "Creating new container: $CONTAINER_NAME"
+docker run -d \
+  --name "$CONTAINER_NAME" \
+  --restart unless-stopped \
+  -v "$MTLS_DIR:/root/.mtls:ro" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$SHARED_VOLUME:/var/orchestrator" \
+  "$IMAGE_NAME"
 
 ### --- STEP 2: REQUEST CUSTOM ID --- ###
 echo "Requesting ID from $GET_ID_URL..."
