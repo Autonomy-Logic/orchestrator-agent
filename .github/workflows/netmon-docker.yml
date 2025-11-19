@@ -43,4 +43,3 @@ jobs:
           tags: |
             ghcr.io/autonomy-logic/autonomy-netmon:latest
             ghcr.io/autonomy-logic/autonomy-netmon:${{ github.sha }}
-            ghcr.io/autonomy-logic/autonomy-netmon:${{ github.ref_name }}
