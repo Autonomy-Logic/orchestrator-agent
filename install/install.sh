@@ -15,7 +15,7 @@ if [ -p /dev/stdin ]; then
     chmod +x "$TMP_SCRIPT"
 
     echo "[INFO] Re-running saved script..."
-    exec "$TMP_SCRIPT" "$@"
+    exec /usr/bin/env bash "$TMP_SCRIPT" "$@"
 fi
 
 ### --- CONFIGURATION --- ###
@@ -36,7 +36,7 @@ check_root()
     if [[ $EUID -ne 0 ]]; then
         echo "[INFO] Root privileges are required. Trying to elevate with sudo..."
         # Re-run the script with sudo, passing all original arguments
-        exec sudo "$0" "$@"
+        exec sudo /usr/bin/env bash "$0" "$@"
         # exec replaces the current shell with the new command, so the rest of the script continues as root
     fi
 }
@@ -148,7 +148,11 @@ if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
     docker restart "$CONTAINER_NAME"
 else
     echo "Creating new container: $CONTAINER_NAME"
-    docker run -d --name "$CONTAINER_NAME" -v "$MTLS_DIR:/root/.mtls:ro" -v /var/run/docker.sock:/var/run/docker.sock "$IMAGE_NAME"
+    docker run -d --name "$CONTAINER_NAME" \
+    --restart unless-stopped \
+    -v "$MTLS_DIR:/root/.mtls:ro" \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    "$IMAGE_NAME"
 fi
 
 ### --- STEP 2: REQUEST CUSTOM ID --- ###
