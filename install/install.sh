@@ -15,13 +15,17 @@ if [ -p /dev/stdin ]; then
     chmod +x "$TMP_SCRIPT"
 
     echo "[INFO] Re-running saved script..."
-    exec "$TMP_SCRIPT" "$@"
+    exec /usr/bin/env bash "$TMP_SCRIPT" "$@"
 fi
 
 ### --- CONFIGURATION --- ###
-IMAGE_NAME="hello-world"                                      # <-- change to your desired image
-CONTAINER_NAME="custom_container"                             # <-- change to your desired container name
-SERVER_DNS="tegcayxzurngxjwexsha.supabase.co/functions/v1"    # <-- change to your desired server DNS
+IMAGE_NAME="ghcr.io/autonomy-logic/orchestrator-agent:latest"
+NETMON_IMAGE_NAME="ghcr.io/autonomy-logic/autonomy-netmon:latest"
+CONTAINER_NAME="orchestrator_agent"
+NETMON_CONTAINER_NAME="autonomy_netmon"
+SOURCE_DIR="/tmp/orchestrator-agent"
+SHARED_VOLUME="orchestrator-shared"
+SERVER_DNS="tegcayxzurngxjwexsha.supabase.co/functions/v1"
 SERVER_URL="https://$SERVER_DNS"
 GET_ID_URL="$SERVER_URL/generate-orchestrator-id"
 UPLOAD_CERT_URL="$SERVER_URL/upload-orchestrator-certificate"
@@ -35,7 +39,7 @@ check_root()
     if [[ $EUID -ne 0 ]]; then
         echo "[INFO] Root privileges are required. Trying to elevate with sudo..."
         # Re-run the script with sudo, passing all original arguments
-        exec sudo "$0" "$@"
+        exec sudo /usr/bin/env bash "$0" "$@"
         # exec replaces the current shell with the new command, so the rest of the script continues as root
     fi
 }
@@ -56,7 +60,9 @@ elif command -v yum &>/dev/null; then
   PKG_MANAGER="yum"
 else
   echo "[ERROR] No supported package manager found (apt, dnf, or yum). Install dependencies manually."
-  exit 1
+  echo "Required packages: curl, jq, openssl, docker"
+  echo "Attempting to continue without automatic dependency installation..."
+  PKG_MANAGER="none"
 fi
 
 # Define package names per package manager
@@ -89,7 +95,9 @@ MISSING_PKGS=()
 for cmd in curl jq openssl docker; do
   if ! command -v "$cmd" &>/dev/null; then
     echo "Missing dependency: $cmd"
-    MISSING_PKGS+=("${PKG_MAP[$cmd]}")
+    if [[ -n "${PKG_MAP[$cmd]}" ]]; then
+      MISSING_PKGS+=("${PKG_MAP[$cmd]}")
+    fi
   else
     echo "[SUCCESS] $cmd is already installed."
   fi
@@ -109,20 +117,107 @@ if [ ${#MISSING_PKGS[@]} -ne 0 ]; then
     yum)
       sudo yum install -y "${MISSING_PKGS[@]}"
       ;;
+    none)
+      echo "[ERROR] Cannot install dependencies automatically. Please install: ${MISSING_PKGS[*]}"
+      exit 1
+      ;;
   esac
 fi
 
-### --- STEP 1: PULL IMAGE AND CREATE CONTAINER --- ###
+echo "Creating shared volume for container communication..."
+if docker volume inspect "$SHARED_VOLUME" &>/dev/null; then
+  echo "[SUCCESS] Shared volume $SHARED_VOLUME already exists"
+else
+  docker volume create "$SHARED_VOLUME"
+  echo "[SUCCESS] Created shared volume $SHARED_VOLUME"
+fi
+
+### --- DEPLOY NETWORK MONITOR SIDECAR --- ###
+echo "Deploying network monitor sidecar container..."
+
+if docker pull "$NETMON_IMAGE_NAME" 2>/dev/null; then
+  echo "[SUCCESS] Pulled network monitor image: $NETMON_IMAGE_NAME"
+else
+  echo "[WARNING] No prebuilt netmon image found. Falling back to local build..."
+  
+  if [ -d "$SOURCE_DIR/.git" ]; then
+    echo "Updating existing source clone..."
+    if ! git -C "$SOURCE_DIR" pull --rebase; then
+      echo "Pull failed, stashing local changes and retrying..."
+      git -C "$SOURCE_DIR" stash push --include-untracked -m "installer-auto-stash $(date +%s)" || true
+      if ! git -C "$SOURCE_DIR" pull --rebase; then
+        echo "[ERROR] git pull still failing after stash. Please inspect $SOURCE_DIR."
+        exit 1
+      fi
+    fi
+  else
+    echo "Cloning source to $SOURCE_DIR..."
+    git clone https://github.com/autonomy-logic/orchestrator-agent.git "$SOURCE_DIR"
+  fi
+  
+  echo "Building network monitor image locally..."
+  docker build -t "$NETMON_IMAGE_NAME" -f "$SOURCE_DIR/install/Dockerfile.netmon" "$SOURCE_DIR/install"
+  
+  echo "[SUCCESS] Local netmon build completed: $NETMON_IMAGE_NAME"
+fi
+
+if docker ps -a --format '{{.Names}}' | grep -q "^${NETMON_CONTAINER_NAME}$"; then
+  echo "Removing existing network monitor container..."
+  docker rm -f "$NETMON_CONTAINER_NAME"
+fi
+
+docker run -d \
+  --name "$NETMON_CONTAINER_NAME" \
+  --network=host \
+  --restart unless-stopped \
+  -v "$SHARED_VOLUME:/var/orchestrator" \
+  "$NETMON_IMAGE_NAME"
+
+echo "[SUCCESS] Network monitor sidecar started"
+
+### --- STEP 1: PULL ORCHESTRATOR AGENT IMAGE AND CREATE CONTAINER --- ###
 echo "Pulling Docker image: $IMAGE_NAME"
-docker pull "$IMAGE_NAME"
+if docker pull "$IMAGE_NAME"; then
+    echo "Pulled image: $IMAGE_NAME"
+else
+    echo "[WARNING] No prebuilt image found for this host architecture. Falling back to local build..."
+    # Clone or update the source tree
+    if [ -d "$SOURCE_DIR/.git" ]; then
+        echo "Updating existing source clone..."
+        if ! git -C "$SOURCE_DIR" pull --rebase; then
+            echo "Pull failed, stashing local changes and retrying..."
+            git -C "$SOURCE_DIR" stash push --include-untracked -m "installer-auto-stash $(date +%s)" || true
+            if ! git -C "$SOURCE_DIR" pull --rebase; then
+                echo "[ERROR] git pull still failing after stash. Please inspect $SOURCE_DIR."
+                exit 1
+            fi
+        fi
+    else
+        echo "Cloning source to $SOURCE_DIR..."
+        git clone https://github.com/autonomy-logic/orchestrator-agent.git "$SOURCE_DIR"
+    fi
+
+    # Build locally for the host architecture
+    # Use 'docker build' which builds for the local machine arch (simplest and most reliable for fallback)
+    info "Building Docker image locally for this host architecture..."
+    docker build -t "$IMAGE_NAME" "$SOURCE_DIR"
+
+    info "Local build completed: $IMAGE_NAME"
+fi
 
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-    echo "Existing container detected. Restarting..."
-    docker restart "$CONTAINER_NAME"
-else
-    echo "Creating new container: $CONTAINER_NAME"
-    docker run -d --name "$CONTAINER_NAME" "$IMAGE_NAME"
+    echo "Existing container detected. Removing and recreating..."
+    docker rm -f "$CONTAINER_NAME"
 fi
+
+echo "Creating new container: $CONTAINER_NAME"
+docker run -d \
+  --name "$CONTAINER_NAME" \
+  --restart unless-stopped \
+  -v "$MTLS_DIR:/root/.mtls:ro" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$SHARED_VOLUME:/var/orchestrator" \
+  "$IMAGE_NAME"
 
 ### --- STEP 2: REQUEST CUSTOM ID --- ###
 echo "Requesting ID from $GET_ID_URL..."
