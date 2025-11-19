@@ -38,4 +38,3 @@ jobs:
           tags: |
             ghcr.io/autonomy-logic/orchestrator-agent:latest
             ghcr.io/autonomy-logic/orchestrator-agent:${{ github.sha }}
-            ghcr.io/autonomy-logic/orchestrator-agent:${{ github.ref_name }}
