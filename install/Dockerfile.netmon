@@ -1,0 +1,14 @@
+FROM python:3.12-alpine
+
+RUN pip install --no-cache-dir pyroute2
+
+WORKDIR /app
+
+COPY autonomy-netmon.py /app/autonomy-netmon.py
+
+ENV PYTHONUNBUFFERED=1
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD test -S /var/orchestrator/netmon.sock || exit 1
+
+ENTRYPOINT ["python", "-u", "/app/autonomy-netmon.py"]

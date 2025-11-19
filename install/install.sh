@@ -20,8 +20,11 @@ fi
 
 ### --- CONFIGURATION --- ###
 IMAGE_NAME="ghcr.io/autonomy-logic/orchestrator-agent:latest"
+NETMON_IMAGE_NAME="ghcr.io/autonomy-logic/autonomy-netmon:latest"
 CONTAINER_NAME="orchestrator_agent"
+NETMON_CONTAINER_NAME="autonomy_netmon"
 SOURCE_DIR="/tmp/orchestrator-agent"
+SHARED_VOLUME="orchestrator-shared"
 SERVER_DNS="tegcayxzurngxjwexsha.supabase.co/functions/v1"
 SERVER_URL="https://$SERVER_DNS"
 GET_ID_URL="$SERVER_URL/generate-orchestrator-id"
@@ -29,9 +32,6 @@ UPLOAD_CERT_URL="$SERVER_URL/upload-orchestrator-certificate"
 MTLS_DIR="$HOME/.mtls"
 KEY_PATH="$MTLS_DIR/client.key"
 CRT_PATH="$MTLS_DIR/client.crt"
-ORCHESTRATOR_DATA_DIR="/var/orchestrator"
-NETMON_SCRIPT="/usr/local/bin/autonomy-netmon"
-NETMON_SERVICE="/etc/systemd/system/autonomy-netmon.service"
 
 # Check for root privileges
 check_root() 
@@ -73,8 +73,6 @@ if [[ "$PKG_MANAGER" == "apt-get" ]]; then
     [jq]="jq"
     [openssl]="openssl"
     [docker]="docker.io"
-    [python3]="python3"
-    [pip3]="python3-pip"
   )
 elif [[ "$PKG_MANAGER" == "dnf" ]]; then
   PKG_MAP=(
@@ -82,8 +80,6 @@ elif [[ "$PKG_MANAGER" == "dnf" ]]; then
     [jq]="jq"
     [openssl]="openssl"
     [docker]="docker"
-    [python3]="python3"
-    [pip3]="python3-pip"
   )
 elif [[ "$PKG_MANAGER" == "yum" ]]; then
   PKG_MAP=(
@@ -91,14 +87,12 @@ elif [[ "$PKG_MANAGER" == "yum" ]]; then
     [jq]="jq"
     [openssl]="openssl"
     [docker]="docker"
-    [python3]="python3"
-    [pip3]="python3-pip"
   )
 fi
 
 # Collect missing packages
 MISSING_PKGS=()
-for cmd in curl jq openssl docker python3 pip3; do
+for cmd in curl jq openssl docker; do
   if ! command -v "$cmd" &>/dev/null; then
     echo "Missing dependency: $cmd"
     if [[ -n "${PKG_MAP[$cmd]}" ]]; then
@@ -130,66 +124,52 @@ if [ ${#MISSING_PKGS[@]} -ne 0 ]; then
   esac
 fi
 
-echo "Checking for systemd support..."
-if ! command -v systemctl &>/dev/null; then
-  echo "[ERROR] systemd is not available on this system."
-  echo "The network monitor daemon requires systemd to run."
-  exit 1
-fi
-echo "[SUCCESS] systemd is available."
-
-### --- INSTALL PYTHON DEPENDENCIES --- ###
-echo "Installing Python dependencies for network monitor..."
-if command -v pip3 &>/dev/null; then
-  echo "Installing pyroute2..."
-  pip3 install --quiet pyroute2 || {
-    echo "[ERROR] Failed to install pyroute2. Please install it manually: pip3 install pyroute2"
-    exit 1
-  }
-  echo "[SUCCESS] pyroute2 installed successfully."
+echo "Creating shared volume for container communication..."
+if docker volume inspect "$SHARED_VOLUME" &>/dev/null; then
+  echo "[SUCCESS] Shared volume $SHARED_VOLUME already exists"
 else
-  echo "[ERROR] pip3 is not available. Cannot install Python dependencies."
-  exit 1
+  docker volume create "$SHARED_VOLUME"
+  echo "[SUCCESS] Created shared volume $SHARED_VOLUME"
 fi
 
-### --- DEPLOY NETWORK MONITOR --- ###
-echo "Deploying network monitor daemon..."
+### --- DEPLOY NETWORK MONITOR SIDECAR --- ###
+echo "Deploying network monitor sidecar container..."
 
-mkdir -p "$ORCHESTRATOR_DATA_DIR"
-chmod 755 "$ORCHESTRATOR_DATA_DIR"
-echo "[SUCCESS] Created $ORCHESTRATOR_DATA_DIR"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-if [ -f "$SCRIPT_DIR/autonomy-netmon.py" ]; then
-  cp "$SCRIPT_DIR/autonomy-netmon.py" "$NETMON_SCRIPT"
-  chmod +x "$NETMON_SCRIPT"
-  echo "[SUCCESS] Deployed network monitor script to $NETMON_SCRIPT"
+if docker pull "$NETMON_IMAGE_NAME" 2>/dev/null; then
+  echo "[SUCCESS] Pulled network monitor image: $NETMON_IMAGE_NAME"
 else
-  echo "[ERROR] autonomy-netmon.py not found in $SCRIPT_DIR"
-  exit 1
+  echo "[WARNING] No prebuilt netmon image found. Falling back to local build..."
+  
+  if [ -d "$SOURCE_DIR/.git" ]; then
+    echo "Updating existing source clone..."
+    git -C "$SOURCE_DIR" fetch --all --tags --prune
+    git -C "$SOURCE_DIR" reset --hard origin/main || git -C "$SOURCE_DIR" reset --hard origin/master || true
+  else
+    echo "Cloning source to $SOURCE_DIR..."
+    git clone https://github.com/autonomy-logic/orchestrator-agent.git "$SOURCE_DIR"
+  fi
+  
+  echo "Building network monitor image locally..."
+  docker build -t "$NETMON_IMAGE_NAME" -f "$SOURCE_DIR/install/Dockerfile.netmon" "$SOURCE_DIR/install"
+  
+  echo "[SUCCESS] Local netmon build completed: $NETMON_IMAGE_NAME"
 fi
 
-if [ -f "$SCRIPT_DIR/autonomy-netmon.service" ]; then
-  cp "$SCRIPT_DIR/autonomy-netmon.service" "$NETMON_SERVICE"
-  systemctl daemon-reload
-  systemctl enable autonomy-netmon.service
-  systemctl restart autonomy-netmon.service
-  echo "[SUCCESS] Network monitor service installed and started"
-else
-  echo "[ERROR] autonomy-netmon.service not found in $SCRIPT_DIR"
-  exit 1
+if docker ps -a --format '{{.Names}}' | grep -q "^${NETMON_CONTAINER_NAME}$"; then
+  echo "Removing existing network monitor container..."
+  docker rm -f "$NETMON_CONTAINER_NAME"
 fi
 
-sleep 2
-if systemctl is-active --quiet autonomy-netmon.service; then
-  echo "[SUCCESS] Network monitor is running"
-else
-  echo "[WARNING] Network monitor service may not be running properly"
-  echo "Check status with: systemctl status autonomy-netmon.service"
-fi
+docker run -d \
+  --name "$NETMON_CONTAINER_NAME" \
+  --network=host \
+  --restart unless-stopped \
+  -v "$SHARED_VOLUME:/var/orchestrator" \
+  "$NETMON_IMAGE_NAME"
 
-### --- STEP 1: PULL IMAGE AND CREATE CONTAINER --- ###
+echo "[SUCCESS] Network monitor sidecar started"
+
+### --- STEP 1: PULL ORCHESTRATOR AGENT IMAGE AND CREATE CONTAINER --- ###
 echo "Pulling Docker image: $IMAGE_NAME"
 if docker pull "$IMAGE_NAME"; then
     echo "Pulled image: $IMAGE_NAME"
@@ -224,7 +204,7 @@ docker run -d \
   --restart unless-stopped \
   -v "$MTLS_DIR:/root/.mtls:ro" \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -v "$ORCHESTRATOR_DATA_DIR:$ORCHESTRATOR_DATA_DIR" \
+  -v "$SHARED_VOLUME:/var/orchestrator" \
   "$IMAGE_NAME"
 
 ### --- STEP 2: REQUEST CUSTOM ID --- ###
