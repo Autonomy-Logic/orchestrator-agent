@@ -6,10 +6,10 @@ from tools.contract_validation import (
     ListType,
     OptionalType,
     validate_contract,
-    BASE_MESSAGE,
 )
 from . import topic
 import asyncio
+from datetime import datetime
 
 NAME = "create_new_runtime"
 
@@ -27,9 +27,11 @@ VNIC_CONFIG_TYPE = {
 }
 
 MESSAGE_TYPE = {
-    **BASE_MESSAGE,
+    "correlation_id": NumberType,
     "container_name": StringType,
     "vnic_configs": ListType(VNIC_CONFIG_TYPE),
+    "action": OptionalType(StringType),
+    "requested_at": OptionalType(StringType),
 }
 
 
@@ -46,6 +48,11 @@ def init(client):
     @client.on(NAME)
     async def callback(message):
         correlation_id = message.get("correlation_id")
+
+        if "action" not in message:
+            message["action"] = NAME
+        if "requested_at" not in message:
+            message["requested_at"] = datetime.now().isoformat()
 
         try:
             validate_contract(MESSAGE_TYPE, message)
