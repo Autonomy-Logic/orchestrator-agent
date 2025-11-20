@@ -7,6 +7,7 @@ from .receivers.get_consumption_device import init as init_get_consumption_devic
 from .receivers.get_consumption_orchestrator import (
     init as init_get_consumption_orchestrator,
 )
+from .receivers.get_device_status import init as init_get_device_status
 from .receivers.restart_device import init as init_restart_device
 from .receivers.run_command import init as init_run_command
 from .receivers.start_device import init as init_start_device
@@ -24,6 +25,7 @@ def initialize_all(client):
     init_delete_orchestrator(client)
     init_get_consumption_device(client)
     init_get_consumption_orchestrator(client)
+    init_get_device_status(client)
     init_restart_device(client)
     init_start_device(client)
     init_stop_device(client)
