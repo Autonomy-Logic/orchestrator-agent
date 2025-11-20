@@ -1,4 +1,4 @@
-from . import CLIENT, CLIENTS, HOST_NAME, add_client
+from . import CLIENT, CLIENTS, add_client, get_self_container
 from tools.logger import *
 from .vnic_persistence import save_vnic_configs
 from use_cases.network_monitor.interface_cache import get_interface_network
@@ -270,15 +270,31 @@ async def create_runtime_container(container_name: str, vnic_configs: list):
         log_info(f"Container {container_name} created and started successfully")
 
         try:
-            main_container = CLIENT.containers.get(HOST_NAME)
-            internal_network.connect(main_container)
-            log_debug(
-                f"Connected {HOST_NAME} to internal network {internal_network.name}"
-            )
+            main_container = get_self_container()
+            if main_container:
+                try:
+                    internal_network.connect(main_container)
+                    log_debug(
+                        f"Connected {main_container.name} to internal network {internal_network.name}"
+                    )
+                except docker.errors.APIError as e:
+                    if (
+                        "already exists" in str(e).lower()
+                        or "already attached" in str(e).lower()
+                    ):
+                        log_debug(
+                            f"Container {main_container.name} already connected to {internal_network.name}"
+                        )
+                    else:
+                        log_warning(
+                            f"Could not connect {main_container.name} to internal network: {e}"
+                        )
+            else:
+                log_warning(
+                    "Could not detect orchestrator-agent container, skipping internal network connection"
+                )
         except Exception as e:
-            log_error(
-                f"Could not connect main container {HOST_NAME} to internal network: {e}"
-            )
+            log_warning(f"Error connecting orchestrator-agent to internal network: {e}")
 
         container.reload()
         network_settings = container.attrs["NetworkSettings"]["Networks"]
