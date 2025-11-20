@@ -74,6 +74,10 @@ def get_or_create_macvlan_network(
             if not parent_gateway:
                 parent_gateway = detected_gateway
 
+            network_name = (
+                f"macvlan_{parent_interface}_{parent_subnet.replace('/', '_')}"
+            )
+
         log_info(
             f"Creating new MACVLAN network {network_name} for parent interface {parent_interface} "
             f"with subnet {parent_subnet} and gateway {parent_gateway}"
@@ -195,8 +199,6 @@ async def create_runtime_container(container_name: str, vnic_configs: list):
         internal_network = create_internal_network(container_name)
 
         macvlan_networks = []
-        endpoint_configs = {}
-
         dns_servers = []
 
         for vnic_config in vnic_configs:
@@ -204,7 +206,6 @@ async def create_runtime_container(container_name: str, vnic_configs: list):
             parent_interface = vnic_config.get("parent_interface")
             parent_subnet = vnic_config.get("parent_subnet")
             parent_gateway = vnic_config.get("parent_gateway")
-            network_mode = vnic_config.get("network_mode", "dhcp")
 
             log_debug(
                 f"Processing vNIC {vnic_name} for parent interface {parent_interface}"
@@ -219,36 +220,6 @@ async def create_runtime_container(container_name: str, vnic_configs: list):
             if vnic_dns and isinstance(vnic_dns, list):
                 dns_servers.extend(vnic_dns)
 
-            endpoint_config = {}
-
-            if network_mode == "manual":
-                ip_address = vnic_config.get("ip_address")
-                subnet = vnic_config.get("subnet")
-                gateway = vnic_config.get("gateway")
-
-                if ip_address and subnet:
-                    ipv4_address = f"{ip_address}/{subnet.split('/')[-1] if '/' in subnet else '24'}"
-
-                    ipam_config = {"IPv4Address": ipv4_address}
-
-                    if gateway:
-                        ipam_config["Gateway"] = gateway
-
-                    endpoint_config["IPAMConfig"] = ipam_config
-                    log_debug(
-                        f"Configured manual IP {ipv4_address} for vNIC {vnic_name}"
-                    )
-
-            mac_address = vnic_config.get("mac_address")
-            if mac_address:
-                endpoint_config["MacAddress"] = mac_address
-                log_debug(f"Configured MAC address {mac_address} for vNIC {vnic_name}")
-
-            endpoint_configs[macvlan_network.name] = endpoint_config
-
-        networking_config = {internal_network.name: {}}
-        networking_config.update(endpoint_configs)
-
         log_info(f"Creating container {container_name}")
 
         create_kwargs = {
@@ -256,7 +227,7 @@ async def create_runtime_container(container_name: str, vnic_configs: list):
             "name": container_name,
             "detach": True,
             "restart_policy": {"Name": "always"},
-            "networking_config": {"EndpointsConfig": networking_config},
+            "network": internal_network.name,
         }
 
         if dns_servers:
@@ -268,6 +239,34 @@ async def create_runtime_container(container_name: str, vnic_configs: list):
 
         container.start()
         log_info(f"Container {container_name} created and started successfully")
+
+        for macvlan_network, vnic_config in macvlan_networks:
+            vnic_name = vnic_config.get("name")
+            network_mode = vnic_config.get("network_mode", "dhcp")
+
+            connect_kwargs = {}
+
+            if network_mode == "manual":
+                ip_address = vnic_config.get("ip_address")
+                if ip_address:
+                    connect_kwargs["ipv4_address"] = ip_address
+                    log_debug(f"Configured manual IP {ip_address} for vNIC {vnic_name}")
+
+            mac_address = vnic_config.get("mac_address")
+            if mac_address:
+                connect_kwargs["mac_address"] = mac_address
+                log_debug(f"Configured MAC address {mac_address} for vNIC {vnic_name}")
+
+            try:
+                macvlan_network.connect(container, **connect_kwargs)
+                log_info(
+                    f"Connected container {container_name} to MACVLAN network {macvlan_network.name}"
+                )
+            except docker.errors.APIError as e:
+                log_error(
+                    f"Failed to connect container {container_name} to MACVLAN network {macvlan_network.name}: {e}"
+                )
+                raise
 
         try:
             main_container = get_self_container()
@@ -308,14 +307,13 @@ async def create_runtime_container(container_name: str, vnic_configs: list):
                 f"Could not retrieve internal IP for container {container_name}"
             )
 
-        for vnic_config in vnic_configs:
+        for macvlan_network, vnic_config in macvlan_networks:
             vnic_name = vnic_config.get("name")
             parent_interface = vnic_config.get("parent_interface")
-            network_name = f"macvlan_{parent_interface}"
 
-            if network_name in network_settings:
-                vnic_ip = network_settings[network_name]["IPAddress"]
-                vnic_mac = network_settings[network_name]["MacAddress"]
+            if macvlan_network.name in network_settings:
+                vnic_ip = network_settings[macvlan_network.name]["IPAddress"]
+                vnic_mac = network_settings[macvlan_network.name]["MacAddress"]
                 log_info(
                     f"vNIC {vnic_name} on {parent_interface}: IP={vnic_ip}, MAC={vnic_mac}"
                 )
