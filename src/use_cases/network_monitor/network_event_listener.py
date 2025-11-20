@@ -8,6 +8,7 @@ from use_cases.docker_manager.create_runtime_container import (
     get_or_create_macvlan_network,
     CLIENT,
 )
+from .interface_cache import INTERFACE_CACHE
 
 SOCKET_PATH = "/var/orchestrator/netmon.sock"
 DEBOUNCE_SECONDS = 3
@@ -111,12 +112,38 @@ class NetworkEventListener:
                 log_info("Received network discovery event")
                 interfaces = event_data.get("data", {}).get("interfaces", [])
                 log_info(f"Discovered {len(interfaces)} network interfaces")
+
                 for iface in interfaces:
-                    log_debug(
-                        f"Interface {iface['interface']}: "
-                        f"{len(iface['ipv4_addresses'])} IPv4 address(es), "
-                        f"gateway: {iface.get('gateway', 'none')}"
-                    )
+                    interface_name = iface.get("interface")
+                    ipv4_addresses = iface.get("ipv4_addresses", [])
+                    gateway = iface.get("gateway")
+
+                    if not interface_name:
+                        continue
+
+                    if ipv4_addresses:
+                        subnet = ipv4_addresses[0].get("subnet")
+
+                        INTERFACE_CACHE[interface_name] = {
+                            "subnet": subnet,
+                            "gateway": gateway,
+                            "addresses": ipv4_addresses,
+                        }
+
+                        log_debug(
+                            f"Cached interface {interface_name}: "
+                            f"subnet={subnet}, gateway={gateway}, "
+                            f"{len(ipv4_addresses)} IPv4 address(es)"
+                        )
+                    else:
+                        log_debug(
+                            f"Interface {interface_name} has no IPv4 addresses, skipping cache"
+                        )
+                        if interface_name in INTERFACE_CACHE:
+                            del INTERFACE_CACHE[interface_name]
+                            log_debug(
+                                f"Removed {interface_name} from cache (no addresses)"
+                            )
 
             elif event_type == "network_change":
                 log_info("Received network change event")
@@ -125,16 +152,36 @@ class NetworkEventListener:
                 ipv4_addresses = iface_data.get("ipv4_addresses", [])
                 gateway = iface_data.get("gateway")
 
-                if interface and ipv4_addresses:
+                if not interface:
+                    return
+
+                if ipv4_addresses:
                     log_info(
                         f"Network change detected on {interface}: "
                         f"{len(ipv4_addresses)} IPv4 address(es), gateway: {gateway}"
+                    )
+
+                    subnet = ipv4_addresses[0].get("subnet")
+                    INTERFACE_CACHE[interface] = {
+                        "subnet": subnet,
+                        "gateway": gateway,
+                        "addresses": ipv4_addresses,
+                    }
+                    log_debug(
+                        f"Updated cache for interface {interface}: subnet={subnet}, gateway={gateway}"
                     )
 
                     self.pending_changes[interface] = iface_data
                     self.last_event_time[interface] = asyncio.get_event_loop().time()
 
                     asyncio.create_task(self._process_pending_changes(interface))
+                else:
+                    log_debug(
+                        f"Interface {interface} has no IPv4 addresses after change, skipping cache update"
+                    )
+                    if interface in INTERFACE_CACHE:
+                        del INTERFACE_CACHE[interface]
+                        log_debug(f"Removed {interface} from cache (no addresses)")
 
         except Exception as e:
             log_error(f"Error handling network event: {e}")

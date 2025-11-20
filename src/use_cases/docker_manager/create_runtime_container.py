@@ -1,85 +1,45 @@
-from . import CLIENT, CLIENTS, HOST_NAME, add_client
+from . import CLIENT, CLIENTS, add_client, get_self_container
 from tools.logger import *
 from .vnic_persistence import save_vnic_configs
+from use_cases.network_monitor.interface_cache import get_interface_network
 import docker
-import subprocess
-import json
-import re
-import ipaddress
+import time
 
 
 def detect_interface_network(parent_interface: str):
     """
-    Detect the subnet and gateway for a parent interface by querying the host.
+    Detect the subnet and gateway for a parent interface using netmon discovery cache.
     Returns (subnet, gateway) tuple or (None, None) if detection fails.
+
+    This function reads from the interface cache populated by the netmon sidecar.
+    If the cache is empty, it waits briefly for the initial discovery to arrive.
     """
-    try:
-        result = subprocess.run(
-            ["ip", "-j", "addr", "show", "dev", parent_interface],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode != 0:
-            log_warning(
-                f"Failed to query interface {parent_interface}: {result.stderr}"
+    max_wait_seconds = 3
+    retry_interval = 0.5
+    start_time = time.time()
+
+    while time.time() - start_time < max_wait_seconds:
+        subnet, gateway = get_interface_network(parent_interface)
+
+        if subnet:
+            log_info(
+                f"Detected network for interface {parent_interface}: "
+                f"subnet={subnet}, gateway={gateway}"
             )
-            return None, None
+            return subnet, gateway
 
-        data = json.loads(result.stdout)
-        if not data or not data[0].get("addr_info"):
-            log_warning(f"No address info found for interface {parent_interface}")
-            return None, None
+        if time.time() - start_time < max_wait_seconds:
+            log_debug(
+                f"Interface {parent_interface} not yet in cache, "
+                f"waiting for netmon discovery..."
+            )
+            time.sleep(retry_interval)
 
-        for addr in data[0]["addr_info"]:
-            if addr.get("family") == "inet":
-                ip_address = addr.get("local")
-                prefix_len = addr.get("prefixlen")
-                if ip_address and prefix_len:
-                    try:
-                        network = ipaddress.ip_network(
-                            f"{ip_address}/{prefix_len}", strict=False
-                        )
-                        subnet = str(network.with_prefixlen)
-                        log_debug(
-                            f"Detected subnet {subnet} for interface {parent_interface}"
-                        )
-
-                        route_result = subprocess.run(
-                            ["ip", "-j", "route", "list", "default"],
-                            capture_output=True,
-                            text=True,
-                            timeout=5,
-                        )
-                        gateway = None
-                        if route_result.returncode == 0:
-                            try:
-                                routes = json.loads(route_result.stdout)
-                                for route in routes:
-                                    if route.get("dev") == parent_interface:
-                                        gateway = route.get("gateway")
-                                        if gateway:
-                                            log_debug(
-                                                f"Detected gateway {gateway} for interface {parent_interface}"
-                                            )
-                                            break
-                            except json.JSONDecodeError:
-                                log_warning(
-                                    f"Failed to parse route JSON for {parent_interface}"
-                                )
-
-                        return subnet, gateway
-                    except ValueError as e:
-                        log_warning(
-                            f"Failed to parse IP address {ip_address}/{prefix_len}: {e}"
-                        )
-
-        log_warning(f"No IPv4 address found for interface {parent_interface}")
-        return None, None
-
-    except Exception as e:
-        log_error(f"Failed to detect network for interface {parent_interface}: {e}")
-        return None, None
+    log_warning(
+        f"Interface {parent_interface} not found in netmon discovery cache after "
+        f"{max_wait_seconds}s. The interface may not exist or netmon may not be running."
+    )
+    return None, None
 
 
 def get_or_create_macvlan_network(
@@ -112,6 +72,10 @@ def get_or_create_macvlan_network(
                 )
             if not parent_gateway:
                 parent_gateway = detected_gateway
+
+            network_name = (
+                f"macvlan_{parent_interface}_{parent_subnet.replace('/', '_')}"
+            )
 
         log_info(
             f"Creating new MACVLAN network {network_name} for parent interface {parent_interface} "
@@ -234,8 +198,6 @@ async def create_runtime_container(container_name: str, vnic_configs: list):
         internal_network = create_internal_network(container_name)
 
         macvlan_networks = []
-        endpoint_configs = {}
-
         dns_servers = []
 
         for vnic_config in vnic_configs:
@@ -243,7 +205,6 @@ async def create_runtime_container(container_name: str, vnic_configs: list):
             parent_interface = vnic_config.get("parent_interface")
             parent_subnet = vnic_config.get("parent_subnet")
             parent_gateway = vnic_config.get("parent_gateway")
-            network_mode = vnic_config.get("network_mode", "dhcp")
 
             log_debug(
                 f"Processing vNIC {vnic_name} for parent interface {parent_interface}"
@@ -258,36 +219,6 @@ async def create_runtime_container(container_name: str, vnic_configs: list):
             if vnic_dns and isinstance(vnic_dns, list):
                 dns_servers.extend(vnic_dns)
 
-            endpoint_config = {}
-
-            if network_mode == "manual":
-                ip_address = vnic_config.get("ip_address")
-                subnet = vnic_config.get("subnet")
-                gateway = vnic_config.get("gateway")
-
-                if ip_address and subnet:
-                    ipv4_address = f"{ip_address}/{subnet.split('/')[-1] if '/' in subnet else '24'}"
-
-                    ipam_config = {"IPv4Address": ipv4_address}
-
-                    if gateway:
-                        ipam_config["Gateway"] = gateway
-
-                    endpoint_config["IPAMConfig"] = ipam_config
-                    log_debug(
-                        f"Configured manual IP {ipv4_address} for vNIC {vnic_name}"
-                    )
-
-            mac_address = vnic_config.get("mac_address")
-            if mac_address:
-                endpoint_config["MacAddress"] = mac_address
-                log_debug(f"Configured MAC address {mac_address} for vNIC {vnic_name}")
-
-            endpoint_configs[macvlan_network.name] = endpoint_config
-
-        networking_config = {internal_network.name: {}}
-        networking_config.update(endpoint_configs)
-
         log_info(f"Creating container {container_name}")
 
         create_kwargs = {
@@ -295,7 +226,7 @@ async def create_runtime_container(container_name: str, vnic_configs: list):
             "name": container_name,
             "detach": True,
             "restart_policy": {"Name": "always"},
-            "networking_config": {"EndpointsConfig": networking_config},
+            "network": internal_network.name,
         }
 
         if dns_servers:
@@ -308,16 +239,64 @@ async def create_runtime_container(container_name: str, vnic_configs: list):
         container.start()
         log_info(f"Container {container_name} created and started successfully")
 
+        for macvlan_network, vnic_config in macvlan_networks:
+            vnic_name = vnic_config.get("name")
+            network_mode = vnic_config.get("network_mode", "dhcp")
+
+            connect_kwargs = {}
+
+            if network_mode == "manual":
+                ip_address = vnic_config.get("ip_address")
+                if ip_address:
+                    # Docker's network.connect() expects ipv4_address without CIDR prefix
+                    # (e.g., '192.168.1.10' not '192.168.1.10/24'). Normalize defensively
+                    # in case the user mistakenly provides a CIDR notation.
+                    ip_address = ip_address.split("/")[0]
+                    connect_kwargs["ipv4_address"] = ip_address
+                    log_debug(f"Configured manual IP {ip_address} for vNIC {vnic_name}")
+
+            mac_address = vnic_config.get("mac_address")
+            if mac_address:
+                connect_kwargs["mac_address"] = mac_address
+                log_debug(f"Configured MAC address {mac_address} for vNIC {vnic_name}")
+
+            try:
+                macvlan_network.connect(container, **connect_kwargs)
+                log_info(
+                    f"Connected container {container_name} to MACVLAN network {macvlan_network.name}"
+                )
+            except docker.errors.APIError as e:
+                log_error(
+                    f"Failed to connect container {container_name} to MACVLAN network {macvlan_network.name}: {e}"
+                )
+                raise
+
         try:
-            main_container = CLIENT.containers.get(HOST_NAME)
-            internal_network.connect(main_container)
-            log_debug(
-                f"Connected {HOST_NAME} to internal network {internal_network.name}"
-            )
+            main_container = get_self_container()
+            if main_container:
+                try:
+                    internal_network.connect(main_container)
+                    log_debug(
+                        f"Connected {main_container.name} to internal network {internal_network.name}"
+                    )
+                except docker.errors.APIError as e:
+                    if (
+                        "already exists" in str(e).lower()
+                        or "already attached" in str(e).lower()
+                    ):
+                        log_debug(
+                            f"Container {main_container.name} already connected to {internal_network.name}"
+                        )
+                    else:
+                        log_warning(
+                            f"Could not connect {main_container.name} to internal network: {e}"
+                        )
+            else:
+                log_warning(
+                    "Could not detect orchestrator-agent container, skipping internal network connection"
+                )
         except Exception as e:
-            log_error(
-                f"Could not connect main container {HOST_NAME} to internal network: {e}"
-            )
+            log_warning(f"Error connecting orchestrator-agent to internal network: {e}")
 
         container.reload()
         network_settings = container.attrs["NetworkSettings"]["Networks"]
@@ -331,14 +310,13 @@ async def create_runtime_container(container_name: str, vnic_configs: list):
                 f"Could not retrieve internal IP for container {container_name}"
             )
 
-        for vnic_config in vnic_configs:
+        for macvlan_network, vnic_config in macvlan_networks:
             vnic_name = vnic_config.get("name")
             parent_interface = vnic_config.get("parent_interface")
-            network_name = f"macvlan_{parent_interface}"
 
-            if network_name in network_settings:
-                vnic_ip = network_settings[network_name]["IPAddress"]
-                vnic_mac = network_settings[network_name]["MacAddress"]
+            if macvlan_network.name in network_settings:
+                vnic_ip = network_settings[macvlan_network.name]["IPAddress"]
+                vnic_mac = network_settings[macvlan_network.name]["MacAddress"]
                 log_info(
                     f"vNIC {vnic_name} on {parent_interface}: IP={vnic_ip}, MAC={vnic_mac}"
                 )

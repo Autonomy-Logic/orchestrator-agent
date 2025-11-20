@@ -1,11 +1,67 @@
 import docker
 import os
 import json
+import socket
+from tools.logger import log_debug, log_warning
 
 CLIENT = docker.from_env()
 
 HOST_NAME = os.getenv("HOST_NAME", "orchestrator-agent-devcontainer")
 CLIENTS_FILE = os.getenv("CLIENTS_FILE", "/var/orchestrator/data/clients.json")
+
+
+def get_self_container():
+    """
+    Detect the orchestrator-agent's own container from inside the container.
+
+    Tries multiple methods in order:
+    1. HOSTNAME environment variable (Docker sets this to container ID by default)
+    2. socket.gethostname() (usually returns container ID)
+    3. HOST_NAME environment variable (explicit override)
+    4. Search by label edge.autonomy.role=orchestrator-agent
+
+    Returns the container object or None if not found.
+    """
+    container_id = os.getenv("HOSTNAME")
+    if container_id:
+        try:
+            container = CLIENT.containers.get(container_id)
+            log_debug(f"Found self container via HOSTNAME env: {container.name}")
+            return container
+        except docker.errors.NotFound:
+            log_debug(f"HOSTNAME env {container_id} not found as container")
+
+    try:
+        hostname = socket.gethostname()
+        container = CLIENT.containers.get(hostname)
+        log_debug(f"Found self container via socket.gethostname(): {container.name}")
+        return container
+    except docker.errors.NotFound:
+        log_debug(f"socket.gethostname() {hostname} not found as container")
+    except Exception as e:
+        log_debug(f"Error getting hostname: {e}")
+
+    if HOST_NAME:
+        try:
+            container = CLIENT.containers.get(HOST_NAME)
+            log_debug(f"Found self container via HOST_NAME env: {container.name}")
+            return container
+        except docker.errors.NotFound:
+            log_debug(f"HOST_NAME env {HOST_NAME} not found as container")
+
+    try:
+        containers = CLIENT.containers.list(
+            filters={"label": "edge.autonomy.role=orchestrator-agent"}
+        )
+        if containers:
+            container = containers[0]
+            log_debug(f"Found self container via label: {container.name}")
+            return container
+    except Exception as e:
+        log_debug(f"Error searching by label: {e}")
+
+    log_warning("Could not detect self container using any method")
+    return None
 
 
 def load_clients_from_file():
