@@ -3,7 +3,6 @@ from tools.logger import *
 from .vnic_persistence import save_vnic_configs
 from use_cases.network_monitor.interface_cache import get_interface_network
 import docker
-import asyncio
 import time
 
 
@@ -249,6 +248,10 @@ async def create_runtime_container(container_name: str, vnic_configs: list):
             if network_mode == "manual":
                 ip_address = vnic_config.get("ip_address")
                 if ip_address:
+                    # Docker's network.connect() expects ipv4_address without CIDR prefix
+                    # (e.g., '192.168.1.10' not '192.168.1.10/24'). Normalize defensively
+                    # in case the user mistakenly provides a CIDR notation.
+                    ip_address = ip_address.split("/")[0]
                     connect_kwargs["ipv4_address"] = ip_address
                     log_debug(f"Configured manual IP {ip_address} for vNIC {vnic_name}")
 

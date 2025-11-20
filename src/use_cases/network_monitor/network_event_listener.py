@@ -118,7 +118,10 @@ class NetworkEventListener:
                     ipv4_addresses = iface.get("ipv4_addresses", [])
                     gateway = iface.get("gateway")
 
-                    if interface_name and ipv4_addresses:
+                    if not interface_name:
+                        continue
+
+                    if ipv4_addresses:
                         subnet = ipv4_addresses[0].get("subnet")
 
                         INTERFACE_CACHE[interface_name] = {
@@ -132,6 +135,15 @@ class NetworkEventListener:
                             f"subnet={subnet}, gateway={gateway}, "
                             f"{len(ipv4_addresses)} IPv4 address(es)"
                         )
+                    else:
+                        log_debug(
+                            f"Interface {interface_name} has no IPv4 addresses, skipping cache"
+                        )
+                        if interface_name in INTERFACE_CACHE:
+                            del INTERFACE_CACHE[interface_name]
+                            log_debug(
+                                f"Removed {interface_name} from cache (no addresses)"
+                            )
 
             elif event_type == "network_change":
                 log_info("Received network change event")
@@ -140,7 +152,10 @@ class NetworkEventListener:
                 ipv4_addresses = iface_data.get("ipv4_addresses", [])
                 gateway = iface_data.get("gateway")
 
-                if interface and ipv4_addresses:
+                if not interface:
+                    return
+
+                if ipv4_addresses:
                     log_info(
                         f"Network change detected on {interface}: "
                         f"{len(ipv4_addresses)} IPv4 address(es), gateway: {gateway}"
@@ -160,6 +175,13 @@ class NetworkEventListener:
                     self.last_event_time[interface] = asyncio.get_event_loop().time()
 
                     asyncio.create_task(self._process_pending_changes(interface))
+                else:
+                    log_debug(
+                        f"Interface {interface} has no IPv4 addresses after change, skipping cache update"
+                    )
+                    if interface in INTERFACE_CACHE:
+                        del INTERFACE_CACHE[interface]
+                        log_debug(f"Removed {interface} from cache (no addresses)")
 
         except Exception as e:
             log_error(f"Error handling network event: {e}")
