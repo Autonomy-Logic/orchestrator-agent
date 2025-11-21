@@ -1,4 +1,8 @@
 from use_cases.docker_manager.create_runtime_container import create_runtime_container
+from use_cases.docker_manager.operations_state import (
+    set_creating,
+    is_operation_in_progress,
+)
 from tools.logger import *
 from tools.contract_validation import (
     StringType,
@@ -108,6 +112,29 @@ def init(client):
                 "correlation_id": correlation_id,
                 "status": "error",
                 "error": "At least one vNIC configuration is required",
+            }
+
+        in_progress, operation_type = is_operation_in_progress(container_name)
+        if in_progress:
+            log_warning(
+                f"Container {container_name} already has a {operation_type} operation in progress"
+            )
+            return {
+                "action": NAME,
+                "correlation_id": correlation_id,
+                "status": "error",
+                "error": f"Container {container_name} already has a {operation_type} operation in progress",
+            }
+
+        if not set_creating(container_name):
+            log_error(
+                f"Failed to set creating state for {container_name} (race condition)"
+            )
+            return {
+                "action": NAME,
+                "correlation_id": correlation_id,
+                "status": "error",
+                "error": f"Failed to start creation for {container_name}",
             }
 
         log_info(f"Creating runtime container: {container_name}")

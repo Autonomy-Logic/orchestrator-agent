@@ -1,4 +1,5 @@
 from use_cases.docker_manager import CLIENT, CLIENTS
+from use_cases.docker_manager.operations_state import get_state
 from tools.logger import *
 from tools.contract_validation import (
     StringType,
@@ -85,6 +86,38 @@ def init(client):
         log_debug(f"Retrieving status for container: {device_id}")
 
         try:
+            op_state = get_state(device_id)
+            if op_state:
+                log_debug(
+                    f"Container {device_id} has tracked operation state: {op_state['status']}"
+                )
+
+                response = {
+                    "action": NAME,
+                    "correlation_id": correlation_id,
+                    "status": op_state["status"],
+                    "device_id": device_id,
+                    "operation": op_state["operation"],
+                    "started_at": op_state["started_at"],
+                    "updated_at": op_state["updated_at"],
+                }
+
+                if op_state["step"]:
+                    response["step"] = op_state["step"]
+
+                if op_state["error"]:
+                    response["error"] = op_state["error"]
+                    response["message"] = f"Operation failed: {op_state['error']}"
+                elif op_state["status"] == "creating":
+                    response["message"] = f"Container {device_id} is being created"
+                elif op_state["status"] == "deleting":
+                    response["message"] = f"Container {device_id} is being deleted"
+
+                log_info(
+                    f"Returning tracked operation status for {device_id}: {op_state['status']}"
+                )
+                return response
+
             try:
                 container = CLIENT.containers.get(device_id)
             except docker.errors.NotFound:
