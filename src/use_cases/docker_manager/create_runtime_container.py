@@ -4,6 +4,7 @@ from .vnic_persistence import save_vnic_configs
 from use_cases.network_monitor.interface_cache import get_interface_network
 import docker
 import time
+import asyncio
 
 
 def detect_interface_network(parent_interface: str):
@@ -161,10 +162,10 @@ def create_internal_network(container_name: str):
             raise
 
 
-async def create_runtime_container(container_name: str, vnic_configs: list):
+def _create_runtime_container_sync(container_name: str, vnic_configs: list):
     """
-    Create a runtime container with MACVLAN networking for physical network bridging
-    and an internal network for orchestrator communication.
+    Synchronous implementation of runtime container creation.
+    This function contains all blocking Docker operations and runs in a background thread.
 
     Args:
         container_name: Name for the runtime container
@@ -332,3 +333,20 @@ async def create_runtime_container(container_name: str, vnic_configs: list):
         import traceback
 
         log_error(f"Traceback: {traceback.format_exc()}")
+
+
+async def create_runtime_container(container_name: str, vnic_configs: list):
+    """
+    Create a runtime container with MACVLAN networking for physical network bridging
+    and an internal network for orchestrator communication.
+
+    This async wrapper offloads all blocking Docker operations to a background thread
+    to prevent blocking the asyncio event loop and causing websocket disconnections.
+
+    Args:
+        container_name: Name for the runtime container
+        vnic_configs: List of virtual NIC configurations
+    """
+    await asyncio.to_thread(
+        _create_runtime_container_sync, container_name, vnic_configs
+    )
