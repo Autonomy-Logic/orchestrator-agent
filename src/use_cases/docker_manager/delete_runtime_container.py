@@ -1,4 +1,5 @@
 from . import CLIENT, CLIENTS, remove_client, get_self_container
+from .operations_state import set_step, set_error, clear_state
 from tools.logger import *
 from .vnic_persistence import delete_vnic_configs
 import docker
@@ -29,10 +30,13 @@ def _delete_runtime_container_sync(container_name: str):
         log_warning(f"Container {container_name} not found in client registry")
 
     try:
+        set_step(container_name, "stopping_container")
         try:
             container = CLIENT.containers.get(container_name)
             log_info(f"Stopping container {container_name}")
             container.stop(timeout=10)
+
+            set_step(container_name, "removing_container")
             log_info(f"Removing container {container_name}")
             container.remove(force=True)
             log_info(f"Container {container_name} removed successfully")
@@ -56,6 +60,7 @@ def _delete_runtime_container_sync(container_name: str):
         except Exception as e:
             log_warning(f"Error deleting vNIC configurations for {container_name}: {e}")
 
+        set_step(container_name, "removing_networks")
         internal_network_name = f"{container_name}_internal"
         try:
             internal_network = CLIENT.networks.get(internal_network_name)
@@ -96,11 +101,14 @@ def _delete_runtime_container_sync(container_name: str):
             f"Runtime container {container_name} and associated resources deleted successfully"
         )
 
+        clear_state(container_name)
+
     except Exception as e:
         log_error(f"Failed to delete runtime container {container_name}. Error: {e}")
         import traceback
 
         log_error(f"Traceback: {traceback.format_exc()}")
+        set_error(container_name, str(e), "delete")
         raise
 
 

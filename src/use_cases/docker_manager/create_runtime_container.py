@@ -1,4 +1,5 @@
 from . import CLIENT, CLIENTS, add_client, get_self_container
+from .operations_state import set_step, set_error, clear_state
 from tools.logger import *
 from .vnic_persistence import save_vnic_configs
 from use_cases.network_monitor.interface_cache import get_interface_network
@@ -184,11 +185,13 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
 
     if container_name in CLIENTS:
         log_error(f"Container name {container_name} is already in use.")
+        set_error(container_name, "Container name is already in use", "create")
         return
 
     try:
         image_name = "ghcr.io/autonomy-logic/openplc-runtime:latest"
 
+        set_step(container_name, "pulling_image")
         log_info(f"Pulling image {image_name}")
         try:
             CLIENT.images.pull(image_name)
@@ -196,6 +199,7 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
         except Exception as e:
             log_warning(f"Failed to pull image, will try to use local image: {e}")
 
+        set_step(container_name, "creating_networks")
         internal_network = create_internal_network(container_name)
 
         macvlan_networks = []
@@ -220,6 +224,7 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
             if vnic_dns and isinstance(vnic_dns, list):
                 dns_servers.extend(vnic_dns)
 
+        set_step(container_name, "creating_container")
         log_info(f"Creating container {container_name}")
 
         create_kwargs = {
@@ -240,6 +245,7 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
         container.start()
         log_info(f"Container {container_name} created and started successfully")
 
+        set_step(container_name, "connecting_networks")
         for macvlan_network, vnic_config in macvlan_networks:
             vnic_name = vnic_config.get("name")
             network_mode = vnic_config.get("network_mode", "dhcp")
@@ -328,11 +334,14 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
             f"Runtime container {container_name} created successfully with {len(vnic_configs)} virtual NICs"
         )
 
+        clear_state(container_name)
+
     except Exception as e:
         log_error(f"Failed to create runtime container {container_name}. Error: {e}")
         import traceback
 
         log_error(f"Traceback: {traceback.format_exc()}")
+        set_error(container_name, str(e), "create")
 
 
 async def create_runtime_container(container_name: str, vnic_configs: list):
