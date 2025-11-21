@@ -61,21 +61,17 @@ For the complete directory structure, see [Project Structure](docs/structure.md)
 
 ## Contributing
 
-This is a private repository for the Autonomy Logic team. For contribution guidelines and development workflow, please refer to the team's internal documentation.
+Contributions are welcome! Please feel free to submit a Pull Request.
 
-**Branch Naming Conventions:**
-- Features: `feature/JIRA-123-description`
-- Bugfixes: `bugfix/JIRA-123-description`
-- Hotfixes: `hotfix/JIRA-123-description`
+**How to Contribute:**
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Make your changes with clear, descriptive commit messages
+4. Push to your branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request targeting the `development` branch
 
-**Pull Request Process:**
-1. Create a branch following the naming convention
-2. Make your changes with clear, descriptive commit messages
-3. Push your branch to the remote repository
-4. Open a Pull Request targeting the `development` branch
-5. Reference your JIRA ticket in the PR description
-6. Request code review from team members
+For detailed development setup instructions, see [Development](docs/development.md).
 
 ## License
 
-Copyright © 2025 Autonomy Logic. All rights reserved.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
