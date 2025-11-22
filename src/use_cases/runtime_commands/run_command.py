@@ -4,7 +4,7 @@ from . import make_request
 def execute(instance, command):
     """
     Execute an HTTP command on a runtime instance.
-    
+
     Args:
         instance: Dictionary containing instance info (ip, name)
         command: Dictionary containing:
@@ -14,7 +14,7 @@ def execute(instance, command):
             - headers (optional): HTTP headers
             - data (optional): Request body data
             - params (optional): Query parameters
-    
+
     Returns:
         Dictionary with status_code, headers, body, ok, and content_type
     """
@@ -23,19 +23,19 @@ def execute(instance, command):
     port = command.get("port", 8443)  # Default to 8443 for openplc-runtime
     headers = command.get("headers", {})
     ip = instance.get("ip")
-    
+
     # Build content dictionary for requests library
     content = {}
-    
+
     # Add headers if provided
     if headers:
         content["headers"] = headers
-    
+
     # Add query parameters if provided
     params = command.get("params")
     if params:
         content["params"] = params
-    
+
     # Add request body data if provided
     data = command.get("data")
     if data:
@@ -44,10 +44,10 @@ def execute(instance, command):
             content["json"] = data
         else:
             content["data"] = data
-    
+
     # Add files if provided (for multipart/form-data uploads)
     files = command.get("files")
     if files:
         content["files"] = files
-    
+
     return make_request(method, ip, port, api, content)

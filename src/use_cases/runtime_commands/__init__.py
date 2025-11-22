@@ -22,9 +22,9 @@ def process_response(response):
     result = {
         "status_code": response.status_code,
         "headers": dict(response.headers),
-        "ok": response.ok
+        "ok": response.ok,
     }
-    
+
     # Try to parse response body as JSON, fall back to text
     try:
         result["body"] = response.json()
@@ -32,37 +32,37 @@ def process_response(response):
     except JSONDecodeError:
         result["body"] = response.text
         result["content_type"] = "text/plain"
-    
+
     return result
 
 
 def make_request(method, ip, port, api, content):
     """
     Make an HTTP request to the specified endpoint.
-    
+
     Args:
         method: HTTP method (GET, POST, PUT, DELETE)
         ip: Target IP address
         port: Target port
         api: API endpoint path
         content: Dictionary containing headers, json, data, etc.
-    
+
     Returns:
         Dictionary with status_code, headers, body, ok, and content_type
     """
     # Construct URL - handle both http and https
     protocol = "https" if port == 8443 else "http"
     # Remove leading slash from api if present to avoid double slashes
-    api_path = api.lstrip('/')
+    api_path = api.lstrip("/")
     url = f"{protocol}://{ip}:{port}/{api_path}"
-    
+
     log_info(f"Making {method} request to {url}")
-    
+
     try:
         # For HTTPS requests, disable SSL verification (self-signed certs)
         if protocol == "https":
             content["verify"] = False
-        
+
         if method == "GET":
             response = get(url, **content)
         elif method == "POST":
@@ -78,9 +78,9 @@ def make_request(method, ip, port, api, content):
                 "headers": {},
                 "body": {"error": f"Unsupported HTTP method: {method}"},
                 "ok": False,
-                "content_type": "application/json"
+                "content_type": "application/json",
             }
-        
+
         return process_response(response)
     except Exception as e:
         log_error(f"Request failed: {e}")
@@ -89,5 +89,5 @@ def make_request(method, ip, port, api, content):
             "headers": {},
             "body": {"error": str(e)},
             "ok": False,
-            "content_type": "application/json"
+            "content_type": "application/json",
         }
