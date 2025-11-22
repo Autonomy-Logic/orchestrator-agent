@@ -1,5 +1,3 @@
-import psutil
-import socket
 from use_cases.network_monitor.interface_cache import INTERFACE_CACHE
 from tools.logger import *
 from tools.contract_validation import (
@@ -53,6 +51,7 @@ def should_include_interface(interface_name: str, include_virtual: bool) -> bool
     if include_virtual:
         return True
     
+    # Filter out virtual/container interfaces
     interface_lower = interface_name.lower()
     for prefix in VIRTUAL_INTERFACE_PREFIXES:
         if interface_lower.startswith(prefix):
@@ -61,44 +60,40 @@ def should_include_interface(interface_name: str, include_virtual: bool) -> bool
     return True
 
 
-def get_interface_info(interface_name: str, addresses: list, detailed: bool) -> dict:
+def build_interface_info_from_cache(interface_name: str, cache_data: dict, detailed: bool) -> dict:
     """
-    Build interface information dictionary from psutil data.
+    Build interface information dictionary from INTERFACE_CACHE data.
+    
+    The INTERFACE_CACHE is populated by the netmon sidecar with HOST network interface information.
     
     Args:
         interface_name: Name of the network interface
-        addresses: List of address objects from psutil.net_if_addrs()
+        cache_data: Data from INTERFACE_CACHE for this interface
         detailed: Whether to include detailed information (subnet, gateway)
     
     Returns:
         Dictionary with interface information
     """
-    ipv4_addresses = []
-    mac_address = None
+    addresses_list = cache_data.get("addresses", [])
     
-    for addr in addresses:
-        if addr.family == socket.AF_INET:
-            if not addr.address.startswith("127."):
-                ipv4_addresses.append(addr.address)
-        elif hasattr(socket, "AF_PACKET") and addr.family == socket.AF_PACKET:
-            mac_address = addr.address
-        elif hasattr(psutil, "AF_LINK") and addr.family == psutil.AF_LINK:
-            mac_address = addr.address
+    ipv4_addresses = []
+    
+    for addr_obj in addresses_list:
+        if isinstance(addr_obj, dict):
+            address = addr_obj.get("address")
+            if address and not address.startswith("127."):
+                ipv4_addresses.append(address)
     
     interface_info = {
         "name": interface_name,
         "ip_address": ipv4_addresses[0] if ipv4_addresses else None,
         "ipv4_addresses": ipv4_addresses,
-        "mac_address": mac_address,
+        "mac_address": None,
     }
     
-    if detailed and interface_name in INTERFACE_CACHE:
-        cached_data = INTERFACE_CACHE[interface_name]
-        interface_info["subnet"] = cached_data.get("subnet")
-        interface_info["gateway"] = cached_data.get("gateway")
-    elif detailed:
-        interface_info["subnet"] = None
-        interface_info["gateway"] = None
+    if detailed:
+        interface_info["subnet"] = cache_data.get("subnet")
+        interface_info["gateway"] = cache_data.get("gateway")
     
     return interface_info
 
@@ -108,14 +103,15 @@ def init(client):
     """
     Handle the 'get_host_interfaces' topic to retrieve network interfaces on the host.
     
-    This topic allows the backend to query available network interfaces so it can
-    properly assemble create_new_runtime requests with the correct parent_interface.
+    This topic queries the INTERFACE_CACHE which is populated by the netmon sidecar
+    with HOST network interface information. This allows the backend to properly
+    assemble create_new_runtime requests with the correct parent_interface.
     
     Returns information about network interfaces including:
     - Interface name
     - IPv4 address(es)
-    - MAC address
-    - Subnet and gateway (when available from network monitor cache)
+    - MAC address (when available)
+    - Subnet and gateway (when detailed=true)
     """
 
     @client.on(NAME)
@@ -158,20 +154,37 @@ def init(client):
         detailed = message.get("detailed", True)
 
         log_debug(
-            f"Retrieving host network interfaces (include_virtual={include_virtual}, detailed={detailed})"
+            f"Retrieving host network interfaces from INTERFACE_CACHE "
+            f"(include_virtual={include_virtual}, detailed={detailed})"
         )
 
         try:
-            net_if_addrs = psutil.net_if_addrs()
+            if not INTERFACE_CACHE:
+                log_warning(
+                    "INTERFACE_CACHE is empty - netmon sidecar may not be running or "
+                    "has not yet discovered network interfaces"
+                )
+                return {
+                    "action": NAME,
+                    "correlation_id": correlation_id,
+                    "status": "error",
+                    "error": "Network interface cache is empty. The netmon sidecar may not be running or has not yet discovered interfaces.",
+                }
+
+            log_debug(f"INTERFACE_CACHE has {len(INTERFACE_CACHE)} interface(s)")
+
             interfaces = []
 
-            for interface_name, addresses in net_if_addrs.items():
+            cache_snapshot = dict(INTERFACE_CACHE)
+            
+            for interface_name, cache_data in cache_snapshot.items():
                 if not should_include_interface(interface_name, include_virtual):
                     log_debug(f"Filtering out virtual interface: {interface_name}")
                     continue
 
-                interface_info = get_interface_info(
-                    interface_name, addresses, detailed
+                # Build interface information from cache data
+                interface_info = build_interface_info_from_cache(
+                    interface_name, cache_data, detailed
                 )
 
                 if interface_info["ipv4_addresses"] or include_virtual:
@@ -179,12 +192,20 @@ def init(client):
                     log_debug(
                         f"Added interface {interface_name}: "
                         f"IP={interface_info['ip_address']}, "
-                        f"MAC={interface_info['mac_address']}"
+                        f"subnet={interface_info.get('subnet')}, "
+                        f"gateway={interface_info.get('gateway')}"
+                    )
+                else:
+                    log_debug(
+                        f"Skipping interface {interface_name} (no IPv4 addresses)"
                     )
 
             interfaces.sort(key=lambda x: x["name"])
 
-            log_info(f"Retrieved {len(interfaces)} network interface(s)")
+            log_info(
+                f"Retrieved {len(interfaces)} network interface(s) from host "
+                f"(total in cache: {len(INTERFACE_CACHE)})"
+            )
 
             return {
                 "action": NAME,
