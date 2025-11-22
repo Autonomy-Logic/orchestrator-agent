@@ -2,8 +2,27 @@ from use_cases.runtime_commands import run_command
 from use_cases.docker_manager import CLIENTS
 from . import topic
 from tools.logger import *
+from tools.contract_validation import (
+    StringType,
+    NumberType,
+    OptionalType,
+    validate_contract,
+)
+from datetime import datetime
 
 NAME = "run_command"
+
+MESSAGE_TYPE = {
+    "correlation_id": NumberType,
+    "device_id": StringType,
+    "method": StringType,
+    "api": StringType,
+    "action": OptionalType(StringType),
+    "requested_at": OptionalType(StringType),
+    "port": OptionalType(NumberType),
+    # headers, data, params, files are optional and not type-validated
+    # They are passed through directly to the HTTP request
+}
 
 
 @topic(NAME)
@@ -14,10 +33,17 @@ def init(client):
     This topic forwards HTTP requests from the api-service to runtime containers
     (e.g., openplc-runtime) and returns the full HTTP response back through the websocket.
 
-    Expected command format:
+    Acts as a transparent bridge - the openplc-editor and openplc-runtime communicate
+    as if directly connected on the same network.
+
+    Expected message format:
     {
+        "correlation_id": 12345,
+        "device_id": "runtime-container-name",
         "method": "GET|POST|PUT|DELETE",
         "api": "/api/endpoint",
+        "action": "run_command" (optional),
+        "requested_at": "2024-01-01T12:00:00" (optional),
         "port": 8443 (optional, defaults to 8443),
         "headers": {} (optional),
         "data": {} (optional),
@@ -27,54 +53,93 @@ def init(client):
 
     Returns:
     {
-        "status_code": 200,
-        "headers": {},
-        "body": {},
-        "ok": true,
-        "content_type": "application/json"
+        "action": "run_command",
+        "correlation_id": 12345,
+        "status": "success|error",
+        "http_response": {
+            "status_code": 200,
+            "headers": {},
+            "body": {},
+            "ok": true,
+            "content_type": "application/json"
+        }
     }
     """
 
     @client.on(NAME)
-    async def callback(instance_id, command):
-        log_info(
-            f"Received run_command for instance {instance_id}: {command.get('method')} {command.get('api')}"
-        )
+    async def callback(message):
+        correlation_id = message.get("correlation_id")
 
-        # Validate instance exists
-        instance = CLIENTS.get(instance_id)
+        # Add default values for optional fields
+        if "action" not in message:
+            message["action"] = NAME
+        if "requested_at" not in message:
+            message["requested_at"] = datetime.now().isoformat()
+
+        # Validate contract
+        try:
+            validate_contract(MESSAGE_TYPE, message)
+        except KeyError as e:
+            log_error(f"Contract validation error - missing field: {e}")
+            return {
+                "action": NAME,
+                "correlation_id": correlation_id,
+                "status": "error",
+                "error": f"Missing required field: {str(e)}",
+            }
+        except TypeError as e:
+            log_error(f"Contract validation error - type mismatch: {e}")
+            return {
+                "action": NAME,
+                "correlation_id": correlation_id,
+                "status": "error",
+                "error": f"Invalid field type: {str(e)}",
+            }
+        except Exception as e:
+            log_error(f"Contract validation error: {e}")
+            return {
+                "action": NAME,
+                "correlation_id": correlation_id,
+                "status": "error",
+                "error": f"Validation error: {str(e)}",
+            }
+
+        device_id = message.get("device_id")
+        method = message.get("method")
+        api = message.get("api")
+
+        log_info(f"Received run_command for device {device_id}: {method} {api}")
+
+        # Validate device exists
+        instance = CLIENTS.get(device_id)
         if not instance:
-            log_error(f"Instance not found: {instance_id}")
+            log_error(f"Device not found: {device_id}")
             return {
-                "status_code": 404,
-                "headers": {},
-                "body": {"error": f"Instance not found: {instance_id}"},
-                "ok": False,
-                "content_type": "application/json",
+                "action": NAME,
+                "correlation_id": correlation_id,
+                "status": "error",
+                "error": f"Device not found: {device_id}",
             }
 
-        # Validate required command fields
-        if not command.get("method"):
-            log_error("Missing required field: method")
-            return {
-                "status_code": 400,
-                "headers": {},
-                "body": {"error": "Missing required field: method"},
-                "ok": False,
-                "content_type": "application/json",
-            }
+        # Build command object for run_command.execute
+        command = {
+            "method": method,
+            "api": api,
+            "port": message.get("port", 8443),
+            "headers": message.get("headers", {}),
+            "data": message.get("data"),
+            "params": message.get("params"),
+            "files": message.get("files"),
+        }
 
-        if not command.get("api"):
-            log_error("Missing required field: api")
-            return {
-                "status_code": 400,
-                "headers": {},
-                "body": {"error": "Missing required field: api"},
-                "ok": False,
-                "content_type": "application/json",
-            }
+        # Execute the HTTP request
+        http_response = run_command.execute(instance, command)
+        log_info(f"Command completed with status {http_response.get('status_code')}")
 
-        # Execute the command and return the response
-        response = run_command.execute(instance, command)
-        log_info(f"Command completed with status {response.get('status_code')}")
-        return response
+        # Return response with correlation_id
+        return {
+            "action": NAME,
+            "correlation_id": correlation_id,
+            "status": "success" if http_response.get("ok") else "error",
+            "http_response": http_response,
+        }
