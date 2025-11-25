@@ -3,7 +3,7 @@ import os
 from aiohttp import ClientSession, TCPConnector
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
-from tools.logger import log_error
+from .logger import log_error
 
 client_cert = os.path.expanduser("~/.mtls/client.crt")
 client_key = os.path.expanduser("~/.mtls/client.key")

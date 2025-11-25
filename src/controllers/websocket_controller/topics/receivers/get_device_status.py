@@ -8,6 +8,7 @@ from tools.contract_validation import (
 )
 from . import topic, validate_message
 import docker
+from datetime import datetime
 
 NAME = "get_device_status"
 
