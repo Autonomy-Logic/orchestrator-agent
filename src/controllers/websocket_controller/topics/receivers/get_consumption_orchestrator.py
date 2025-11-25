@@ -65,9 +65,11 @@ def init(client):
         correlation_id = message.get("correlation_id")
 
         is_valid, error_response = validate_contract_with_error_response(
-            MESSAGE_TYPE, message, NAME, correlation_id
+            MESSAGE_TYPE, message
         )
         if not is_valid:
+            error_response["action"] = NAME
+            error_response["correlation_id"] = correlation_id
             return error_response
 
         log_debug(f"Received get_consumption_orchestrator request: {message}")

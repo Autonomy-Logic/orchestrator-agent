@@ -106,20 +106,18 @@ class ContractValidationError(Exception):
         super().__init__(message)
 
 
-def validate_contract_with_error_response(contract, data, action: str, correlation_id):
+def validate_contract_with_error_response(contract, data):
     """
     Validate a contract and return an error response if validation fails.
 
     Args:
         contract: The contract schema to validate against
         data: The data to validate
-        action: The action name for the error response
-        correlation_id: The correlation ID for the error response
 
     Returns:
         tuple: (is_valid: bool, error_response: dict or None)
             - If valid: (True, None)
-            - If invalid: (False, error_response_dict)
+            - If invalid: (False, error_response_dict with status and error fields)
     """
     from tools.logger import log_error
 
@@ -131,8 +129,6 @@ def validate_contract_with_error_response(contract, data, action: str, correlati
         return (
             False,
             {
-                "action": action,
-                "correlation_id": correlation_id,
                 "status": "error",
                 "error": f"Missing required field: {str(e)}",
             },
@@ -142,8 +138,6 @@ def validate_contract_with_error_response(contract, data, action: str, correlati
         return (
             False,
             {
-                "action": action,
-                "correlation_id": correlation_id,
                 "status": "error",
                 "error": f"Invalid field type: {str(e)}",
             },
@@ -153,8 +147,6 @@ def validate_contract_with_error_response(contract, data, action: str, correlati
         return (
             False,
             {
-                "action": action,
-                "correlation_id": correlation_id,
                 "status": "error",
                 "error": f"Validation error: {str(e)}",
             },
