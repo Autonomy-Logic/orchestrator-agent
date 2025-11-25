@@ -70,7 +70,7 @@ def init(client):
         if not is_valid:
             return error_response
 
-        log_info(f"Received get_consumption_orchestrator request: {message}")
+        log_debug(f"Received get_consumption_orchestrator request: {message}")
 
         corr_id = message.get("correlation_id")
         cpu_period = message.get("cpuPeriod", "1h")
@@ -98,7 +98,7 @@ def init(client):
             "memory_usage": memory_usage_data,
         }
 
-        log_info(
+        log_debug(
             f"Returning get_consumption_orchestrator response with {len(cpu_usage_data)} CPU samples and {len(memory_usage_data)} memory samples"
         )
         return response
