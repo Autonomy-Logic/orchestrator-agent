@@ -1,5 +1,9 @@
 from tools.logger import *
-from tools.contract_validation import *
+from tools.contract_validation import (
+    BASE_MESSAGE,
+    StringType,
+    validate_contract_with_error_response,
+)
 from tools.system_info import get_cached_system_info
 from tools.usage_buffer import get_usage_buffer
 from . import topic
@@ -58,11 +62,13 @@ def init(client):
 
     @client.on(NAME)
     async def callback(message):
-        try:
-            validate_contract(MESSAGE_TYPE, message)
-        except Exception as e:
-            log_error(f"Contract validation error: {e}")
-            return
+        correlation_id = message.get("correlation_id")
+
+        is_valid, error_response = validate_contract_with_error_response(
+            MESSAGE_TYPE, message, NAME, correlation_id
+        )
+        if not is_valid:
+            return error_response
 
         log_info(f"Received get_consumption_orchestrator request: {message}")
 

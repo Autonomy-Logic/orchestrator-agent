@@ -5,7 +5,7 @@ from tools.contract_validation import (
     BooleanType,
     OptionalType,
     StringType,
-    validate_contract,
+    validate_contract_with_error_response,
 )
 from . import topic
 from datetime import datetime
@@ -40,61 +40,63 @@ VIRTUAL_INTERFACE_PREFIXES = [
 def should_include_interface(interface_name: str, include_virtual: bool) -> bool:
     """
     Determine if an interface should be included based on filtering rules.
-    
+
     Args:
         interface_name: Name of the network interface
         include_virtual: Whether to include virtual/container interfaces
-    
+
     Returns:
         True if the interface should be included, False otherwise
     """
     if include_virtual:
         return True
-    
+
     # Filter out virtual/container interfaces
     interface_lower = interface_name.lower()
     for prefix in VIRTUAL_INTERFACE_PREFIXES:
         if interface_lower.startswith(prefix):
             return False
-    
+
     return True
 
 
-def build_interface_info_from_cache(interface_name: str, cache_data: dict, detailed: bool) -> dict:
+def build_interface_info_from_cache(
+    interface_name: str, cache_data: dict, detailed: bool
+) -> dict:
     """
     Build interface information dictionary from INTERFACE_CACHE data.
-    
+
     The INTERFACE_CACHE is populated by the netmon sidecar with HOST network interface information.
-    
+
     Args:
         interface_name: Name of the network interface
         cache_data: Data from INTERFACE_CACHE for this interface
         detailed: Whether to include detailed information (subnet, gateway)
-    
+
     Returns:
         Dictionary with interface information
     """
     addresses_list = cache_data.get("addresses", [])
-    
+
     ipv4_addresses = []
-    
+
     for addr_obj in addresses_list:
         if isinstance(addr_obj, dict):
             address = addr_obj.get("address")
             if address and not address.startswith("127."):
                 ipv4_addresses.append(address)
-    
+
     interface_info = {
         "name": interface_name,
         "ip_address": ipv4_addresses[0] if ipv4_addresses else None,
         "ipv4_addresses": ipv4_addresses,
         "mac_address": None,
     }
-    
+
     if detailed:
         interface_info["subnet"] = cache_data.get("subnet")
         interface_info["gateway"] = cache_data.get("gateway")
-    
+
     return interface_info
 
 
@@ -102,11 +104,11 @@ def build_interface_info_from_cache(interface_name: str, cache_data: dict, detai
 def init(client):
     """
     Handle the 'get_host_interfaces' topic to retrieve network interfaces on the host.
-    
+
     This topic queries the INTERFACE_CACHE which is populated by the netmon sidecar
     with HOST network interface information. This allows the backend to properly
     assemble create_new_runtime requests with the correct parent_interface.
-    
+
     Returns information about network interfaces including:
     - Interface name
     - IPv4 address(es)
@@ -123,32 +125,11 @@ def init(client):
         if "requested_at" not in message:
             message["requested_at"] = datetime.now().isoformat()
 
-        try:
-            validate_contract(MESSAGE_TYPE, message)
-        except KeyError as e:
-            log_error(f"Contract validation error - missing field: {e}")
-            return {
-                "action": NAME,
-                "correlation_id": correlation_id,
-                "status": "error",
-                "error": f"Missing required field: {str(e)}",
-            }
-        except TypeError as e:
-            log_error(f"Contract validation error - type mismatch: {e}")
-            return {
-                "action": NAME,
-                "correlation_id": correlation_id,
-                "status": "error",
-                "error": f"Invalid field type: {str(e)}",
-            }
-        except Exception as e:
-            log_error(f"Contract validation error: {e}")
-            return {
-                "action": NAME,
-                "correlation_id": correlation_id,
-                "status": "error",
-                "error": f"Validation error: {str(e)}",
-            }
+        is_valid, error_response = validate_contract_with_error_response(
+            MESSAGE_TYPE, message, NAME, correlation_id
+        )
+        if not is_valid:
+            return error_response
 
         include_virtual = message.get("include_virtual", False)
         detailed = message.get("detailed", True)
@@ -176,7 +157,7 @@ def init(client):
             interfaces = []
 
             cache_snapshot = dict(INTERFACE_CACHE)
-            
+
             for interface_name, cache_data in cache_snapshot.items():
                 if not should_include_interface(interface_name, include_virtual):
                     log_debug(f"Filtering out virtual interface: {interface_name}")

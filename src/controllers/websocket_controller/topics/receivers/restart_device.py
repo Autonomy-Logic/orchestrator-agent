@@ -1,5 +1,8 @@
 from tools.logger import *
-from tools.contract_validation import *
+from tools.contract_validation import (
+    BASE_DEVICE,
+    validate_contract_with_error_response,
+)
 from . import topic
 
 NAME = "restart_device"
@@ -17,11 +20,13 @@ def init(client):
 
     @client.on(NAME)
     async def callback(message):
-        try:
-            validate_contract(MESSAGE_TYPE, message)
-        except Exception as e:
-            log_error(f"Contract validation error: {e}")
-            return
+        correlation_id = message.get("correlation_id")
+
+        is_valid, error_response = validate_contract_with_error_response(
+            MESSAGE_TYPE, message, NAME, correlation_id
+        )
+        if not is_valid:
+            return error_response
 
         log_info(f"Responding: {message}")
         corr_id = message.get("correlation_id")

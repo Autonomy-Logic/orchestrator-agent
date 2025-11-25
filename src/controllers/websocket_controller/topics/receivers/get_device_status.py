@@ -5,7 +5,7 @@ from tools.contract_validation import (
     StringType,
     NumberType,
     OptionalType,
-    validate_contract,
+    validate_contract_with_error_response,
 )
 from . import topic
 from datetime import datetime
@@ -45,32 +45,11 @@ def init(client):
         if "requested_at" not in message:
             message["requested_at"] = datetime.now().isoformat()
 
-        try:
-            validate_contract(MESSAGE_TYPE, message)
-        except KeyError as e:
-            log_error(f"Contract validation error - missing field: {e}")
-            return {
-                "action": NAME,
-                "correlation_id": correlation_id,
-                "status": "error",
-                "error": f"Missing required field: {str(e)}",
-            }
-        except TypeError as e:
-            log_error(f"Contract validation error - type mismatch: {e}")
-            return {
-                "action": NAME,
-                "correlation_id": correlation_id,
-                "status": "error",
-                "error": f"Invalid field type: {str(e)}",
-            }
-        except Exception as e:
-            log_error(f"Contract validation error: {e}")
-            return {
-                "action": NAME,
-                "correlation_id": correlation_id,
-                "status": "error",
-                "error": f"Validation error: {str(e)}",
-            }
+        is_valid, error_response = validate_contract_with_error_response(
+            MESSAGE_TYPE, message, NAME, correlation_id
+        )
+        if not is_valid:
+            return error_response
 
         device_id = message.get("device_id")
 

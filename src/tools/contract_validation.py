@@ -34,8 +34,8 @@ class DateType(BaseType):
         try:
             if not isinstance(value, str):
                 raise TypeError()
-            if value.endswith('Z'):
-                value = value.replace('Z', '+00:00')
+            if value.endswith("Z"):
+                value = value.replace("Z", "+00:00")
             datetime.fromisoformat(value)
         except (TypeError, ValueError):
             raise TypeError("Value must be a valid ISO datetime string.")
@@ -95,3 +95,67 @@ def validate_contract(contract, data):
             validate_contract(value, data[key])
         else:
             value.validate(data[key])
+
+
+class ContractValidationError(Exception):
+    """Exception raised when contract validation fails."""
+
+    def __init__(self, error_type: str, message: str):
+        self.error_type = error_type
+        self.message = message
+        super().__init__(message)
+
+
+def validate_contract_with_error_response(contract, data, action: str, correlation_id):
+    """
+    Validate a contract and return an error response if validation fails.
+
+    Args:
+        contract: The contract schema to validate against
+        data: The data to validate
+        action: The action name for the error response
+        correlation_id: The correlation ID for the error response
+
+    Returns:
+        tuple: (is_valid: bool, error_response: dict or None)
+            - If valid: (True, None)
+            - If invalid: (False, error_response_dict)
+    """
+    from tools.logger import log_error
+
+    try:
+        validate_contract(contract, data)
+        return (True, None)
+    except KeyError as e:
+        log_error(f"Contract validation error - missing field: {e}")
+        return (
+            False,
+            {
+                "action": action,
+                "correlation_id": correlation_id,
+                "status": "error",
+                "error": f"Missing required field: {str(e)}",
+            },
+        )
+    except TypeError as e:
+        log_error(f"Contract validation error - type mismatch: {e}")
+        return (
+            False,
+            {
+                "action": action,
+                "correlation_id": correlation_id,
+                "status": "error",
+                "error": f"Invalid field type: {str(e)}",
+            },
+        )
+    except Exception as e:
+        log_error(f"Contract validation error: {e}")
+        return (
+            False,
+            {
+                "action": action,
+                "correlation_id": correlation_id,
+                "status": "error",
+                "error": f"Validation error: {str(e)}",
+            },
+        )
