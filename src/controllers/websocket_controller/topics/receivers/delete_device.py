@@ -1,5 +1,5 @@
 from use_cases.docker_manager.delete_runtime_container import delete_runtime_container
-from use_cases.docker_manager.operations_state import (
+from tools.operations_state import (
     set_deleting,
     is_operation_in_progress,
 )
