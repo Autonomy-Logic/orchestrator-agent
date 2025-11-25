@@ -8,11 +8,9 @@ from tools.contract_validation import (
     StringType,
     NumberType,
     OptionalType,
-    validate_contract_with_error_response,
 )
-from . import topic
+from . import topic, validate_message
 import asyncio
-from datetime import datetime
 
 NAME = "delete_device"
 
@@ -34,22 +32,9 @@ def init(client):
     """
 
     @client.on(NAME)
+    @validate_message(MESSAGE_TYPE, NAME, add_defaults=True)
     async def callback(message):
         correlation_id = message.get("correlation_id")
-
-        if "action" not in message:
-            message["action"] = NAME
-        if "requested_at" not in message:
-            message["requested_at"] = datetime.now().isoformat()
-
-        is_valid, error_response = validate_contract_with_error_response(
-            MESSAGE_TYPE, message
-        )
-        if not is_valid:
-            error_response["action"] = NAME
-            error_response["correlation_id"] = correlation_id
-            return error_response
-
         device_id = message.get("device_id")
 
         if not device_id or not isinstance(device_id, str) or not device_id.strip():

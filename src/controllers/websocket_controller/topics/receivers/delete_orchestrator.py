@@ -1,9 +1,6 @@
 from tools.logger import *
-from tools.contract_validation import (
-    BASE_MESSAGE,
-    validate_contract_with_error_response,
-)
-from . import topic
+from tools.contract_validation import BASE_MESSAGE
+from . import topic, validate_message
 from use_cases.docker_manager.selfdestruct import self_destruct
 
 NAME = "delete_orchestrator"
@@ -18,17 +15,8 @@ def init(client):
     """
 
     @client.on(NAME)
+    @validate_message(MESSAGE_TYPE, NAME)
     async def callback(message):
-        correlation_id = message.get("correlation_id")
-
-        is_valid, error_response = validate_contract_with_error_response(
-            MESSAGE_TYPE, message
-        )
-        if not is_valid:
-            error_response["action"] = NAME
-            error_response["correlation_id"] = correlation_id
-            return error_response
-
         log_warning("Deleting orchestrator...")
 
         response = {

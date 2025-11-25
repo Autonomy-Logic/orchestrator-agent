@@ -9,11 +9,9 @@ from tools.contract_validation import (
     NumberType,
     ListType,
     OptionalType,
-    validate_contract_with_error_response,
 )
-from . import topic
+from . import topic, validate_message
 import asyncio
-from datetime import datetime
 
 NAME = "create_new_runtime"
 
@@ -50,22 +48,9 @@ def init(client):
     """
 
     @client.on(NAME)
+    @validate_message(MESSAGE_TYPE, NAME, add_defaults=True)
     async def callback(message):
         correlation_id = message.get("correlation_id")
-
-        if "action" not in message:
-            message["action"] = NAME
-        if "requested_at" not in message:
-            message["requested_at"] = datetime.now().isoformat()
-
-        is_valid, error_response = validate_contract_with_error_response(
-            MESSAGE_TYPE, message
-        )
-        if not is_valid:
-            error_response["action"] = NAME
-            error_response["correlation_id"] = correlation_id
-            return error_response
-
         container_name = message.get("container_name")
         vnic_configs = message.get("vnic_configs", [])
 
