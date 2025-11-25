@@ -1,6 +1,7 @@
 from .logger import log_error
 import time
 
+
 def parse_period(period_str: str) -> tuple:
     """
     Parse a period string and return start and end timestamps.
