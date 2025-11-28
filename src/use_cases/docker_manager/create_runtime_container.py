@@ -249,18 +249,38 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
         for macvlan_network, vnic_config in macvlan_networks:
             vnic_name = vnic_config.get("name")
             network_mode = vnic_config.get("network_mode", "dhcp")
+            network_mode_normalized = (
+                network_mode.lower().strip() if network_mode else "dhcp"
+            )
+
+            log_debug(
+                f"Processing vNIC {vnic_name}: network_mode='{network_mode}' "
+                f"(normalized: '{network_mode_normalized}')"
+            )
 
             connect_kwargs = {}
 
-            if network_mode == "manual":
+            if network_mode_normalized == "manual":
                 ip_address = vnic_config.get("ip_address")
+                log_debug(
+                    f"Manual mode for vNIC {vnic_name}: ip_address='{ip_address}'"
+                )
                 if ip_address:
                     # Docker's network.connect() expects ipv4_address without CIDR prefix
                     # (e.g., '192.168.1.10' not '192.168.1.10/24'). Normalize defensively
                     # in case the user mistakenly provides a CIDR notation.
-                    ip_address = ip_address.split("/")[0]
+                    ip_address = ip_address.strip().split("/")[0]
                     connect_kwargs["ipv4_address"] = ip_address
-                    log_debug(f"Configured manual IP {ip_address} for vNIC {vnic_name}")
+                    log_info(f"Configured manual IP {ip_address} for vNIC {vnic_name}")
+                else:
+                    log_warning(
+                        f"network_mode is 'manual' but no ip_address provided for vNIC {vnic_name}. "
+                        f"Docker will assign a random IP from the IPAM pool."
+                    )
+            else:
+                log_debug(
+                    f"DHCP mode for vNIC {vnic_name}: Docker will assign IP from IPAM pool"
+                )
 
             mac_address = vnic_config.get("mac_address")
             if mac_address:

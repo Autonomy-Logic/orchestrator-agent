@@ -261,23 +261,22 @@ class NetworkEventListener:
                             )
 
                             network_mode = vnic_config.get("network_mode", "dhcp")
-                            endpoint_config = {}
+                            connect_kwargs = {}
 
-                            if network_mode == "manual":
+                            if network_mode.lower().strip() == "manual":
                                 ip_address = vnic_config.get("ip_address")
-                                subnet = vnic_config.get("subnet")
-
-                                if ip_address and subnet:
-                                    ipv4_address = f"{ip_address}/{subnet.split('/')[-1] if '/' in subnet else '24'}"
-                                    endpoint_config = {
-                                        "IPAMConfig": {"IPv4Address": ipv4_address}
-                                    }
+                                if ip_address:
+                                    ip_address = ip_address.strip().split("/")[0]
+                                    connect_kwargs["ipv4_address"] = ip_address
+                                    log_debug(
+                                        f"Reconnecting with manual IP {ip_address} for container {container_name}"
+                                    )
 
                             mac_address = vnic_config.get("mac_address")
                             if mac_address:
-                                endpoint_config["MacAddress"] = mac_address
+                                connect_kwargs["mac_address"] = mac_address
 
-                            new_network.connect(container, **endpoint_config)
+                            new_network.connect(container, **connect_kwargs)
                             log_info(
                                 f"Reconnected {container_name} to new network {new_network.name}"
                             )
