@@ -1,14 +1,12 @@
 from use_cases.runtime_commands import run_command
 from use_cases.docker_manager import CLIENTS
-from . import topic
+from . import topic, validate_message
 from tools.logger import *
 from tools.contract_validation import (
     StringType,
     NumberType,
     OptionalType,
-    validate_contract,
 )
-from datetime import datetime
 
 NAME = "run_command"
 
@@ -67,43 +65,9 @@ def init(client):
     """
 
     @client.on(NAME)
+    @validate_message(MESSAGE_TYPE, NAME, add_defaults=True)
     async def callback(message):
         correlation_id = message.get("correlation_id")
-
-        # Add default values for optional fields
-        if "action" not in message:
-            message["action"] = NAME
-        if "requested_at" not in message:
-            message["requested_at"] = datetime.now().isoformat()
-
-        # Validate contract
-        try:
-            validate_contract(MESSAGE_TYPE, message)
-        except KeyError as e:
-            log_error(f"Contract validation error - missing field: {e}")
-            return {
-                "action": NAME,
-                "correlation_id": correlation_id,
-                "status": "error",
-                "error": f"Missing required field: {str(e)}",
-            }
-        except TypeError as e:
-            log_error(f"Contract validation error - type mismatch: {e}")
-            return {
-                "action": NAME,
-                "correlation_id": correlation_id,
-                "status": "error",
-                "error": f"Invalid field type: {str(e)}",
-            }
-        except Exception as e:
-            log_error(f"Contract validation error: {e}")
-            return {
-                "action": NAME,
-                "correlation_id": correlation_id,
-                "status": "error",
-                "error": f"Validation error: {str(e)}",
-            }
-
         device_id = message.get("device_id")
         method = message.get("method")
         api = message.get("api")
