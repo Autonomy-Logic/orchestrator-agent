@@ -20,8 +20,8 @@ curl https://getedge.me | bash
 
 - **Secure Cloud Control**: Maintains persistent WebSocket connection to Autonomy Edge Cloud using mTLS
 - **Container Orchestration**: Creates, configures, and manages OpenPLC v4 runtime containers (vPLCs)
-- **MACVLAN Networking**: Runtime containers appear as native devices on the physical LAN
-- **Dynamic Network Adaptation**: Automatically reconnects containers when the host moves between networks
+- **MACVLAN Networking**: Runtime containers appear as native devices on the physical LAN with configurable IP addressing (static manual IP or DHCP)
+- **Dynamic Network Adaptation**: Automatically reconnects containers when the host moves between networks, preserving IP configuration settings
 - **Network Monitor Sidecar**: Event-driven monitoring of physical network interfaces
 - **System Monitoring**: Periodic heartbeats with CPU, memory, disk, and uptime metrics
 - **Contract Validation**: Type-safe message validation for all cloud commands
