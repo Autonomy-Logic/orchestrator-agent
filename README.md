@@ -34,7 +34,7 @@ orchestrator-agent/
 │   ├── index.py            # Entry point
 │   ├── controllers/        # WebSocket and protocol handlers
 │   ├── use_cases/          # Business logic (Docker, network, commands)
-│   └── tools/              # Utilities (logging, SSL, metrics, validation)
+│   └── tools/              # Utilities (logging, SSL, metrics, validation, state tracking)
 ├── install/                # Installation script and network monitor
 ├── docs/                   # Detailed documentation
 ├── .devcontainer/          # VS Code dev container
@@ -42,6 +42,14 @@ orchestrator-agent/
 ├── Dockerfile              # Production container image
 └── requirements.txt        # Python dependencies
 ```
+
+### Architecture Layers
+
+The codebase follows a layered architecture separating concerns:
+
+- **controllers/**: Transport layer handling WebSocket topics and message routing. Topic handlers use a `@validate_message` decorator for contract validation and delegate business logic to use cases.
+- **use_cases/**: Business logic layer containing domain operations like container management (`get_device_status`, `get_host_interfaces`) and Docker orchestration.
+- **tools/**: Infrastructure utilities including logging, SSL, contract validation, operations state tracking, interface caching, vNIC persistence, and network event listening.
 
 For the complete directory structure, see [Project Structure](docs/structure.md).
 

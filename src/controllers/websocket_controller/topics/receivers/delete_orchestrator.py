@@ -1,6 +1,6 @@
 from tools.logger import *
-from tools.contract_validation import *
-from . import topic
+from tools.contract_validation import BASE_MESSAGE
+from . import topic, validate_message
 from use_cases.docker_manager.selfdestruct import self_destruct
 
 NAME = "delete_orchestrator"
@@ -15,14 +15,8 @@ def init(client):
     """
 
     @client.on(NAME)
+    @validate_message(MESSAGE_TYPE, NAME)
     async def callback(message):
-
-        try:
-            validate_contract(MESSAGE_TYPE, message)
-        except Exception as e:
-            log_error(f"Contract validation error: {e}")
-            return
-
         log_warning("Deleting orchestrator...")
 
         response = {

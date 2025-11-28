@@ -1,5 +1,5 @@
 from use_cases.docker_manager.create_runtime_container import create_runtime_container
-from use_cases.docker_manager.operations_state import (
+from tools.operations_state import (
     set_creating,
     is_operation_in_progress,
 )
@@ -9,11 +9,9 @@ from tools.contract_validation import (
     NumberType,
     ListType,
     OptionalType,
-    validate_contract,
 )
-from . import topic
+from . import topic, validate_message
 import asyncio
-from datetime import datetime
 
 NAME = "create_new_runtime"
 
@@ -50,41 +48,9 @@ def init(client):
     """
 
     @client.on(NAME)
+    @validate_message(MESSAGE_TYPE, NAME, add_defaults=True)
     async def callback(message):
         correlation_id = message.get("correlation_id")
-
-        if "action" not in message:
-            message["action"] = NAME
-        if "requested_at" not in message:
-            message["requested_at"] = datetime.now().isoformat()
-
-        try:
-            validate_contract(MESSAGE_TYPE, message)
-        except KeyError as e:
-            log_error(f"Contract validation error - missing field: {e}")
-            return {
-                "action": NAME,
-                "correlation_id": correlation_id,
-                "status": "error",
-                "error": f"Missing required field: {str(e)}",
-            }
-        except TypeError as e:
-            log_error(f"Contract validation error - type mismatch: {e}")
-            return {
-                "action": NAME,
-                "correlation_id": correlation_id,
-                "status": "error",
-                "error": f"Invalid field type: {str(e)}",
-            }
-        except Exception as e:
-            log_error(f"Contract validation error: {e}")
-            return {
-                "action": NAME,
-                "correlation_id": correlation_id,
-                "status": "error",
-                "error": f"Validation error: {str(e)}",
-            }
-
         container_name = message.get("container_name")
         vnic_configs = message.get("vnic_configs", [])
 
