@@ -1,8 +1,8 @@
 from . import CLIENT, CLIENTS, add_client, get_self_container
-from .operations_state import set_step, set_error, clear_state
+from tools.operations_state import set_step, set_error, clear_state
 from tools.logger import *
-from .vnic_persistence import save_vnic_configs
-from use_cases.network_monitor.interface_cache import get_interface_network
+from tools.vnic_persistence import save_vnic_configs
+from tools.interface_cache import get_interface_network
 import docker
 import time
 import asyncio

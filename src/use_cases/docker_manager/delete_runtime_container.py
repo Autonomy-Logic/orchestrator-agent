@@ -1,7 +1,7 @@
 from . import CLIENT, CLIENTS, remove_client, get_self_container
-from .operations_state import set_step, set_error, clear_state
+from tools.operations_state import set_step, set_error, clear_state
 from tools.logger import *
-from .vnic_persistence import delete_vnic_configs
+from tools.vnic_persistence import delete_vnic_configs
 import docker
 import asyncio
 
