@@ -6,7 +6,7 @@ from tools.logger import *
 from tools.vnic_persistence import load_vnic_configs
 from tools.interface_cache import INTERFACE_CACHE
 from tools.network_tools import ContainerNetworkManager
-from use_cases.docker_manager import CLIENT
+from tools.docker_tools import CLIENT
 
 network_manager = ContainerNetworkManager(CLIENT)
 

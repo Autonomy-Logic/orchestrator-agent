@@ -1,8 +1,9 @@
-from . import CLIENT, CLIENTS, add_client, get_self_container
+from . import CLIENTS, add_client, get_self_container
 from tools.operations_state import set_step, set_error, clear_state
 from tools.logger import *
 from tools.vnic_persistence import save_vnic_configs
 from tools.network_tools import ContainerNetworkManager
+from tools.docker_tools import CLIENT
 import docker
 import asyncio
 
