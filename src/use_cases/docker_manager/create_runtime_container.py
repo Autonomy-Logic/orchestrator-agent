@@ -44,40 +44,27 @@ def detect_interface_network(parent_interface: str):
     return None, None
 
 
-def get_or_create_macvlan_network(
-    parent_interface: str, parent_subnet: str = None, parent_gateway: str = None
-):
+def get_or_create_macvlan_network(parent_interface: str):
     """
     Get existing MACVLAN network for a parent interface or create a new one.
-    If parent_subnet and parent_gateway are not provided, attempts to auto-detect them.
+    Automatically detects the gateway and subnet from the interface.
     Returns the network object.
     """
-    network_name = f"macvlan_{parent_interface}"
+    parent_subnet, parent_gateway = detect_interface_network(parent_interface)
 
-    if parent_subnet:
-        network_name = f"macvlan_{parent_interface}_{parent_subnet.replace('/', '_')}"
+    if not parent_subnet:
+        raise ValueError(
+            f"Could not detect subnet for interface {parent_interface}. "
+            f"The interface may not exist or netmon may not be running."
+        )
+
+    network_name = f"macvlan_{parent_interface}_{parent_subnet.replace('/', '_')}"
 
     try:
         network = CLIENT.networks.get(network_name)
         log_debug(f"MACVLAN network {network_name} already exists, reusing it")
         return network
     except docker.errors.NotFound:
-        if not parent_subnet:
-            log_info(
-                f"No subnet provided for {parent_interface}, attempting auto-detection"
-            )
-            parent_subnet, detected_gateway = detect_interface_network(parent_interface)
-            if not parent_subnet:
-                raise ValueError(
-                    f"Could not detect subnet for interface {parent_interface}. "
-                    f"Please provide parent_subnet and parent_gateway in the configuration."
-                )
-            if not parent_gateway:
-                parent_gateway = detected_gateway
-
-            network_name = (
-                f"macvlan_{parent_interface}_{parent_subnet.replace('/', '_')}"
-            )
 
         log_info(
             f"Creating new MACVLAN network {network_name} for parent interface {parent_interface} "
@@ -208,16 +195,12 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
         for vnic_config in vnic_configs:
             vnic_name = vnic_config.get("name")
             parent_interface = vnic_config.get("parent_interface")
-            parent_subnet = vnic_config.get("subnet")
-            parent_gateway = vnic_config.get("gateway")
 
             log_debug(
                 f"Processing vNIC {vnic_name} for parent interface {parent_interface}"
             )
 
-            macvlan_network = get_or_create_macvlan_network(
-                parent_interface, parent_subnet, parent_gateway
-            )
+            macvlan_network = get_or_create_macvlan_network(parent_interface)
             macvlan_networks.append((macvlan_network, vnic_config))
 
             vnic_dns = vnic_config.get("dns")

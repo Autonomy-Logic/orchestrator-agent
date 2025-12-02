@@ -256,9 +256,7 @@ class NetworkEventListener:
                                     f"Could not disconnect from old network {old_network_name}: {e}"
                                 )
 
-                            new_network = get_or_create_macvlan_network(
-                                interface, new_subnet, new_gateway
-                            )
+                            new_network = get_or_create_macvlan_network(interface)
 
                             network_mode = vnic_config.get("network_mode", "dhcp")
                             endpoint_config = {}
