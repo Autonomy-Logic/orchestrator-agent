@@ -44,19 +44,38 @@ def detect_interface_network(parent_interface: str):
     return None, None
 
 
-def get_or_create_macvlan_network(parent_interface: str):
+def netmask_to_cidr(netmask: str) -> int:
+    """
+    Convert a netmask (e.g., 255.255.255.0) to CIDR prefix length (e.g., 24).
+    """
+    return sum(bin(int(octet)).count("1") for octet in netmask.split("."))
+
+
+def get_or_create_macvlan_network(
+    parent_interface: str, parent_subnet: str = None, parent_gateway: str = None
+):
     """
     Get existing MACVLAN network for a parent interface or create a new one.
-    Automatically detects the gateway and subnet from the interface.
+    If parent_subnet and parent_gateway are not provided, attempts to auto-detect them.
+    If parent_subnet is provided in netmask format (e.g., 255.255.255.0), it will be
+    converted to CIDR notation using the parent_gateway as the network base.
     Returns the network object.
     """
-    parent_subnet, parent_gateway = detect_interface_network(parent_interface)
+    if parent_subnet and parent_gateway:
+        if parent_subnet.startswith("255.") or parent_subnet.count(".") == 3:
+            cidr_prefix = netmask_to_cidr(parent_subnet)
+            gateway_parts = parent_gateway.split(".")
+            network_base = ".".join(gateway_parts[:3]) + ".0"
+            parent_subnet = f"{network_base}/{cidr_prefix}"
+            log_debug(f"Converted netmask to CIDR notation: {parent_subnet}")
+    else:
+        parent_subnet, parent_gateway = detect_interface_network(parent_interface)
 
-    if not parent_subnet:
-        raise ValueError(
-            f"Could not detect subnet for interface {parent_interface}. "
-            f"The interface may not exist or netmon may not be running."
-        )
+        if not parent_subnet:
+            raise ValueError(
+                f"Could not detect subnet for interface {parent_interface}. "
+                f"The interface may not exist or netmon may not be running."
+            )
 
     network_name = f"macvlan_{parent_interface}_{parent_subnet.replace('/', '_')}"
 
@@ -195,12 +214,16 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
         for vnic_config in vnic_configs:
             vnic_name = vnic_config.get("name")
             parent_interface = vnic_config.get("parent_interface")
+            parent_subnet = vnic_config.get("subnet")
+            parent_gateway = vnic_config.get("gateway")
 
             log_debug(
                 f"Processing vNIC {vnic_name} for parent interface {parent_interface}"
             )
 
-            macvlan_network = get_or_create_macvlan_network(parent_interface)
+            macvlan_network = get_or_create_macvlan_network(
+                parent_interface, parent_subnet, parent_gateway
+            )
             macvlan_networks.append((macvlan_network, vnic_config))
 
             vnic_dns = vnic_config.get("dns")
