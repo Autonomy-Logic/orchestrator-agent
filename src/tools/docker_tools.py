@@ -49,6 +49,24 @@ def netmask_to_cidr(netmask: str) -> int:
     return sum(bin(int(octet)).count("1") for octet in netmask.split("."))
 
 
+def calculate_network_base(gateway: str, netmask: str) -> str:
+    """
+    Calculate the network base address by applying the netmask to the gateway IP.
+    Works for all subnet sizes (not just /24).
+
+    Args:
+        gateway: Gateway IP address (e.g., "192.168.1.1")
+        netmask: Netmask in dotted decimal format (e.g., "255.255.255.0")
+
+    Returns:
+        Network base address (e.g., "192.168.1.0")
+    """
+    gateway_octets = [int(o) for o in gateway.split(".")]
+    mask_octets = [int(o) for o in netmask.split(".")]
+    network_octets = [str(gateway_octets[i] & mask_octets[i]) for i in range(4)]
+    return ".".join(network_octets)
+
+
 def get_or_create_macvlan_network(
     parent_interface: str,
     parent_subnet: str = None,
@@ -57,17 +75,16 @@ def get_or_create_macvlan_network(
     """
     Get existing MACVLAN network for a parent interface or create a new one.
     If parent_subnet and parent_gateway are not provided, attempts to auto-detect them.
-    If parent_subnet is provided in netmask format (e.g., 255.255.255.0), it will be
-    converted to CIDR notation using the parent_gateway as the network base.
+    parent_subnet is always expected to be in netmask format (e.g., 255.255.255.0) and will be
+    converted to CIDR notation using the parent_gateway to calculate the network base.
     Returns the network object.
     """
     if parent_subnet and parent_gateway:
-        if parent_subnet.startswith("255.") or parent_subnet.count(".") == 3:
-            cidr_prefix = netmask_to_cidr(parent_subnet)
-            gateway_parts = parent_gateway.split(".")
-            network_base = ".".join(gateway_parts[:3]) + ".0"
-            parent_subnet = f"{network_base}/{cidr_prefix}"
-            log_debug(f"Converted netmask to CIDR notation: {parent_subnet}")
+        # Always treat parent_subnet as a dotted-decimal netmask
+        cidr_prefix = netmask_to_cidr(parent_subnet)
+        network_base = calculate_network_base(parent_gateway, parent_subnet)
+        parent_subnet = f"{network_base}/{cidr_prefix}"
+        log_debug(f"Converted netmask to CIDR notation: {parent_subnet}")
     else:
         parent_subnet, parent_gateway = detect_interface_network(parent_interface)
 
