@@ -259,7 +259,7 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
             connect_kwargs = {}
 
             if network_mode == "static":
-                ip_address = vnic_config.get("ip_address")
+                ip_address = vnic_config.get("ip")
                 if ip_address:
                     # Docker's network.connect() expects ipv4_address without CIDR prefix
                     # (e.g., '192.168.1.10' not '192.168.1.10/24'). Normalize defensively
