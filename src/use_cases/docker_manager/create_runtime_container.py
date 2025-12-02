@@ -208,8 +208,8 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
         for vnic_config in vnic_configs:
             vnic_name = vnic_config.get("name")
             parent_interface = vnic_config.get("parent_interface")
-            parent_subnet = vnic_config.get("parent_subnet")
-            parent_gateway = vnic_config.get("parent_gateway")
+            parent_subnet = vnic_config.get("subnet")
+            parent_gateway = vnic_config.get("gateway")
 
             log_debug(
                 f"Processing vNIC {vnic_name} for parent interface {parent_interface}"
@@ -252,7 +252,7 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
 
             connect_kwargs = {}
 
-            if network_mode == "manual":
+            if network_mode == "static":
                 ip_address = vnic_config.get("ip_address")
                 if ip_address:
                     # Docker's network.connect() expects ipv4_address without CIDR prefix
