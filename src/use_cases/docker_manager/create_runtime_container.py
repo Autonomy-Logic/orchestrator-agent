@@ -330,6 +330,15 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
 
         save_vnic_configs(container_name, vnic_configs)
 
+        # Restart the container to ensure proper network connectivity
+        # Sometimes newly created containers don't have network access until restarted
+        set_step(container_name, "restarting_container")
+        log_info(
+            f"Restarting container {container_name} to ensure network connectivity"
+        )
+        container.restart()
+        log_info(f"Container {container_name} restarted successfully")
+
         log_info(
             f"Runtime container {container_name} created successfully with {len(vnic_configs)} virtual NICs"
         )
