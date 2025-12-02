@@ -2,12 +2,13 @@ from . import CLIENTS, add_client, get_self_container
 from tools.operations_state import set_step, set_error, clear_state
 from tools.logger import *
 from tools.vnic_persistence import save_vnic_configs
-from tools.network_tools import ContainerNetworkManager
-from tools.docker_tools import CLIENT
+from tools.docker_tools import (
+    CLIENT,
+    get_or_create_macvlan_network,
+    create_internal_network,
+)
 import docker
 import asyncio
-
-network_manager = ContainerNetworkManager(CLIENT)
 
 
 def _create_runtime_container_sync(container_name: str, vnic_configs: list):
@@ -47,7 +48,7 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
             log_warning(f"Failed to pull image, will try to use local image: {e}")
 
         set_step(container_name, "creating_networks")
-        internal_network = network_manager.create_internal_network(container_name)
+        internal_network = create_internal_network(container_name)
 
         macvlan_networks = []
         dns_servers = []
@@ -62,7 +63,7 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
                 f"Processing vNIC {vnic_name} for parent interface {parent_interface}"
             )
 
-            macvlan_network = network_manager.get_or_create_macvlan_network(
+            macvlan_network = get_or_create_macvlan_network(
                 parent_interface, parent_subnet, parent_gateway
             )
             macvlan_networks.append((macvlan_network, vnic_config))
