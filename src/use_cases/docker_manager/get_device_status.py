@@ -1,6 +1,7 @@
-from . import CLIENT, CLIENTS
+from . import CLIENTS
 from tools.operations_state import get_state
 from tools.logger import log_debug, log_info, log_warning, log_error
+from tools.docker_tools import CLIENT
 import docker
 from datetime import datetime
 from typing import Dict, Any

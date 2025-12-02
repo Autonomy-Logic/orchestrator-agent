@@ -18,14 +18,12 @@ NAME = "create_new_runtime"
 VNIC_CONFIG_TYPE = {
     "name": StringType,
     "parent_interface": StringType,
-    "parent_subnet": OptionalType(StringType),
-    "parent_gateway": OptionalType(StringType),
     "network_mode": StringType,
-    "ip_address": OptionalType(StringType),
+    "ip": OptionalType(StringType),
     "subnet": OptionalType(StringType),
     "gateway": OptionalType(StringType),
     "dns": OptionalType(ListType(StringType)),
-    "mac_address": OptionalType(StringType),
+    "mac": OptionalType(StringType),
 }
 
 MESSAGE_TYPE = {

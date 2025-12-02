@@ -5,10 +5,7 @@ import os
 from tools.logger import *
 from tools.vnic_persistence import load_vnic_configs
 from tools.interface_cache import INTERFACE_CACHE
-from use_cases.docker_manager.create_runtime_container import (
-    get_or_create_macvlan_network,
-    CLIENT,
-)
+from tools.docker_tools import CLIENT, get_or_create_macvlan_network
 
 SOCKET_PATH = "/var/orchestrator/netmon.sock"
 DEBOUNCE_SECONDS = 3
