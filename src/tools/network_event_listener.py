@@ -5,10 +5,10 @@ import os
 from tools.logger import *
 from tools.vnic_persistence import load_vnic_configs
 from tools.interface_cache import INTERFACE_CACHE
-from use_cases.docker_manager.create_runtime_container import (
-    get_or_create_macvlan_network,
-    CLIENT,
-)
+from tools.network_tools import ContainerNetworkManager
+from use_cases.docker_manager import CLIENT
+
+network_manager = ContainerNetworkManager(CLIENT)
 
 SOCKET_PATH = "/var/orchestrator/netmon.sock"
 DEBOUNCE_SECONDS = 3
@@ -256,7 +256,7 @@ class NetworkEventListener:
                                     f"Could not disconnect from old network {old_network_name}: {e}"
                                 )
 
-                            new_network = get_or_create_macvlan_network(
+                            new_network = network_manager.get_or_create_macvlan_network(
                                 interface, new_subnet, new_gateway
                             )
 
