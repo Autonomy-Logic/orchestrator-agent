@@ -1,3 +1,4 @@
+import base64
 from . import make_request
 
 
@@ -46,8 +47,29 @@ def execute(instance, command):
             content["data"] = data
 
     # Add files if provided (for multipart/form-data uploads)
+    # Supports two formats:
+    # 1. Base64-encoded dict: { field: { filename, content_base64, content_type } }
+    #    Used by openplc-web for uploading ZIP files through JSON
+    # 2. Already-formatted tuple: { field: (filename, bytes, mime_type) }
+    #    For callers that already have files in requests-compatible format
     files = command.get("files")
     if files:
-        content["files"] = files
+        processed_files = {}
+        for field_name, file_info in files.items():
+            # Case 1: Base64-encoded dict from openplc-web
+            if isinstance(file_info, dict) and "content_base64" in file_info:
+                content_base64 = file_info.get("content_base64")
+                if not content_base64:
+                    continue
+                raw_content = base64.b64decode(content_base64)
+                filename = file_info.get("filename") or field_name
+                mime_type = file_info.get("content_type") or "application/octet-stream"
+                processed_files[field_name] = (filename, raw_content, mime_type)
+            else:
+                # Case 2: Already in requests-compatible format (tuple or file-like)
+                processed_files[field_name] = file_info
+
+        if processed_files:
+            content["files"] = processed_files
 
     return make_request(method, ip, port, api, content)
