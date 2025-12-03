@@ -11,14 +11,27 @@ def check_instance(instance):
 
 
 def process_response(response):
+    """
+    Process HTTP response and return a structured result.
+    Returns a dict with status_code, headers, body, ok, and content_type.
+    """
+    result = {
+        "status_code": response.status_code,
+        "headers": dict(response.headers),
+        "ok": response.ok,
+        "content_type": response.headers.get("Content-Type", ""),
+    }
+    
+    try:
+        result["body"] = response.json()
+    except JSONDecodeError:
+        # Return text body if not JSON
+        result["body"] = response.text
+    
     if not response.ok:
         log_error(f"Error: {response.status_code} - {response.text}")
-        return None
-    try:
-        return response.json()
-    except JSONDecodeError:
-        log_error("Response is not in JSON format")
-        return None
+    
+    return result
 
 
 def make_request(method, ip, port, api, content):
