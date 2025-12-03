@@ -3,7 +3,7 @@ from .websocket_controller import (
     get_client as get_websocket_client,
 )
 from tools.logger import *
-from use_cases.network_monitor.network_event_listener import network_event_listener
+from tools.network_event_listener import network_event_listener
 
 
 async def main_websocket_task(server_url):

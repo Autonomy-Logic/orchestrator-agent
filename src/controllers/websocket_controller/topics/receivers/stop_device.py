@@ -1,6 +1,6 @@
 from tools.logger import *
-from tools.contract_validation import *
-from . import topic
+from tools.contract_validation import BASE_DEVICE
+from . import topic, validate_message
 
 NAME = "stop_device"
 
@@ -16,13 +16,8 @@ def init(client):
     """
 
     @client.on(NAME)
+    @validate_message(MESSAGE_TYPE, NAME)
     async def callback(message):
-        try:
-            validate_contract(MESSAGE_TYPE, message)
-        except Exception as e:
-            log_error(f"Contract validation error: {e}")
-            return
-
         log_info(f"Responding: {message}")
         corr_id = message.get("correlation_id")
         response = DUMMY_PAYLOAD.copy()

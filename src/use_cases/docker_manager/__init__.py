@@ -3,8 +3,7 @@ import os
 import json
 import socket
 from tools.logger import log_debug, log_warning
-
-CLIENT = docker.from_env()
+from tools.docker_tools import CLIENT
 
 HOST_NAME = os.getenv("HOST_NAME", "orchestrator-agent-devcontainer")
 CLIENTS_FILE = os.getenv("CLIENTS_FILE", "/var/orchestrator/data/clients.json")
