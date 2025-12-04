@@ -1,6 +1,10 @@
 """
 Circular buffer for storing CPU and memory usage data.
 Stores up to 48 hours of data at 5-second intervals.
+
+This module provides:
+- BaseUsageBuffer: Base class with common circular buffer logic
+- UsageBuffer: Singleton buffer for orchestrator agent metrics (inherits from BaseUsageBuffer)
 """
 
 import time
@@ -8,13 +12,15 @@ from typing import List, Dict, Optional
 from collections import deque
 
 
-class UsageBuffer:
+class BaseUsageBuffer:
     """
-    Circular buffer for storing CPU and memory usage data.
+    Base class for circular buffer storing CPU and memory usage data.
 
     Stores data points with timestamp, CPU usage, and memory usage.
-    Automatically removes old data when the buffer is full (48 hours).
+    Automatically removes old data when the buffer is full (48 hours at 5-second intervals).
     Data is stored in RAM and lost on reboot.
+
+    This class can be subclassed or used directly for storing usage metrics.
     """
 
     MAX_SAMPLES = 48 * 3600 // 5
@@ -112,12 +118,23 @@ class UsageBuffer:
         self._buffer.clear()
 
 
+class UsageBuffer(BaseUsageBuffer):
+    """
+    Circular buffer for storing orchestrator agent CPU and memory usage data.
+
+    Inherits all functionality from BaseUsageBuffer.
+    This class exists for backwards compatibility and semantic clarity.
+    """
+
+    pass
+
+
 _usage_buffer = UsageBuffer()
 
 
 def get_usage_buffer() -> UsageBuffer:
     """
-    Get the global usage buffer instance.
+    Get the global usage buffer instance for the orchestrator agent.
 
     Returns:
         UsageBuffer: The global usage buffer
