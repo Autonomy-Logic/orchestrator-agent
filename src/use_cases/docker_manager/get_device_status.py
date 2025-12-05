@@ -7,6 +7,61 @@ from datetime import datetime
 from typing import Dict, Any
 
 
+def get_device_info(device_id: str) -> Dict[str, Any]:
+    """
+    Get basic information about a runtime container (CPU, memory limits).
+
+    Args:
+        device_id: The name/ID of the container
+
+    Returns:
+        Dictionary containing:
+        - cpu_count: Number of CPUs available to the container (or "N/A")
+        - memory_limit: Memory limit in MB (or "N/A")
+    """
+    try:
+        container = CLIENT.containers.get(device_id)
+        container.reload()
+
+        host_config = container.attrs.get("HostConfig", {})
+
+        nano_cpus = host_config.get("NanoCpus", 0)
+        if nano_cpus and nano_cpus > 0:
+            cpu_count = f"{nano_cpus / 1e9:.1f} vCPU"
+        else:
+            cpu_quota = host_config.get("CpuQuota", 0)
+            cpu_period = host_config.get("CpuPeriod", 100000)
+            if cpu_quota and cpu_quota > 0:
+                cpu_count = f"{cpu_quota / cpu_period:.1f} vCPU"
+            else:
+                cpu_count = "unlimited"
+
+        memory_limit = host_config.get("Memory", 0)
+        if memory_limit and memory_limit > 0:
+            memory_mb = memory_limit // (1024 * 1024)
+            memory_limit_str = f"{memory_mb} MB"
+        else:
+            memory_limit_str = "unlimited"
+
+        return {
+            "cpu_count": cpu_count,
+            "memory_limit": memory_limit_str,
+        }
+
+    except docker.errors.NotFound:
+        log_warning(f"Container {device_id} not found when getting device info")
+        return {
+            "cpu_count": "N/A",
+            "memory_limit": "N/A",
+        }
+    except Exception as e:
+        log_warning(f"Error getting device info for {device_id}: {e}")
+        return {
+            "cpu_count": "N/A",
+            "memory_limit": "N/A",
+        }
+
+
 def get_device_status_data(device_id: str) -> Dict[str, Any]:
     """
     Get the current status of a runtime container.

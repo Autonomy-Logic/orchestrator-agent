@@ -2,8 +2,9 @@ import docker
 import os
 import json
 import socket
-from tools.logger import log_debug, log_warning
+from tools.logger import log_debug, log_info, log_warning
 from tools.docker_tools import CLIENT
+from tools.devices_usage_buffer import get_devices_usage_buffer
 
 HOST_NAME = os.getenv("HOST_NAME", "orchestrator-agent-devcontainer")
 CLIENTS_FILE = os.getenv("CLIENTS_FILE", "/var/orchestrator/data/clients.json")
@@ -74,6 +75,24 @@ def load_clients_from_file():
 
 
 CLIENTS = load_clients_from_file()
+
+
+def _register_existing_clients_with_usage_buffer():
+    """
+    Register all existing clients with the devices usage buffer.
+    This is called at module load time to ensure existing containers
+    have their usage data collected from startup.
+    """
+    if not CLIENTS:
+        return
+
+    devices_buffer = get_devices_usage_buffer()
+    for client_name in CLIENTS:
+        devices_buffer.add_device(client_name)
+        log_info(f"Registered existing client {client_name} for usage data collection")
+
+
+_register_existing_clients_with_usage_buffer()
 
 
 def ensure_clients_file_exists():
