@@ -42,6 +42,14 @@ def detect_interface_network(parent_interface: str):
     return None, None
 
 
+def is_cidr_format(subnet: str) -> bool:
+    """
+    Check if a subnet string is in CIDR format (e.g., 192.168.1.0/24).
+    Returns True if CIDR format, False if netmask format (e.g., 255.255.255.0).
+    """
+    return "/" in subnet
+
+
 def netmask_to_cidr(netmask: str) -> int:
     """
     Convert a netmask (e.g., 255.255.255.0) to CIDR prefix length (e.g., 24).
@@ -75,16 +83,19 @@ def get_or_create_macvlan_network(
     """
     Get existing MACVLAN network for a parent interface or create a new one.
     If parent_subnet and parent_gateway are not provided, attempts to auto-detect them.
-    parent_subnet is always expected to be in netmask format (e.g., 255.255.255.0) and will be
-    converted to CIDR notation using the parent_gateway to calculate the network base.
+    parent_subnet can be in either:
+    - Netmask format (e.g., 255.255.255.0) - will be converted to CIDR using gateway
+    - CIDR format (e.g., 192.168.1.0/24) - used directly
     Returns the network object.
     """
     if parent_subnet and parent_gateway:
-        # Always treat parent_subnet as a dotted-decimal netmask
-        cidr_prefix = netmask_to_cidr(parent_subnet)
-        network_base = calculate_network_base(parent_gateway, parent_subnet)
-        parent_subnet = f"{network_base}/{cidr_prefix}"
-        log_debug(f"Converted netmask to CIDR notation: {parent_subnet}")
+        if is_cidr_format(parent_subnet):
+            log_debug(f"Subnet already in CIDR format: {parent_subnet}")
+        else:
+            cidr_prefix = netmask_to_cidr(parent_subnet)
+            network_base = calculate_network_base(parent_gateway, parent_subnet)
+            parent_subnet = f"{network_base}/{cidr_prefix}"
+            log_debug(f"Converted netmask to CIDR notation: {parent_subnet}")
     else:
         parent_subnet, parent_gateway = detect_interface_network(parent_interface)
 
