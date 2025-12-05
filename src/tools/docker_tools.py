@@ -44,8 +44,10 @@ def detect_interface_network(parent_interface: str):
 
 def is_cidr_format(subnet: str) -> bool:
     """
-    Check if a subnet string is in CIDR format (e.g., 192.168.1.0/24).
-    Returns True if CIDR format, False if netmask format (e.g., 255.255.255.0).
+    Lightweight check to distinguish CIDR strings (e.g., '192.168.1.0/24')
+    from plain netmasks (e.g., '255.255.255.0'). This intentionally does
+    not fully validate the CIDR format; invalid strings will fail later
+    where they're actually parsed (e.g., in Docker or ipaddress module).
     """
     return "/" in subnet
 

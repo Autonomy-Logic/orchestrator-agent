@@ -2,6 +2,7 @@ import asyncio
 import json
 import socket
 import os
+import docker
 from tools.logger import *
 from tools.vnic_persistence import load_vnic_configs
 from tools.interface_cache import INTERFACE_CACHE
@@ -213,17 +214,8 @@ class NetworkEventListener:
             log_debug(f"Could not get subnet for network {network_name}: {e}")
         return None
 
-    def _normalize_subnet(self, subnet: str) -> str:
-        """Normalize subnet to CIDR format for comparison."""
-        if not subnet:
-            return ""
-        if "/" in subnet:
-            return subnet
-        return subnet
-
     async def _reconnect_containers(self, interface: str, iface_data: dict):
         """Reconnect runtime containers to new MACVLAN network after interface change"""
-        import docker
 
         try:
             all_vnic_configs = load_vnic_configs()
@@ -243,8 +235,6 @@ class NetworkEventListener:
             if not new_subnet:
                 log_warning(f"No subnet found for interface {interface}")
                 return
-
-            normalized_new_subnet = self._normalize_subnet(new_subnet)
 
             log_info(
                 f"Processing network change for interface {interface}, "
@@ -273,11 +263,10 @@ class NetworkEventListener:
                             for net_name in list(container_networks.keys()):
                                 if net_name.startswith(f"macvlan_{interface}"):
                                     current_subnet = self._get_network_subnet(net_name)
-                                    normalized_current = self._normalize_subnet(
-                                        current_subnet or ""
-                                    )
+                                    if not current_subnet:
+                                        continue
 
-                                    if normalized_current == normalized_new_subnet:
+                                    if current_subnet == new_subnet:
                                         log_info(
                                             f"Container {container_name} already connected to "
                                             f"macvlan network {net_name} with subnet {current_subnet}, "
