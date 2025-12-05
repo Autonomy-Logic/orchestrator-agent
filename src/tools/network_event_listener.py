@@ -204,6 +204,8 @@ class NetworkEventListener:
 
     async def _reconnect_containers(self, interface: str, iface_data: dict):
         """Reconnect runtime containers to new MACVLAN network after interface change"""
+        import docker
+
         try:
             all_vnic_configs = load_vnic_configs()
 
@@ -228,14 +230,20 @@ class NetworkEventListener:
                 f"to new subnet {new_subnet}"
             )
 
+            new_network = get_or_create_macvlan_network(
+                interface, new_subnet, new_gateway
+            )
+
+            containers_to_restart = set()
+
             for container_name, vnic_configs in all_vnic_configs.items():
                 for vnic_config in vnic_configs:
                     parent_interface = vnic_config.get("parent_interface")
 
                     if parent_interface == interface:
                         log_info(
-                            f"Reconnecting container {container_name} vNIC "
-                            f"{vnic_config.get('name')} to new network"
+                            f"Checking container {container_name} vNIC "
+                            f"{vnic_config.get('name')} for network reconnection"
                         )
 
                         try:
@@ -245,6 +253,14 @@ class NetworkEventListener:
                             container_networks = container.attrs.get(
                                 "NetworkSettings", {}
                             ).get("Networks", {})
+
+                            if new_network.name in container_networks:
+                                log_info(
+                                    f"Container {container_name} already connected to "
+                                    f"{new_network.name}, skipping reconnection"
+                                )
+                                continue
+
                             for net_name in list(container_networks.keys()):
                                 if net_name.startswith(f"macvlan_{interface}"):
                                     try:
@@ -257,10 +273,6 @@ class NetworkEventListener:
                                         log_debug(
                                             f"Could not disconnect from old network {net_name}: {e}"
                                         )
-
-                            new_network = get_or_create_macvlan_network(
-                                interface, new_subnet, new_gateway
-                            )
 
                             network_mode = vnic_config.get("network_mode", "dhcp")
                             connect_kwargs = {}
@@ -283,10 +295,28 @@ class NetworkEventListener:
                                 f"Reconnected {container_name} to new network {new_network.name}"
                             )
 
+                            containers_to_restart.add(container_name)
+
+                        except docker.errors.NotFound:
+                            log_warning(
+                                f"Container {container_name} not found, may have been deleted. "
+                                f"Consider cleaning up vNIC configs."
+                            )
                         except Exception as e:
                             log_error(
                                 f"Failed to reconnect container {container_name}: {e}"
                             )
+
+            for container_name in containers_to_restart:
+                try:
+                    container = CLIENT.containers.get(container_name)
+                    log_info(
+                        f"Restarting container {container_name} after network reconnection"
+                    )
+                    container.restart()
+                    log_info(f"Container {container_name} restarted successfully")
+                except Exception as e:
+                    log_error(f"Failed to restart container {container_name}: {e}")
 
         except Exception as e:
             log_error(f"Error reconnecting containers for interface {interface}: {e}")
