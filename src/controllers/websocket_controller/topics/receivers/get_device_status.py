@@ -1,19 +1,10 @@
 from use_cases.docker_manager.get_device_status import get_device_status_data
-from tools.contract_validation import (
-    StringType,
-    NumberType,
-    OptionalType,
-)
+from tools.contract_validation import BASE_DEVICE
 from . import topic, validate_message
 
 NAME = "get_device_status"
 
-MESSAGE_TYPE = {
-    "correlation_id": NumberType,
-    "device_id": StringType,
-    "action": OptionalType(StringType),
-    "requested_at": OptionalType(StringType),
-}
+MESSAGE_TYPE = {**BASE_DEVICE}
 
 
 @topic(NAME)

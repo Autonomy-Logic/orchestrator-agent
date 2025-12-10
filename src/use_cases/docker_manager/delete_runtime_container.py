@@ -3,6 +3,7 @@ from tools.operations_state import set_step, set_error, clear_state
 from tools.logger import *
 from tools.vnic_persistence import delete_vnic_configs
 from tools.docker_tools import CLIENT
+from tools.devices_usage_buffer import get_devices_usage_buffer
 import docker
 import asyncio
 
@@ -54,6 +55,13 @@ def _delete_runtime_container_sync(container_name: str):
             log_debug(f"Removed {container_name} from client registry")
         except Exception as e:
             log_warning(f"Error removing {container_name} from client registry: {e}")
+
+        try:
+            devices_buffer = get_devices_usage_buffer()
+            devices_buffer.remove_device(container_name)
+            log_debug(f"Removed {container_name} from usage data collection")
+        except Exception as e:
+            log_warning(f"Error removing {container_name} from usage buffer: {e}")
 
         try:
             delete_vnic_configs(container_name)

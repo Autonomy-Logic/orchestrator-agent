@@ -7,6 +7,7 @@ from tools.docker_tools import (
     get_or_create_macvlan_network,
     create_internal_network,
 )
+from tools.devices_usage_buffer import get_devices_usage_buffer
 import docker
 import asyncio
 
@@ -190,6 +191,10 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
         log_info(
             f"Runtime container {container_name} created successfully with {len(vnic_configs)} virtual NICs"
         )
+
+        devices_buffer = get_devices_usage_buffer()
+        devices_buffer.add_device(container_name)
+        log_debug(f"Registered device {container_name} for usage data collection")
 
         clear_state(container_name)
 
