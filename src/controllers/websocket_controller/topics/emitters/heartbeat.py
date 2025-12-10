@@ -100,7 +100,6 @@ async def emit_heartbeat(client):
 
         try:
             await client.emit("heartbeat", heartbeat_data)
-            log_info("Heartbeat emitted: " + str(heartbeat_data))
         except Exception as e:
             log_error(f"Failed to emit heartbeat: {e}")
             break

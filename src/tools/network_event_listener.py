@@ -2,6 +2,7 @@ import asyncio
 import json
 import socket
 import os
+import docker
 from tools.logger import *
 from tools.vnic_persistence import load_vnic_configs
 from tools.interface_cache import INTERFACE_CACHE
@@ -202,8 +203,20 @@ class NetworkEventListener:
 
         await self._reconnect_containers(interface, iface_data)
 
+    def _get_network_subnet(self, network_name: str) -> str | None:
+        """Get the subnet of a Docker network from its IPAM config."""
+        try:
+            network = CLIENT.networks.get(network_name)
+            ipam_config = network.attrs.get("IPAM", {}).get("Config", [])
+            if ipam_config:
+                return ipam_config[0].get("Subnet")
+        except Exception as e:
+            log_debug(f"Could not get subnet for network {network_name}: {e}")
+        return None
+
     async def _reconnect_containers(self, interface: str, iface_data: dict):
         """Reconnect runtime containers to new MACVLAN network after interface change"""
+
         try:
             all_vnic_configs = load_vnic_configs()
 
@@ -224,8 +237,8 @@ class NetworkEventListener:
                 return
 
             log_info(
-                f"Reconnecting containers using interface {interface} "
-                f"to new subnet {new_subnet}"
+                f"Processing network change for interface {interface}, "
+                f"new subnet: {new_subnet}"
             )
 
             for container_name, vnic_configs in all_vnic_configs.items():
@@ -234,51 +247,85 @@ class NetworkEventListener:
 
                     if parent_interface == interface:
                         log_info(
-                            f"Reconnecting container {container_name} vNIC "
-                            f"{vnic_config.get('name')} to new network"
+                            f"Checking container {container_name} vNIC "
+                            f"{vnic_config.get('name')} for network reconnection"
                         )
 
                         try:
                             container = CLIENT.containers.get(container_name)
+                            container.reload()
 
-                            old_network_name = f"macvlan_{interface}"
-                            try:
-                                old_network = CLIENT.networks.get(old_network_name)
-                                old_network.disconnect(container, force=True)
-                                log_info(
-                                    f"Disconnected {container_name} from old network {old_network_name}"
-                                )
-                            except Exception as e:
-                                log_debug(
-                                    f"Could not disconnect from old network {old_network_name}: {e}"
-                                )
+                            container_networks = container.attrs.get(
+                                "NetworkSettings", {}
+                            ).get("Networks", {})
+
+                            already_on_correct_subnet = False
+                            for net_name in list(container_networks.keys()):
+                                if net_name.startswith(f"macvlan_{interface}"):
+                                    current_subnet = self._get_network_subnet(net_name)
+                                    if not current_subnet:
+                                        continue
+
+                                    if current_subnet == new_subnet:
+                                        log_info(
+                                            f"Container {container_name} already connected to "
+                                            f"macvlan network {net_name} with subnet {current_subnet}, "
+                                            f"no reconnection needed"
+                                        )
+                                        already_on_correct_subnet = True
+                                        break
+
+                            if already_on_correct_subnet:
+                                continue
+
+                            log_info(
+                                f"Subnet changed for container {container_name}, "
+                                f"reconnecting to new network"
+                            )
+
+                            for net_name in list(container_networks.keys()):
+                                if net_name.startswith(f"macvlan_{interface}"):
+                                    try:
+                                        old_network = CLIENT.networks.get(net_name)
+                                        old_network.disconnect(container, force=True)
+                                        log_info(
+                                            f"Disconnected {container_name} from old network {net_name}"
+                                        )
+                                    except Exception as e:
+                                        log_debug(
+                                            f"Could not disconnect from old network {net_name}: {e}"
+                                        )
 
                             new_network = get_or_create_macvlan_network(
                                 interface, new_subnet, new_gateway
                             )
 
                             network_mode = vnic_config.get("network_mode", "dhcp")
-                            endpoint_config = {}
+                            connect_kwargs = {}
 
-                            if network_mode == "manual":
-                                ip_address = vnic_config.get("ip_address")
-                                subnet = vnic_config.get("subnet")
-
-                                if ip_address and subnet:
-                                    ipv4_address = f"{ip_address}/{subnet.split('/')[-1] if '/' in subnet else '24'}"
-                                    endpoint_config = {
-                                        "IPAMConfig": {"IPv4Address": ipv4_address}
-                                    }
+                            if network_mode == "static":
+                                ip_address = vnic_config.get("ip")
+                                if ip_address:
+                                    ip_address = ip_address.split("/")[0]
+                                    connect_kwargs["ipv4_address"] = ip_address
+                                    log_debug(
+                                        f"Configured static IP {ip_address} for reconnection"
+                                    )
 
                             mac_address = vnic_config.get("mac_address")
                             if mac_address:
-                                endpoint_config["MacAddress"] = mac_address
+                                connect_kwargs["mac_address"] = mac_address
 
-                            new_network.connect(container, **endpoint_config)
+                            new_network.connect(container, **connect_kwargs)
                             log_info(
                                 f"Reconnected {container_name} to new network {new_network.name}"
                             )
 
+                        except docker.errors.NotFound:
+                            log_warning(
+                                f"Container {container_name} not found, may have been deleted. "
+                                f"Consider cleaning up vNIC configs."
+                            )
                         except Exception as e:
                             log_error(
                                 f"Failed to reconnect container {container_name}: {e}"
