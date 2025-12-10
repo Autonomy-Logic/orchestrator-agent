@@ -4,12 +4,7 @@ from tools.operations_state import (
     is_operation_in_progress,
 )
 from tools.logger import *
-from tools.contract_validation import (
-    StringType,
-    NumberType,
-    ListType,
-    OptionalType,
-)
+from tools.contract_validation import StringType, ListType, OptionalType, BASE_MESSAGE
 from . import topic, validate_message
 import asyncio
 
@@ -27,11 +22,9 @@ VNIC_CONFIG_TYPE = {
 }
 
 MESSAGE_TYPE = {
-    "correlation_id": NumberType,
+    **BASE_MESSAGE,
     "container_name": StringType,
     "vnic_configs": ListType(VNIC_CONFIG_TYPE),
-    "action": OptionalType(StringType),
-    "requested_at": OptionalType(StringType),
 }
 
 
