@@ -82,6 +82,16 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
             "detach": True,
             "restart_policy": {"Name": "always"},
             "network": internal_network.name,
+            # Real-time scheduling capabilities for PLC deterministic execution
+            # SYS_NICE: Required for sched_setscheduler(SCHED_FIFO) in the PLC core
+            "cap_add": ["SYS_NICE"],
+            # ulimits for real-time scheduling:
+            # - rtprio: Maximum real-time priority (99 is highest)
+            # - memlock: Unlimited memory locking for future mlockall() support
+            "ulimits": [
+                docker.types.Ulimit(name="rtprio", soft=99, hard=99),
+                docker.types.Ulimit(name="memlock", soft=-1, hard=-1),
+            ],
         }
 
         if dns_servers:
