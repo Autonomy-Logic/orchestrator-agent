@@ -6,10 +6,55 @@ from tools.docker_tools import (
     CLIENT,
     get_or_create_macvlan_network,
     create_internal_network,
+    get_macvlan_network_key,
 )
 from tools.devices_usage_buffer import get_devices_usage_buffer
 import docker
 import asyncio
+
+
+def _validate_vnic_configs(vnic_configs: list) -> tuple[bool, str]:
+    """
+    Validate vNIC configurations to detect duplicate networks.
+
+    Docker only allows one endpoint per (container, network) pair. When multiple vNICs
+    resolve to the same MACVLAN network (same parent interface and subnet), the second
+    network.connect() call will fail with "endpoint already exists" error.
+
+    This function detects such conflicts early and returns a clear error message.
+
+    Args:
+        vnic_configs: List of vNIC configurations
+
+    Returns:
+        Tuple of (is_valid, error_message). If valid, error_message is empty.
+    """
+    seen_networks = {}
+
+    for idx, vnic_config in enumerate(vnic_configs):
+        vnic_name = vnic_config.get("name") or f"unnamed_vnic_{idx}"
+        parent_interface = vnic_config.get("parent_interface")
+        parent_subnet = vnic_config.get("subnet")
+        parent_gateway = vnic_config.get("gateway")
+
+        network_key = get_macvlan_network_key(
+            parent_interface, parent_subnet, parent_gateway
+        )
+
+        if network_key in seen_networks:
+            conflicting_vnic = seen_networks[network_key]
+            error_msg = (
+                f"Invalid vNIC configuration: vNICs '{conflicting_vnic}' and '{vnic_name}' "
+                f"would connect to the same MACVLAN network ({network_key}). "
+                f"Docker only allows one endpoint per container per network. "
+                f"To use multiple IPs on the same physical network, consider using "
+                f"different subnets or a single vNIC with additional IP configuration."
+            )
+            return False, error_msg
+
+        seen_networks[network_key] = vnic_name
+
+    return True, ""
 
 
 def _create_runtime_container_sync(container_name: str, vnic_configs: list):
@@ -35,6 +80,13 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
     if container_name in CLIENTS:
         log_error(f"Container name {container_name} is already in use.")
         set_error(container_name, "Container name is already in use", "create")
+        return
+
+    set_step(container_name, "validating_config")
+    is_valid, error_msg = _validate_vnic_configs(vnic_configs)
+    if not is_valid:
+        log_error(f"vNIC configuration validation failed: {error_msg}")
+        set_error(container_name, error_msg, "create")
         return
 
     try:

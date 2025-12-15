@@ -77,6 +77,49 @@ def calculate_network_base(gateway: str, netmask: str) -> str:
     return ".".join(network_octets)
 
 
+def get_macvlan_network_key(
+    parent_interface: str,
+    parent_subnet: str = None,
+    parent_gateway: str = None,
+) -> str:
+    """
+    Compute the MACVLAN network key (name) for a given interface and subnet configuration.
+    This is used for validation to detect duplicate vNIC configurations that would
+    resolve to the same network.
+
+    IMPORTANT: This function intentionally mirrors the subnet resolution logic in
+    get_or_create_macvlan_network() to ensure validation produces the same network
+    key that actual network creation would use. If you modify the logic here, you
+    must also update get_or_create_macvlan_network() to maintain consistency.
+
+    The function handles the same input combinations as get_or_create_macvlan_network():
+    - Both subnet and gateway provided: uses explicit values (converts netmask to CIDR if needed)
+    - Either or both missing: falls back to detect_interface_network() auto-detection
+
+    Args:
+        parent_interface: Physical network interface on host
+        parent_subnet: Subnet in netmask or CIDR format (optional, auto-detected if not provided)
+        parent_gateway: Gateway address (optional, auto-detected if not provided)
+
+    Returns:
+        The network key string that would be used as the Docker network name.
+        Returns a key based on interface only if subnet cannot be determined.
+    """
+    if parent_subnet and parent_gateway:
+        if is_cidr_format(parent_subnet):
+            resolved_subnet = parent_subnet
+        else:
+            cidr_prefix = netmask_to_cidr(parent_subnet)
+            network_base = calculate_network_base(parent_gateway, parent_subnet)
+            resolved_subnet = f"{network_base}/{cidr_prefix}"
+    else:
+        resolved_subnet, _ = detect_interface_network(parent_interface)
+        if not resolved_subnet:
+            return f"macvlan_{parent_interface}_unknown"
+
+    return f"macvlan_{parent_interface}_{resolved_subnet.replace('/', '_')}"
+
+
 def get_or_create_macvlan_network(
     parent_interface: str,
     parent_subnet: str = None,
