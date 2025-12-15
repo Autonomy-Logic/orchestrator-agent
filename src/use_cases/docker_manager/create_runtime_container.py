@@ -31,8 +31,8 @@ def _validate_vnic_configs(vnic_configs: list) -> tuple[bool, str]:
     """
     seen_networks = {}
 
-    for vnic_config in vnic_configs:
-        vnic_name = vnic_config.get("name", "unnamed")
+    for idx, vnic_config in enumerate(vnic_configs):
+        vnic_name = vnic_config.get("name") or f"unnamed_vnic_{idx}"
         parent_interface = vnic_config.get("parent_interface")
         parent_subnet = vnic_config.get("subnet")
         parent_gateway = vnic_config.get("gateway")
