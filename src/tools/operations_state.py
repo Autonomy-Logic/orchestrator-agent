@@ -29,11 +29,15 @@ class OperationsStateTracker:
 
         Returns:
             True if state was set successfully
-            False if container already has an operation in progress
+            False if container already has an active operation in progress
         """
         with self._lock:
             if container_name in self._operations:
-                return False
+                # Only block if there's an active operation in progress
+                # Allow overwriting error/terminal states with new operation
+                current_status = self._operations[container_name].get("status")
+                if current_status in ["creating", "deleting"]:
+                    return False
 
             now = datetime.now().isoformat()
             self._operations[container_name] = {
@@ -52,11 +56,15 @@ class OperationsStateTracker:
 
         Returns:
             True if state was set successfully
-            False if container already has an operation in progress
+            False if container already has an active operation in progress
         """
         with self._lock:
             if container_name in self._operations:
-                return False
+                # Only block if there's an active operation in progress
+                # Allow overwriting error/terminal states with new operation
+                current_status = self._operations[container_name].get("status")
+                if current_status in ["creating", "deleting"]:
+                    return False
 
             now = datetime.now().isoformat()
             self._operations[container_name] = {
