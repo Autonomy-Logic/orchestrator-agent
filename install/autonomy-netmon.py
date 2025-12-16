@@ -111,13 +111,18 @@ class DHCPManager:
                 return {"success": True, "message": "DHCP client already running"}
 
         if not container_pid or container_pid <= 0:
+            logger.error(f"Invalid container PID: {container_pid}")
             return {"success": False, "error": f"Invalid container PID: {container_pid}"}
         
-        if not os.path.exists(f"/proc/{container_pid}/ns/net"):
+        netns_path = f"/proc/{container_pid}/ns/net"
+        if not os.path.exists(netns_path):
+            logger.error(f"Network namespace not accessible: {netns_path}")
             return {"success": False, "error": f"Container PID {container_pid} network namespace not accessible"}
 
+        logger.info(f"Looking for interface with MAC {mac_address} in container PID {container_pid}")
         interface = self._find_interface_by_mac(container_pid, mac_address)
         if not interface:
+            logger.error(f"Interface with MAC {mac_address} not found in container PID {container_pid}")
             return {"success": False, "error": f"Interface with MAC {mac_address} not found in container"}
 
         logger.info(f"Starting DHCP client for {key} on interface {interface} (MAC: {mac_address})")
@@ -464,9 +469,32 @@ class NetworkMonitor:
             vnic_name = command.get("vnic_name")
             mac_address = command.get("mac_address")
             container_pid = command.get("container_pid")
-            if not all([container_name, vnic_name, mac_address, container_pid]):
-                return {"success": False, "error": "Missing required parameters (container_name, vnic_name, mac_address, container_pid)"}
-            return self.dhcp_manager.start_dhcp(container_name, vnic_name, mac_address, container_pid)
+            
+            # Validate each parameter explicitly for better error messages
+            if not container_name:
+                logger.error("start_dhcp: missing container_name")
+                return {"success": False, "error": "Missing container_name"}
+            if not vnic_name:
+                logger.error("start_dhcp: missing vnic_name")
+                return {"success": False, "error": "Missing vnic_name"}
+            if not mac_address:
+                logger.error("start_dhcp: missing mac_address")
+                return {"success": False, "error": "Missing mac_address"}
+            if container_pid is None:
+                logger.error("start_dhcp: missing container_pid")
+                return {"success": False, "error": "Missing container_pid"}
+            
+            # Ensure container_pid is an integer (JSON may send it as string)
+            try:
+                container_pid = int(container_pid)
+            except (ValueError, TypeError) as e:
+                logger.error(f"start_dhcp: invalid container_pid type: {type(container_pid)}, value: {container_pid}")
+                return {"success": False, "error": f"Invalid container_pid: {container_pid}"}
+            
+            logger.info(f"start_dhcp: container={container_name}, vnic={vnic_name}, mac={mac_address}, pid={container_pid}")
+            result = self.dhcp_manager.start_dhcp(container_name, vnic_name, mac_address, container_pid)
+            logger.info(f"start_dhcp result: {result}")
+            return result
 
         elif cmd_type == "stop_dhcp":
             container_name = command.get("container_name")
