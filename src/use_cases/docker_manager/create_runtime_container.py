@@ -236,6 +236,9 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
             if macvlan_network.name in network_settings:
                 vnic_ip = network_settings[macvlan_network.name]["IPAddress"]
                 vnic_mac = network_settings[macvlan_network.name]["MacAddress"]
+                # Store MAC address and network name in vnic_config for DHCP IP mapping
+                vnic_config["mac_address"] = vnic_mac
+                vnic_config["docker_network_name"] = macvlan_network.name
                 log_info(
                     f"vNIC {vnic_name} on {parent_interface}: IP={vnic_ip}, MAC={vnic_mac}"
                 )

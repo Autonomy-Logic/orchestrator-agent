@@ -69,6 +69,9 @@ class NetworkEventListener:
                     self.writer = writer
                     log_info("Connected to network monitor, listening for events...")
 
+                    # Resync DHCP for existing containers on startup/reconnect
+                    await self._resync_dhcp_for_existing_containers()
+
                     while self.running:
                         try:
                             line = await asyncio.wait_for(
@@ -316,6 +319,89 @@ class NetworkEventListener:
         except Exception as e:
             log_debug(f"Could not get subnet for network {network_name}: {e}")
         return None
+
+    async def _resync_dhcp_for_existing_containers(self):
+        """
+        Resync DHCP for existing containers on startup or reconnect.
+        
+        This handles the case where the host reboots and containers resume,
+        but DHCP clients need to be restarted to obtain/renew IP addresses.
+        """
+        try:
+            all_vnic_configs = load_vnic_configs()
+            if not all_vnic_configs:
+                log_debug("No vNIC configurations found, skipping DHCP resync")
+                return
+
+            log_info("Resyncing DHCP for existing containers...")
+            
+            for container_name, vnic_configs in all_vnic_configs.items():
+                for vnic_config in vnic_configs:
+                    network_mode = vnic_config.get("network_mode", "dhcp")
+                    if network_mode != "dhcp":
+                        continue
+                    
+                    vnic_name = vnic_config.get("name")
+                    parent_interface = vnic_config.get("parent_interface")
+                    
+                    try:
+                        # Get fresh container info from Docker
+                        container = CLIENT.containers.get(container_name)
+                        container.reload()
+                        
+                        # Skip if container is not running
+                        if container.status != "running":
+                            log_debug(f"Container {container_name} is not running, skipping DHCP resync")
+                            continue
+                        
+                        # Get fresh PID from Docker
+                        container_pid = container.attrs.get("State", {}).get("Pid", 0)
+                        if container_pid <= 0:
+                            log_warning(f"Container {container_name} has invalid PID, skipping DHCP resync")
+                            continue
+                        
+                        # Get fresh MAC address from Docker for the macvlan network
+                        network_settings = container.attrs.get("NetworkSettings", {}).get("Networks", {})
+                        mac_address = None
+                        docker_network_name = None
+                        
+                        for net_name, net_info in network_settings.items():
+                            if net_name.startswith(f"macvlan_{parent_interface}"):
+                                mac_address = net_info.get("MacAddress")
+                                docker_network_name = net_name
+                                break
+                        
+                        if not mac_address:
+                            log_warning(f"Could not find MAC address for {container_name}:{vnic_name}, skipping DHCP resync")
+                            continue
+                        
+                        # Update vnic_config with fresh MAC and network name
+                        vnic_config["mac_address"] = mac_address
+                        if docker_network_name:
+                            vnic_config["docker_network_name"] = docker_network_name
+                        
+                        log_info(f"Starting DHCP for {container_name}:{vnic_name} (MAC: {mac_address}, PID: {container_pid})")
+                        
+                        # Request DHCP from netmon
+                        result = await self.start_dhcp(container_name, vnic_name, mac_address, container_pid)
+                        if result.get("success"):
+                            log_info(f"DHCP resync initiated for {container_name}:{vnic_name}")
+                        else:
+                            log_warning(f"DHCP resync failed for {container_name}:{vnic_name}: {result.get('error')}")
+                        
+                    except docker.errors.NotFound:
+                        log_debug(f"Container {container_name} not found, skipping DHCP resync")
+                    except Exception as e:
+                        log_error(f"Error resyncing DHCP for {container_name}:{vnic_name}: {e}")
+            
+            # Save updated vnic configs with fresh MAC addresses
+            for container_name, vnic_configs in all_vnic_configs.items():
+                save_vnic_configs(container_name, vnic_configs)
+            
+            log_info("DHCP resync completed")
+            
+        except Exception as e:
+            log_error(f"Error during DHCP resync: {e}")
 
     async def _reconnect_containers(self, interface: str, iface_data: dict):
         """Reconnect runtime containers to new MACVLAN network after interface change"""
