@@ -2,6 +2,7 @@ from . import CLIENTS
 from tools.operations_state import get_state
 from tools.logger import log_debug, log_info, log_warning, log_error
 from tools.docker_tools import CLIENT
+from tools.vnic_persistence import load_vnic_configs
 import docker
 from datetime import datetime
 from typing import Dict, Any
@@ -151,11 +152,33 @@ def get_device_status_data(device_id: str) -> Dict[str, Any]:
         )
         networks = {}
 
+        # Load vNIC configs to check for DHCP-assigned IPs
+        vnic_configs = load_vnic_configs(device_id)
+        dhcp_ips_by_mac = {}
+        for vnic_config in vnic_configs:
+            if vnic_config.get("dhcp_ip") and vnic_config.get("mac_address"):
+                dhcp_ips_by_mac[vnic_config["mac_address"].lower()] = {
+                    "ip": vnic_config["dhcp_ip"],
+                    "gateway": vnic_config.get("dhcp_gateway"),
+                }
+
         for network_name, network_info in network_settings.items():
+            mac_address = network_info.get("MacAddress", "").lower()
+            ip_address = network_info.get("IPAddress")
+            gateway = network_info.get("Gateway")
+
+            # Override with DHCP-assigned IP if available
+            if mac_address in dhcp_ips_by_mac:
+                dhcp_info = dhcp_ips_by_mac[mac_address]
+                ip_address = dhcp_info["ip"]
+                if dhcp_info.get("gateway"):
+                    gateway = dhcp_info["gateway"]
+                log_debug(f"Using DHCP IP {ip_address} for network {network_name}")
+
             networks[network_name] = {
-                "ip_address": network_info.get("IPAddress"),
+                "ip_address": ip_address,
                 "mac_address": network_info.get("MacAddress"),
-                "gateway": network_info.get("Gateway"),
+                "gateway": gateway,
             }
 
         internal_ip = None
