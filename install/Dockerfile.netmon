@@ -1,7 +1,7 @@
 FROM python:3.12-alpine
 
-RUN apk add --no-cache iproute2 busybox-extras && \
-    pip install --no-cache-dir pyroute2
+RUN apk add --no-cache iproute2 busybox-extras util-linux && \
+    pip install --no-cache-dir pyroute2 docker
 
 WORKDIR /app
 

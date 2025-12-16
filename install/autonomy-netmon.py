@@ -71,19 +71,19 @@ class DHCPManager:
         logger.info("DHCP manager stopped")
 
     def _get_container_pid(self, container_name: str) -> Optional[int]:
-        """Get the PID of a container's init process."""
+        """Get the PID of a container's init process using Docker SDK."""
         try:
-            result = subprocess.run(
-                ["docker", "inspect", "-f", "{{.State.Pid}}", container_name],
-                capture_output=True,
-                text=True,
-                timeout=10,
+            import docker as docker_sdk
+
+            client = docker_sdk.DockerClient(
+                base_url="unix:///var/run/docker.sock"
             )
-            if result.returncode == 0:
-                pid = int(result.stdout.strip())
-                if pid > 0:
-                    return pid
-            logger.error(f"Failed to get PID for container {container_name}: {result.stderr}")
+            container = client.containers.get(container_name)
+            pid = container.attrs.get("State", {}).get("Pid", 0)
+            client.close()
+            if pid > 0:
+                return pid
+            logger.error(f"Container {container_name} has invalid PID: {pid}")
         except Exception as e:
             logger.error(f"Error getting container PID: {e}")
         return None
