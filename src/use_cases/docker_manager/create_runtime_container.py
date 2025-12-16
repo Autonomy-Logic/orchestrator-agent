@@ -81,14 +81,14 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
     if container_name in CLIENTS:
         log_error(f"Container name {container_name} is already in use.")
         set_error(container_name, "Container name is already in use", "create")
-        return
+        return None
 
     set_step(container_name, "validating_config")
     is_valid, error_msg = _validate_vnic_configs(vnic_configs)
     if not is_valid:
         log_error(f"vNIC configuration validation failed: {error_msg}")
         set_error(container_name, error_msg, "create")
-        return
+        return None
 
     try:
         image_name = "ghcr.io/autonomy-logic/openplc-runtime:latest"
@@ -264,29 +264,9 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
                         f"Will request DHCP for vNIC {vnic_name} (MAC: {mac_address})"
                     )
 
-        if dhcp_vnics:
-            set_step(container_name, "starting_dhcp")
-            for vnic_name, mac_address in dhcp_vnics:
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        asyncio.run_coroutine_threadsafe(
-                            network_event_listener.start_dhcp(
-                                container_name, vnic_name, mac_address
-                            ),
-                            loop,
-                        )
-                    else:
-                        asyncio.run(
-                            network_event_listener.start_dhcp(
-                                container_name, vnic_name, mac_address
-                            )
-                        )
-                    log_info(f"Requested DHCP for vNIC {vnic_name}")
-                except Exception as e:
-                    log_warning(f"Failed to request DHCP for vNIC {vnic_name}: {e}")
-
         clear_state(container_name)
+
+        return dhcp_vnics
 
     except Exception as e:
         log_error(f"Failed to create runtime container {container_name}. Error: {e}")
@@ -294,6 +274,7 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
 
         log_error(f"Traceback: {traceback.format_exc()}")
         set_error(container_name, str(e), "create")
+        return None
 
 
 async def create_runtime_container(container_name: str, vnic_configs: list):
@@ -308,6 +289,17 @@ async def create_runtime_container(container_name: str, vnic_configs: list):
         container_name: Name for the runtime container
         vnic_configs: List of virtual NIC configurations
     """
-    await asyncio.to_thread(
+    dhcp_vnics = await asyncio.to_thread(
         _create_runtime_container_sync, container_name, vnic_configs
     )
+
+    if dhcp_vnics:
+        set_step(container_name, "starting_dhcp")
+        for vnic_name, mac_address in dhcp_vnics:
+            try:
+                await network_event_listener.start_dhcp(
+                    container_name, vnic_name, mac_address
+                )
+                log_info(f"Requested DHCP for vNIC {vnic_name}")
+            except Exception as e:
+                log_warning(f"Failed to request DHCP for vNIC {vnic_name}: {e}")
