@@ -273,7 +273,7 @@ class NetworkEventListener:
             return {"success": False, "error": str(e)}
 
     async def start_dhcp(
-        self, container_name: str, vnic_name: str, mac_address: str
+        self, container_name: str, vnic_name: str, mac_address: str, container_pid: int
     ) -> dict:
         """Request netmon to start DHCP client for a container's vNIC"""
         command = {
@@ -281,6 +281,7 @@ class NetworkEventListener:
             "container_name": container_name,
             "vnic_name": vnic_name,
             "mac_address": mac_address,
+            "container_pid": container_pid,
         }
         return await self.send_command(command)
 

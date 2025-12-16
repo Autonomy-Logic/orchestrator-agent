@@ -250,6 +250,9 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
         devices_buffer.add_device(container_name)
         log_debug(f"Registered device {container_name} for usage data collection")
 
+        container_pid = container.attrs.get("State", {}).get("Pid", 0)
+        log_debug(f"Container {container_name} has PID {container_pid}")
+
         dhcp_vnics = []
         for macvlan_network, vnic_config in macvlan_networks:
             network_mode = vnic_config.get("network_mode", "dhcp")
@@ -258,10 +261,10 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
                 mac_address = network_settings.get(macvlan_network.name, {}).get(
                     "MacAddress"
                 )
-                if mac_address:
-                    dhcp_vnics.append((vnic_name, mac_address))
+                if mac_address and container_pid > 0:
+                    dhcp_vnics.append((vnic_name, mac_address, container_pid))
                     log_debug(
-                        f"Will request DHCP for vNIC {vnic_name} (MAC: {mac_address})"
+                        f"Will request DHCP for vNIC {vnic_name} (MAC: {mac_address}, PID: {container_pid})"
                     )
 
         clear_state(container_name)
@@ -295,10 +298,10 @@ async def create_runtime_container(container_name: str, vnic_configs: list):
 
     if dhcp_vnics:
         set_step(container_name, "starting_dhcp")
-        for vnic_name, mac_address in dhcp_vnics:
+        for vnic_name, mac_address, container_pid in dhcp_vnics:
             try:
                 await network_event_listener.start_dhcp(
-                    container_name, vnic_name, mac_address
+                    container_name, vnic_name, mac_address, container_pid
                 )
                 log_info(f"Requested DHCP for vNIC {vnic_name}")
             except Exception as e:

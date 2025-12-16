@@ -70,24 +70,6 @@ class DHCPManager:
             self.lease_monitor_thread.join(timeout=2)
         logger.info("DHCP manager stopped")
 
-    def _get_container_pid(self, container_name: str) -> Optional[int]:
-        """Get the PID of a container's init process using Docker SDK."""
-        try:
-            import docker as docker_sdk
-
-            client = docker_sdk.DockerClient(
-                base_url="unix:///var/run/docker.sock"
-            )
-            container = client.containers.get(container_name)
-            pid = container.attrs.get("State", {}).get("Pid", 0)
-            client.close()
-            if pid > 0:
-                return pid
-            logger.error(f"Container {container_name} has invalid PID: {pid}")
-        except Exception as e:
-            logger.error(f"Error getting container PID: {e}")
-        return None
-
     def _find_interface_by_mac(self, container_pid: int, mac_address: str) -> Optional[str]:
         """Find the interface name inside a container's netns by MAC address."""
         try:
@@ -110,9 +92,16 @@ class DHCPManager:
         return None
 
     def start_dhcp(
-        self, container_name: str, vnic_name: str, mac_address: str
+        self, container_name: str, vnic_name: str, mac_address: str, container_pid: int
     ) -> Dict[str, any]:
-        """Start a DHCP client for a container's vNIC."""
+        """Start a DHCP client for a container's vNIC.
+        
+        Args:
+            container_name: Name of the container
+            vnic_name: Name of the virtual NIC
+            mac_address: MAC address of the interface to find
+            container_pid: PID of the container's init process (provided by orchestrator-agent)
+        """
         key = f"{container_name}:{vnic_name}"
 
         if key in self.dhcp_processes:
@@ -121,9 +110,11 @@ class DHCPManager:
                 logger.info(f"DHCP client already running for {key}")
                 return {"success": True, "message": "DHCP client already running"}
 
-        container_pid = self._get_container_pid(container_name)
-        if not container_pid:
-            return {"success": False, "error": f"Container {container_name} not found or not running"}
+        if not container_pid or container_pid <= 0:
+            return {"success": False, "error": f"Invalid container PID: {container_pid}"}
+        
+        if not os.path.exists(f"/proc/{container_pid}/ns/net"):
+            return {"success": False, "error": f"Container PID {container_pid} network namespace not accessible"}
 
         interface = self._find_interface_by_mac(container_pid, mac_address)
         if not interface:
@@ -472,9 +463,10 @@ class NetworkMonitor:
             container_name = command.get("container_name")
             vnic_name = command.get("vnic_name")
             mac_address = command.get("mac_address")
-            if not all([container_name, vnic_name, mac_address]):
-                return {"success": False, "error": "Missing required parameters"}
-            return self.dhcp_manager.start_dhcp(container_name, vnic_name, mac_address)
+            container_pid = command.get("container_pid")
+            if not all([container_name, vnic_name, mac_address, container_pid]):
+                return {"success": False, "error": "Missing required parameters (container_name, vnic_name, mac_address, container_pid)"}
+            return self.dhcp_manager.start_dhcp(container_name, vnic_name, mac_address, container_pid)
 
         elif cmd_type == "stop_dhcp":
             container_name = command.get("container_name")
