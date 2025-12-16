@@ -1,10 +1,13 @@
 FROM python:3.12-alpine
 
-RUN pip install --no-cache-dir pyroute2
+RUN apk add --no-cache iproute2 busybox-extras && \
+    pip install --no-cache-dir pyroute2
 
 WORKDIR /app
 
 COPY autonomy-netmon.py /app/autonomy-netmon.py
+COPY udhcpc-script.sh /usr/share/udhcpc/default.script
+RUN chmod +x /usr/share/udhcpc/default.script
 
 ENV PYTHONUNBUFFERED=1
 

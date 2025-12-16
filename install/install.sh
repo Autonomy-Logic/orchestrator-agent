@@ -169,6 +169,9 @@ fi
 docker run -d \
   --name "$NETMON_CONTAINER_NAME" \
   --network=host \
+  --pid=host \
+  --cap-add=NET_ADMIN \
+  --cap-add=NET_RAW \
   --restart unless-stopped \
   -v "$SHARED_VOLUME:/var/orchestrator" \
   "$NETMON_IMAGE_NAME"

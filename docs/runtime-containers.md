@@ -33,14 +33,14 @@ Creates a new OpenPLC v4 runtime container with MACVLAN networking and internal 
 **Required Fields:**
 - `name` (string) - Virtual NIC identifier
 - `parent_interface` (string) - Physical host interface
-- `network_mode` (string) - "dhcp" or "manual"
+- `network_mode` (string) - "dhcp" or "static"
 
 **Optional Fields:**
 - `parent_subnet` (string) - Parent network subnet (auto-detected if omitted)
 - `parent_gateway` (string) - Parent network gateway (auto-detected if omitted)
-- `ip_address` (string) - Static IP address (manual mode only)
-- `subnet` (string) - Subnet mask (manual mode only)
-- `gateway` (string) - Gateway address (manual mode only)
+- `ip` (string) - Static IP address (static mode only)
+- `subnet` (string) - Subnet mask (static mode only)
+- `gateway` (string) - Gateway address (static mode only)
 - `dns` (array of strings) - DNS servers
 - `mac_address` (string) - Custom MAC address
 
@@ -61,7 +61,7 @@ Creates a new OpenPLC v4 runtime container with MACVLAN networking and internal 
 }
 ```
 
-### Example: Manual IP Configuration
+### Example: Static IP Configuration
 
 ```json
 {
@@ -73,8 +73,8 @@ Creates a new OpenPLC v4 runtime container with MACVLAN networking and internal 
       "parent_interface": "ens37",
       "parent_subnet": "192.168.1.0/24",
       "parent_gateway": "192.168.1.1",
-      "network_mode": "manual",
-      "ip_address": "192.168.1.100",
+      "network_mode": "static",
+      "ip": "192.168.1.100",
       "subnet": "192.168.1.0/24",
       "gateway": "192.168.1.1",
       "dns": ["192.168.1.1"],
@@ -99,8 +99,8 @@ Creates a new OpenPLC v4 runtime container with MACVLAN networking and internal 
     {
       "name": "eth1",
       "parent_interface": "ens38",
-      "network_mode": "manual",
-      "ip_address": "10.0.0.100",
+      "network_mode": "static",
+      "ip": "10.0.0.100",
       "subnet": "10.0.0.0/24",
       "gateway": "10.0.0.1"
     }

@@ -9,6 +9,7 @@ from tools.docker_tools import (
     get_macvlan_network_key,
 )
 from tools.devices_usage_buffer import get_devices_usage_buffer
+from tools.network_event_listener import network_event_listener
 import docker
 import asyncio
 
@@ -67,11 +68,11 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
         vnic_configs: List of virtual NIC configurations, each containing:
             - name: Virtual NIC name
             - parent_interface: Physical network interface on host
-            - network_mode: "dhcp" or "manual"
-            - ip_address: IP address (optional, for manual mode)
-            - subnet: Subnet mask (optional, for manual mode)
-            - gateway: Gateway address (optional, for manual mode)
-            - dns: List of DNS servers (optional, for manual mode)
+            - network_mode: "dhcp" or "static"
+            - ip: IP address (optional, for static mode)
+            - subnet: Subnet mask (optional, for static mode)
+            - gateway: Gateway address (optional, for static mode)
+            - dns: List of DNS servers (optional)
             - mac_address: MAC address (optional, auto-generated if not provided)
     """
 
@@ -241,15 +242,6 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
 
         save_vnic_configs(container_name, vnic_configs)
 
-        # Restart the container to ensure proper network connectivity
-        # Sometimes newly created containers don't have network access until restarted
-        set_step(container_name, "restarting_container")
-        log_info(
-            f"Restarting container {container_name} to ensure network connectivity"
-        )
-        container.restart()
-        log_info(f"Container {container_name} restarted successfully")
-
         log_info(
             f"Runtime container {container_name} created successfully with {len(vnic_configs)} virtual NICs"
         )
@@ -257,6 +249,42 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
         devices_buffer = get_devices_usage_buffer()
         devices_buffer.add_device(container_name)
         log_debug(f"Registered device {container_name} for usage data collection")
+
+        dhcp_vnics = []
+        for macvlan_network, vnic_config in macvlan_networks:
+            network_mode = vnic_config.get("network_mode", "dhcp")
+            if network_mode == "dhcp":
+                vnic_name = vnic_config.get("name")
+                mac_address = network_settings.get(macvlan_network.name, {}).get(
+                    "MacAddress"
+                )
+                if mac_address:
+                    dhcp_vnics.append((vnic_name, mac_address))
+                    log_debug(
+                        f"Will request DHCP for vNIC {vnic_name} (MAC: {mac_address})"
+                    )
+
+        if dhcp_vnics:
+            set_step(container_name, "starting_dhcp")
+            for vnic_name, mac_address in dhcp_vnics:
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.run_coroutine_threadsafe(
+                            network_event_listener.start_dhcp(
+                                container_name, vnic_name, mac_address
+                            ),
+                            loop,
+                        )
+                    else:
+                        asyncio.run(
+                            network_event_listener.start_dhcp(
+                                container_name, vnic_name, mac_address
+                            )
+                        )
+                    log_info(f"Requested DHCP for vNIC {vnic_name}")
+                except Exception as e:
+                    log_warning(f"Failed to request DHCP for vNIC {vnic_name}: {e}")
 
         clear_state(container_name)
 
