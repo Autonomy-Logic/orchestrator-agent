@@ -115,9 +115,17 @@ class DHCPManager:
             return {"success": False, "error": f"Invalid container PID: {container_pid}"}
         
         netns_path = f"/proc/{container_pid}/ns/net"
-        if not os.path.exists(netns_path):
-            logger.error(f"Network namespace not accessible: {netns_path}")
-            return {"success": False, "error": f"Container PID {container_pid} network namespace not accessible"}
+        try:
+            os.stat(netns_path)
+        except FileNotFoundError:
+            logger.error(f"Network namespace not found: {netns_path} - PID may be invalid or container not running")
+            return {"success": False, "error": f"Container PID {container_pid} network namespace not found"}
+        except PermissionError:
+            logger.error(f"Permission denied accessing {netns_path} - netmon may need CAP_SYS_ADMIN or CAP_SYS_PTRACE")
+            return {"success": False, "error": f"Permission denied accessing container PID {container_pid} network namespace"}
+        except OSError as e:
+            logger.error(f"OS error accessing {netns_path}: {e}")
+            return {"success": False, "error": f"Cannot access container PID {container_pid} network namespace: {e}"}
 
         logger.info(f"Looking for interface with MAC {mac_address} in container PID {container_pid}")
         interface = self._find_interface_by_mac(container_pid, mac_address)

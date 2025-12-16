@@ -172,6 +172,8 @@ docker run -d \
   --pid=host \
   --cap-add=NET_ADMIN \
   --cap-add=NET_RAW \
+  --cap-add=SYS_ADMIN \
+  --cap-add=SYS_PTRACE \
   --restart unless-stopped \
   -v "$SHARED_VOLUME:/var/orchestrator" \
   "$NETMON_IMAGE_NAME"
