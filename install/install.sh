@@ -174,6 +174,7 @@ docker run -d \
   --cap-add=NET_RAW \
   --restart unless-stopped \
   -v "$SHARED_VOLUME:/var/orchestrator" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
   "$NETMON_IMAGE_NAME"
 
 echo "[SUCCESS] Network monitor sidecar started"
