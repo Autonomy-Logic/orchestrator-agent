@@ -2,9 +2,65 @@ from . import CLIENTS
 from tools.operations_state import get_state
 from tools.logger import log_debug, log_info, log_warning, log_error
 from tools.docker_tools import CLIENT
+from tools.vnic_persistence import load_vnic_configs
 import docker
 from datetime import datetime
 from typing import Dict, Any
+
+
+def get_device_info(device_id: str) -> Dict[str, Any]:
+    """
+    Get basic information about a runtime container (CPU, memory limits).
+
+    Args:
+        device_id: The name/ID of the container
+
+    Returns:
+        Dictionary containing:
+        - cpu_count: Number of CPUs available to the container (or "N/A")
+        - memory_limit: Memory limit in MB (or "N/A")
+    """
+    try:
+        container = CLIENT.containers.get(device_id)
+        container.reload()
+
+        host_config = container.attrs.get("HostConfig", {})
+
+        nano_cpus = host_config.get("NanoCpus", 0)
+        if nano_cpus and nano_cpus > 0:
+            cpu_count = f"{nano_cpus / 1e9:.1f} vCPU"
+        else:
+            cpu_quota = host_config.get("CpuQuota", 0)
+            cpu_period = host_config.get("CpuPeriod", 100000)
+            if cpu_quota and cpu_quota > 0:
+                cpu_count = f"{cpu_quota / cpu_period:.1f} vCPU"
+            else:
+                cpu_count = "unlimited"
+
+        memory_limit = host_config.get("Memory", 0)
+        if memory_limit and memory_limit > 0:
+            memory_mb = memory_limit // (1024 * 1024)
+            memory_limit_str = f"{memory_mb} MB"
+        else:
+            memory_limit_str = "unlimited"
+
+        return {
+            "cpu_count": cpu_count,
+            "memory_limit": memory_limit_str,
+        }
+
+    except docker.errors.NotFound:
+        log_warning(f"Container {device_id} not found when getting device info")
+        return {
+            "cpu_count": "N/A",
+            "memory_limit": "N/A",
+        }
+    except Exception as e:
+        log_warning(f"Error getting device info for {device_id}: {e}")
+        return {
+            "cpu_count": "N/A",
+            "memory_limit": "N/A",
+        }
 
 
 def get_device_status_data(device_id: str) -> Dict[str, Any]:
@@ -96,11 +152,50 @@ def get_device_status_data(device_id: str) -> Dict[str, Any]:
         )
         networks = {}
 
+        # Load vNIC configs to check for DHCP-assigned IPs
+        vnic_configs = load_vnic_configs(device_id)
+        
+        # Build mappings for DHCP IP lookup by docker_network_name and parent_interface
+        dhcp_ips_by_network = {}
+        dhcp_ips_by_parent = {}
+        for vnic_config in vnic_configs:
+            if vnic_config.get("dhcp_ip"):
+                dhcp_info = {
+                    "ip": vnic_config["dhcp_ip"],
+                    "gateway": vnic_config.get("dhcp_gateway"),
+                }
+                # Map by docker network name (most reliable)
+                if vnic_config.get("docker_network_name"):
+                    dhcp_ips_by_network[vnic_config["docker_network_name"]] = dhcp_info
+                # Also map by parent_interface for fallback (network name starts with macvlan_{parent})
+                if vnic_config.get("parent_interface"):
+                    dhcp_ips_by_parent[vnic_config["parent_interface"]] = dhcp_info
+
         for network_name, network_info in network_settings.items():
+            ip_address = network_info.get("IPAddress")
+            gateway = network_info.get("Gateway")
+
+            # Override with DHCP-assigned IP if available
+            dhcp_info = None
+            if network_name in dhcp_ips_by_network:
+                dhcp_info = dhcp_ips_by_network[network_name]
+            else:
+                # Fallback: check if network name matches macvlan_{parent_interface}
+                for parent_interface, info in dhcp_ips_by_parent.items():
+                    if network_name.startswith(f"macvlan_{parent_interface}"):
+                        dhcp_info = info
+                        break
+            
+            if dhcp_info:
+                ip_address = dhcp_info["ip"]
+                if dhcp_info.get("gateway"):
+                    gateway = dhcp_info["gateway"]
+                log_info(f"Using DHCP IP {ip_address} for network {network_name}")
+
             networks[network_name] = {
-                "ip_address": network_info.get("IPAddress"),
+                "ip_address": ip_address,
                 "mac_address": network_info.get("MacAddress"),
-                "gateway": network_info.get("Gateway"),
+                "gateway": gateway,
             }
 
         internal_ip = None

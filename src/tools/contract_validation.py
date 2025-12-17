@@ -77,9 +77,9 @@ class OptionalType(BaseType):
 
 
 BASE_MESSAGE = {
-    "correlation_id": NumberType,
-    "action": StringType,
-    "requested_at": DateType,
+    "correlation_id": OptionalType(NumberType),
+    "action": OptionalType(StringType),
+    "requested_at": OptionalType(DateType),
 }
 
 BASE_DEVICE = {**BASE_MESSAGE, "device_id": StringType}

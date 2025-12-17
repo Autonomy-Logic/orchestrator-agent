@@ -1,20 +1,17 @@
 from use_cases.network_monitor.get_host_interfaces import get_host_interfaces_data
 from tools.contract_validation import (
-    NumberType,
+    BASE_MESSAGE,
     BooleanType,
     OptionalType,
-    StringType,
 )
 from . import topic, validate_message
 
 NAME = "get_host_interfaces"
 
 MESSAGE_TYPE = {
-    "correlation_id": NumberType,
+    **BASE_MESSAGE,
     "include_virtual": OptionalType(BooleanType),
     "detailed": OptionalType(BooleanType),
-    "action": OptionalType(StringType),
-    "requested_at": OptionalType(StringType),
 }
 
 
