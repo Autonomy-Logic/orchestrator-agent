@@ -52,12 +52,15 @@ def init(client):
 
         async def perform_self_destruct():
             """
-            Perform self-destruct in a separate task after returning the response.
-            This ensures the API call gets a response before the container is removed.
+            Perform self-destruct in a background thread after a small delay.
+
+            Uses asyncio.to_thread to run the blocking Docker operations in a
+            separate thread, keeping the event loop responsive so the orchestrator
+            can still respond to status polling requests during cleanup.
             """
             await asyncio.sleep(0.1)
             try:
-                self_destruct()
+                await asyncio.to_thread(self_destruct)
             except Exception as e:
                 log_error(f"Self-destruct failed: {e}")
 

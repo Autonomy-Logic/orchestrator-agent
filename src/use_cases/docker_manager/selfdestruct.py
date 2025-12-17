@@ -112,10 +112,14 @@ def _delete_netmon_container():
 
 def _delete_shared_volume():
     """
-    Delete the orchestrator-shared Docker volume.
-    Raises exception on failure to stop the self-destruct process.
+    Attempt to delete the orchestrator-shared Docker volume.
+
+    Note: This will likely fail because the orchestrator-agent container itself
+    mounts this volume. The volume will be orphaned after the orchestrator
+    container is removed and can be cleaned up with 'docker volume prune'.
+    This is a best-effort cleanup step that does NOT raise on failure.
     """
-    log_info(f"Deleting shared volume: {SHARED_VOLUME_NAME}")
+    log_info(f"Attempting to delete shared volume: {SHARED_VOLUME_NAME}")
 
     try:
         volume = CLIENT.volumes.get(SHARED_VOLUME_NAME)
@@ -124,8 +128,12 @@ def _delete_shared_volume():
     except docker.errors.NotFound:
         log_warning(f"Volume {SHARED_VOLUME_NAME} not found, may have been already deleted")
     except Exception as e:
-        log_error(f"Error removing volume {SHARED_VOLUME_NAME}: {e}")
-        raise
+        log_warning(
+            f"Could not remove volume {SHARED_VOLUME_NAME}: {e}. "
+            "This is expected since the orchestrator container mounts this volume. "
+            "The volume will be orphaned after self-destruct completes and can be "
+            "cleaned up with 'docker volume prune'."
+        )
 
 
 def _delete_orchestrator_container():
