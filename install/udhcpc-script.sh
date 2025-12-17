@@ -2,9 +2,21 @@
 # udhcpc script for autonomy-netmon DHCP management
 # This script is called by udhcpc when DHCP events occur
 # It configures the interface and writes lease info to a file for netmon to read
+#
+# Environment variables set by netmon:
+#   ORCH_DHCP_KEY - Unique key for this DHCP client (container_name:vnic_name with : replaced by _)
+#
+# If ORCH_DHCP_KEY is not set, falls back to interface name (legacy behavior)
 
 LEASE_DIR="/var/orchestrator/dhcp"
 mkdir -p "$LEASE_DIR"
+
+# Determine lease file name - use ORCH_DHCP_KEY if set, otherwise interface name
+if [ -n "$ORCH_DHCP_KEY" ]; then
+    LEASE_FILE="$LEASE_DIR/${ORCH_DHCP_KEY}.lease"
+else
+    LEASE_FILE="$LEASE_DIR/${interface}.lease"
+fi
 
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') | udhcpc | $1" >> /var/log/autonomy-netmon.log
@@ -17,7 +29,7 @@ case "$1" in
         ;;
 
     bound|renew)
-        log "Configuring interface $interface: IP=$ip, mask=$mask, router=$router"
+        log "Configuring interface $interface: IP=$ip, mask=$mask, router=$router (key=$ORCH_DHCP_KEY)"
         
         # Remove old addresses
         ip addr flush dev "$interface" 2>/dev/null
@@ -57,7 +69,6 @@ case "$1" in
         fi
         
         # Write lease information to file for netmon to read
-        LEASE_FILE="$LEASE_DIR/${interface}.lease"
         cat > "$LEASE_FILE" << EOF
 {
     "interface": "$interface",
@@ -77,8 +88,7 @@ EOF
         ;;
 
     leasefail|nak)
-        log "DHCP lease failed for interface $interface"
-        LEASE_FILE="$LEASE_DIR/${interface}.lease"
+        log "DHCP lease failed for interface $interface (key=$ORCH_DHCP_KEY)"
         cat > "$LEASE_FILE" << EOF
 {
     "interface": "$interface",

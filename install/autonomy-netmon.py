@@ -152,6 +152,14 @@ class DHCPManager:
         logger.info(f"Starting DHCP client for {key} on interface {interface} (MAC: {mac_address})")
 
         try:
+            # Create unique lease file key by replacing : with _ (filesystem-safe)
+            lease_key = key.replace(":", "_")
+            
+            # Set up environment with ORCH_DHCP_KEY for the udhcpc script
+            # This ensures each container:vnic gets its own lease file
+            env = os.environ.copy()
+            env["ORCH_DHCP_KEY"] = lease_key
+            
             # Run udhcpc inside the container's network namespace
             # -f: foreground, -i: interface, -s: script, -t: retries, -T: timeout
             proc = subprocess.Popen(
@@ -163,17 +171,19 @@ class DHCPManager:
                 ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                env=env,
             )
             self.dhcp_processes[key] = proc
 
-            # Store metadata for lease monitoring
-            lease_file = os.path.join(DHCP_LEASE_DIR, f"{interface}.lease")
+            # Store metadata for lease monitoring - use unique lease file per container:vnic
+            lease_file = os.path.join(DHCP_LEASE_DIR, f"{lease_key}.lease")
             self.last_lease_state[key] = {
                 "container_name": container_name,
                 "vnic_name": vnic_name,
                 "mac_address": mac_address,
                 "interface": interface,
                 "lease_file": lease_file,
+                "lease_key": lease_key,
                 "pid": container_pid,
             }
 
@@ -257,12 +267,15 @@ class DHCPManager:
                     if proc.poll() is not None:
                         logger.warning(f"DHCP client for {key} died, restarting...")
                         state = self.last_lease_state.get(key)
-                        if state:
+                        if state and state.get("pid"):
                             self.start_dhcp(
                                 state["container_name"],
                                 state["vnic_name"],
                                 state["mac_address"],
+                                state["pid"],
                             )
+                        else:
+                            logger.error(f"Cannot restart DHCP for {key}: missing PID in state")
 
             except Exception as e:
                 logger.error(f"Error in lease monitor: {e}")
