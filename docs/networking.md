@@ -9,7 +9,7 @@ MACVLAN networks allow runtime containers to appear as physical devices on the L
 - Network name pattern: `macvlan_<interface>_<subnet>` (e.g., `macvlan_eth0_192.168.1.0_24`)
 - Automatic subnet and gateway detection via network monitor cache
 - Reuses existing MACVLAN networks to avoid Docker pool overlap errors
-- Supports both DHCP and manual IP configuration
+- Supports both DHCP and static IP configuration
 
 **Network Creation Logic:**
 1. Check if MACVLAN network already exists for the interface/subnet
@@ -44,7 +44,7 @@ When the host moves between networks (e.g., DHCP renewal to different subnet), t
 5. For each affected runtime container:
    - Disconnects from old MACVLAN network
    - Creates/retrieves new MACVLAN network for new subnet
-   - Reconnects container with preserved IP/MAC settings (if manual mode)
+   - Reconnects container with preserved IP/MAC settings (if static mode)
 6. Container maintains connectivity with brief interruption
 
 **Implementation:**
@@ -60,10 +60,10 @@ Runtime containers support multiple virtual network interfaces (vNICs), each wit
 - `parent_interface` - Physical host interface (e.g., "eth0")
 - `parent_subnet` - Parent network subnet (optional, auto-detected if omitted)
 - `parent_gateway` - Parent network gateway (optional, auto-detected if omitted)
-- `network_mode` - "dhcp" or "manual"
-- `ip_address` - Static IP address (manual mode only)
-- `subnet` - Subnet mask (manual mode only)
-- `gateway` - Gateway address (manual mode only)
+- `network_mode` - "dhcp" or "static"
+- `ip` - Static IP address (static mode only)
+- `subnet` - Subnet mask (static mode only)
+- `gateway` - Gateway address (static mode only)
 - `dns` - List of DNS servers (optional)
 - `mac_address` - Custom MAC address (optional, auto-generated if omitted)
 
