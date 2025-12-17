@@ -400,7 +400,33 @@ class NetworkEventListener:
                                 network.connect(container, **connect_kwargs)
                                 log_info(f"Reconnected {container_name}:{vnic_name} with persisted MAC {persisted_mac}")
                                 
-                                # Refresh container info after reconnect
+                                # Wait for Docker to report the endpoint with correct MAC
+                                # This is necessary because network.connect() returns before
+                                # the interface is fully created in the container's netns
+                                max_wait_seconds = 5
+                                poll_interval = 0.2
+                                waited = 0
+                                mac_verified = False
+                                
+                                while waited < max_wait_seconds:
+                                    await asyncio.sleep(poll_interval)
+                                    waited += poll_interval
+                                    container.reload()
+                                    
+                                    net_info = container.attrs.get("NetworkSettings", {}).get("Networks", {}).get(docker_network_name, {})
+                                    reported_mac = net_info.get("MacAddress", "")
+                                    
+                                    if reported_mac and reported_mac.lower() == persisted_mac.lower():
+                                        log_info(f"MAC enforcement verified for {container_name}:{vnic_name} after {waited:.1f}s")
+                                        mac_verified = True
+                                        break
+                                    
+                                    log_debug(f"Waiting for MAC enforcement... reported={reported_mac}, expected={persisted_mac}")
+                                
+                                if not mac_verified:
+                                    log_warning(f"MAC enforcement may not have taken effect for {container_name}:{vnic_name} after {max_wait_seconds}s")
+                                
+                                # Refresh container info after waiting
                                 container.reload()
                                 container_pid = container.attrs.get("State", {}).get("Pid", 0)
                                 mac_address = persisted_mac
@@ -427,6 +453,11 @@ class NetworkEventListener:
                             log_info(f"DHCP resync initiated for {container_name}:{vnic_name}")
                         else:
                             log_warning(f"DHCP resync failed for {container_name}:{vnic_name}: {result.get('error')}")
+                            # Clear stale DHCP IP since resync failed - status should reflect reality
+                            if vnic_config.get("dhcp_ip"):
+                                log_info(f"Clearing stale DHCP IP {vnic_config['dhcp_ip']} for {container_name}:{vnic_name}")
+                                vnic_config.pop("dhcp_ip", None)
+                                vnic_config.pop("dhcp_gateway", None)
                         
                     except docker.errors.NotFound:
                         log_debug(f"Container {container_name} not found, skipping DHCP resync")

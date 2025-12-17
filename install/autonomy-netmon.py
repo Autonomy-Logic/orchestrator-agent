@@ -128,10 +128,26 @@ class DHCPManager:
             return {"success": False, "error": f"Cannot access container PID {container_pid} network namespace: {e}"}
 
         logger.info(f"Looking for interface with MAC {mac_address} in container PID {container_pid}")
-        interface = self._find_interface_by_mac(container_pid, mac_address)
+        
+        # Retry interface discovery with backoff - interface may not be immediately
+        # visible after network.connect() due to kernel/Docker timing
+        max_retries = 10
+        retry_delay = 0.3  # seconds
+        interface = None
+        
+        for attempt in range(max_retries):
+            interface = self._find_interface_by_mac(container_pid, mac_address)
+            if interface:
+                if attempt > 0:
+                    logger.info(f"Found interface {interface} after {attempt + 1} attempts")
+                break
+            if attempt < max_retries - 1:
+                logger.debug(f"Interface with MAC {mac_address} not found, retrying ({attempt + 1}/{max_retries})...")
+                time.sleep(retry_delay)
+        
         if not interface:
-            logger.error(f"Interface with MAC {mac_address} not found in container PID {container_pid}")
-            return {"success": False, "error": f"Interface with MAC {mac_address} not found in container"}
+            logger.error(f"Interface with MAC {mac_address} not found in container PID {container_pid} after {max_retries} attempts")
+            return {"success": False, "error": f"Interface with MAC {mac_address} not found in container after {max_retries} retries"}
 
         logger.info(f"Starting DHCP client for {key} on interface {interface} (MAC: {mac_address})")
 
