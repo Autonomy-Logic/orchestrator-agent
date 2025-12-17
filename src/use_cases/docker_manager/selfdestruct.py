@@ -5,10 +5,22 @@ from tools.vnic_persistence import delete_vnic_configs
 from tools.devices_usage_buffer import get_devices_usage_buffer
 from tools.operations_state import set_deleting, set_step, set_error
 import docker
+import re
 
 NETMON_CONTAINER_NAME = "autonomy_netmon"
 SHARED_VOLUME_NAME = "orchestrator-shared"
 ORCHESTRATOR_STATUS_ID = "__orchestrator__"
+
+# Pattern to match internal networks created by orchestrator (UUID_internal)
+# UUID format: 8-4-4-4-12 hex characters
+INTERNAL_NETWORK_PATTERN = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_internal$",
+    re.IGNORECASE,
+)
+
+# Pattern to match MACVLAN networks created by orchestrator
+# Format: macvlan_{interface}_{subnet}_{mask}
+MACVLAN_NETWORK_PATTERN = re.compile(r"^macvlan_[a-zA-Z0-9]+_\d+\.\d+\.\d+\.\d+_\d+$")
 
 
 def _delete_runtime_container_for_selfdestruct(container_name: str):
@@ -87,6 +99,65 @@ def _delete_all_runtime_containers():
             del CLIENTS[container_name]
 
     log_info("All runtime containers deleted successfully")
+
+
+def _cleanup_orchestrator_networks():
+    """
+    Clean up all orchestrator-created networks that are no longer in use.
+
+    This removes:
+    - Internal bridge networks matching UUID_internal pattern
+    - MACVLAN networks matching macvlan_{interface}_{subnet}_{mask} pattern
+
+    Networks with connected containers are skipped to avoid disrupting other applications.
+    This is a best-effort cleanup that does NOT raise on failure.
+    """
+    log_info("Cleaning up orchestrator-created networks...")
+
+    try:
+        all_networks = CLIENT.networks.list()
+    except Exception as e:
+        log_warning(f"Could not list networks for cleanup: {e}")
+        return
+
+    networks_removed = 0
+    networks_skipped = 0
+
+    for network in all_networks:
+        network_name = network.name
+
+        is_internal = INTERNAL_NETWORK_PATTERN.match(network_name)
+        is_macvlan = MACVLAN_NETWORK_PATTERN.match(network_name)
+
+        if not is_internal and not is_macvlan:
+            continue
+
+        try:
+            network.reload()
+            connected_containers = network.attrs.get("Containers", {})
+
+            if connected_containers:
+                log_warning(
+                    f"Network {network_name} has {len(connected_containers)} connected "
+                    f"container(s), skipping removal"
+                )
+                networks_skipped += 1
+                continue
+
+            log_info(f"Removing unused network: {network_name}")
+            network.remove()
+            networks_removed += 1
+            log_info(f"Network {network_name} removed successfully")
+
+        except docker.errors.NotFound:
+            log_warning(f"Network {network_name} not found, may have been already deleted")
+        except Exception as e:
+            log_warning(f"Could not remove network {network_name}: {e}")
+            networks_skipped += 1
+
+    log_info(
+        f"Network cleanup complete: {networks_removed} removed, {networks_skipped} skipped"
+    )
 
 
 def _delete_netmon_container():
@@ -184,12 +255,14 @@ def self_destruct():
 
     Cleanup order:
     1. Delete all managed runtime containers (vPLCs) and their networks
-    2. Delete the autonomy-netmon sidecar container
-    3. Delete the orchestrator-shared volume
-    4. Delete the orchestrator-agent container itself (last)
+    2. Clean up orphaned networks (internal and MACVLAN)
+    3. Delete the autonomy-netmon sidecar container
+    4. Delete the orchestrator-shared volume (best-effort)
+    5. Delete the orchestrator-agent container itself (last)
 
     Updates operations_state with progress steps:
-    - "starting" -> "deleting_runtimes" -> "deleting_netmon" -> "deleting_volume" -> "removing_self"
+    - "starting" -> "deleting_runtimes" -> "cleaning_networks" -> "deleting_netmon"
+      -> "deleting_volume" -> "removing_self"
 
     On failure, sets error state and raises exception.
     The orchestrator-agent container removal is only attempted after all other
@@ -200,6 +273,9 @@ def self_destruct():
     try:
         set_step(ORCHESTRATOR_STATUS_ID, "deleting_runtimes")
         _delete_all_runtime_containers()
+
+        set_step(ORCHESTRATOR_STATUS_ID, "cleaning_networks")
+        _cleanup_orchestrator_networks()
 
         set_step(ORCHESTRATOR_STATUS_ID, "deleting_netmon")
         _delete_netmon_container()
