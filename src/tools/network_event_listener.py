@@ -502,7 +502,6 @@ class NetworkEventListener:
                                 "parent_interface": parent_interface,
                                 "next_retry_at": time.time() + DHCP_RETRY_BACKOFF_BASE,
                                 "retry_count": 0,
-                                "mac_enforced": bool(persisted_mac and persisted_mac.lower() != actual_mac.lower()),
                             }
                             log_info(f"Added {key} to pending DHCP resyncs for background retry")
                         

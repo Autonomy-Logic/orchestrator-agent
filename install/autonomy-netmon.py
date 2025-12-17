@@ -18,7 +18,7 @@ import subprocess
 import threading
 import select
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import ipaddress
 
 try:
@@ -93,7 +93,7 @@ class DHCPManager:
 
     def start_dhcp(
         self, container_name: str, vnic_name: str, mac_address: str, container_pid: int
-    ) -> Dict[str, any]:
+    ) -> Dict[str, Any]:
         """Start a DHCP client for a container's vNIC.
         
         Args:
@@ -194,7 +194,7 @@ class DHCPManager:
             logger.error(f"Failed to start DHCP client for {key}: {e}")
             return {"success": False, "error": str(e)}
 
-    def stop_dhcp(self, key: str) -> Dict[str, any]:
+    def stop_dhcp(self, key: str) -> Dict[str, Any]:
         """Stop a DHCP client by key (container_name:vnic_name)."""
         if key not in self.dhcp_processes:
             return {"success": False, "error": f"No DHCP client found for {key}"}
@@ -282,7 +282,7 @@ class DHCPManager:
 
             time.sleep(2)
 
-    def get_status(self) -> Dict[str, any]:
+    def get_status(self) -> Dict[str, Any]:
         """Get status of all DHCP clients."""
         status = {}
         for key, proc in self.dhcp_processes.items():

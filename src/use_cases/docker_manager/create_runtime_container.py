@@ -19,14 +19,15 @@ def _generate_mac_address() -> str:
     """
     Generate a locally-administered unicast MAC address.
     
-    Locally-administered addresses have the second-least-significant bit of the
-    first octet set to 1 (0x02). This ensures the MAC won't conflict with
-    globally-assigned manufacturer MACs.
+    Locally-administered addresses have bit 1 (second-least-significant) of the
+    first octet set to 1, and bit 0 (least-significant) set to 0 for unicast.
+    This ensures the MAC won't conflict with globally-assigned manufacturer MACs.
     
-    Format: x2:xx:xx:xx:xx:xx where x is a random hex digit
+    The first octet will be one of: 0x02, 0x06, 0x0A, 0x0E, 0x12, etc.
+    (any even number with bit 1 set)
     """
-    # First octet: 0x02, 0x06, 0x0A, 0x0E, etc. (locally administered, unicast)
-    # Using 0x02 as the base and OR with random value
+    # Generate random value, shift left by 2 to preserve bits 0-1, then set bit 1
+    # This produces values like 0x02, 0x06, 0x0A, 0x0E, 0x12, etc.
     first_octet = 0x02 | (random.randint(0, 63) << 2)
     
     # Generate remaining 5 octets randomly
