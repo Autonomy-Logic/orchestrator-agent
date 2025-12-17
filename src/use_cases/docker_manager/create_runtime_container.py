@@ -12,6 +12,27 @@ from tools.devices_usage_buffer import get_devices_usage_buffer
 from tools.network_event_listener import network_event_listener
 import docker
 import asyncio
+import random
+
+
+def _generate_mac_address() -> str:
+    """
+    Generate a locally-administered unicast MAC address.
+    
+    Locally-administered addresses have the second-least-significant bit of the
+    first octet set to 1 (0x02). This ensures the MAC won't conflict with
+    globally-assigned manufacturer MACs.
+    
+    Format: x2:xx:xx:xx:xx:xx where x is a random hex digit
+    """
+    # First octet: 0x02, 0x06, 0x0A, 0x0E, etc. (locally administered, unicast)
+    # Using 0x02 as the base and OR with random value
+    first_octet = 0x02 | (random.randint(0, 63) << 2)
+    
+    # Generate remaining 5 octets randomly
+    octets = [first_octet] + [random.randint(0, 255) for _ in range(5)]
+    
+    return ":".join(f"{octet:02x}" for octet in octets)
 
 
 def _validate_vnic_configs(vnic_configs: list) -> tuple[bool, str]:
@@ -174,10 +195,16 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
                     connect_kwargs["ipv4_address"] = ip_address
                     log_debug(f"Configured manual IP {ip_address} for vNIC {vnic_name}")
 
+            # Generate MAC address upfront if user didn't provide one.
+            # This ensures MAC stability across reboots and reconnections.
             mac_address = vnic_config.get("mac_address")
-            if mac_address:
-                connect_kwargs["mac_address"] = mac_address
-                log_debug(f"Configured MAC address {mac_address} for vNIC {vnic_name}")
+            if not mac_address:
+                mac_address = _generate_mac_address()
+                vnic_config["mac_address"] = mac_address
+                log_info(f"Generated MAC address {mac_address} for vNIC {vnic_name}")
+            else:
+                log_debug(f"Using user-provided MAC address {mac_address} for vNIC {vnic_name}")
+            connect_kwargs["mac_address"] = mac_address
 
             try:
                 macvlan_network.connect(container, **connect_kwargs)

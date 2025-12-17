@@ -360,24 +360,63 @@ class NetworkEventListener:
                             log_warning(f"Container {container_name} has invalid PID, skipping DHCP resync")
                             continue
                         
-                        # Get fresh MAC address from Docker for the macvlan network
+                        # Get actual MAC address from Docker for the macvlan network
                         network_settings = container.attrs.get("NetworkSettings", {}).get("Networks", {})
-                        mac_address = None
+                        actual_mac = None
                         docker_network_name = None
                         
                         for net_name, net_info in network_settings.items():
                             if net_name.startswith(f"macvlan_{parent_interface}"):
-                                mac_address = net_info.get("MacAddress")
+                                actual_mac = net_info.get("MacAddress")
                                 docker_network_name = net_name
                                 break
                         
-                        if not mac_address:
+                        if not actual_mac:
                             log_warning(f"Could not find MAC address for {container_name}:{vnic_name}, skipping DHCP resync")
                             continue
                         
-                        # Update vnic_config with fresh MAC and network name
-                        vnic_config["mac_address"] = mac_address
-                        if docker_network_name:
+                        # Get persisted MAC address (authoritative for stability)
+                        persisted_mac = vnic_config.get("mac_address")
+                        
+                        # Check for MAC mismatch and enforce persisted MAC if needed
+                        if persisted_mac and persisted_mac.lower() != actual_mac.lower():
+                            log_warning(
+                                f"MAC mismatch for {container_name}:{vnic_name}: "
+                                f"persisted={persisted_mac}, actual={actual_mac}. "
+                                f"Enforcing persisted MAC by reconnecting..."
+                            )
+                            # Disconnect and reconnect with persisted MAC to enforce stability
+                            try:
+                                network = CLIENT.networks.get(docker_network_name)
+                                network.disconnect(container, force=True)
+                                
+                                connect_kwargs = {"mac_address": persisted_mac}
+                                network_mode = vnic_config.get("network_mode", "dhcp")
+                                if network_mode == "static":
+                                    ip_address = vnic_config.get("ip")
+                                    if ip_address:
+                                        connect_kwargs["ipv4_address"] = ip_address.split("/")[0]
+                                
+                                network.connect(container, **connect_kwargs)
+                                log_info(f"Reconnected {container_name}:{vnic_name} with persisted MAC {persisted_mac}")
+                                
+                                # Refresh container info after reconnect
+                                container.reload()
+                                container_pid = container.attrs.get("State", {}).get("Pid", 0)
+                                mac_address = persisted_mac
+                            except Exception as e:
+                                log_error(f"Failed to enforce MAC for {container_name}:{vnic_name}: {e}")
+                                # Fall back to actual MAC if enforcement fails
+                                mac_address = actual_mac
+                        else:
+                            mac_address = actual_mac
+                            # Only fill MAC if missing, never overwrite existing
+                            if not persisted_mac:
+                                vnic_config["mac_address"] = actual_mac
+                                log_info(f"Stored MAC address {actual_mac} for {container_name}:{vnic_name}")
+                        
+                        # Update docker_network_name if missing
+                        if docker_network_name and not vnic_config.get("docker_network_name"):
                             vnic_config["docker_network_name"] = docker_network_name
                         
                         log_info(f"Starting DHCP for {container_name}:{vnic_name} (MAC: {mac_address}, PID: {container_pid})")
@@ -504,6 +543,11 @@ class NetworkEventListener:
                             mac_address = vnic_config.get("mac_address")
                             if mac_address:
                                 connect_kwargs["mac_address"] = mac_address
+                            else:
+                                log_warning(
+                                    f"No MAC address found for {container_name}:{vnic_config.get('name')}. "
+                                    f"Docker will generate a new MAC, which may break MAC stability."
+                                )
 
                             new_network.connect(container, **connect_kwargs)
                             log_info(
