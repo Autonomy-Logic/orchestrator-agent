@@ -3,10 +3,12 @@ from tools.logger import log_info, log_warning, log_error
 from tools.docker_tools import CLIENT
 from tools.vnic_persistence import delete_vnic_configs
 from tools.devices_usage_buffer import get_devices_usage_buffer
+from tools.operations_state import set_deleting, set_step, set_error
 import docker
 
 NETMON_CONTAINER_NAME = "autonomy_netmon"
 SHARED_VOLUME_NAME = "orchestrator-shared"
+ORCHESTRATOR_STATUS_ID = "__orchestrator__"
 
 
 def _delete_runtime_container_for_selfdestruct(container_name: str):
@@ -152,6 +154,22 @@ def _delete_orchestrator_container():
         raise
 
 
+def start_self_destruct() -> bool:
+    """
+    Initialize the self-destruct operation by setting the tracking state.
+
+    Returns:
+        True if self-destruct was started successfully
+        False if a self-destruct operation is already in progress
+    """
+    if not set_deleting(ORCHESTRATOR_STATUS_ID):
+        log_warning("Self-destruct operation already in progress")
+        return False
+
+    set_step(ORCHESTRATOR_STATUS_ID, "starting")
+    return True
+
+
 def self_destruct():
     """
     Self-destruct the orchestrator by removing all managed resources.
@@ -162,16 +180,29 @@ def self_destruct():
     3. Delete the orchestrator-shared volume
     4. Delete the orchestrator-agent container itself (last)
 
-    Raises exception on any failure to allow the caller to return an error response.
+    Updates operations_state with progress steps:
+    - "starting" -> "deleting_runtimes" -> "deleting_netmon" -> "deleting_volume" -> "removing_self"
+
+    On failure, sets error state and raises exception.
     The orchestrator-agent container removal is only attempted after all other
     cleanup steps succeed.
     """
     log_info("Self-destructing orchestrator...")
 
-    _delete_all_runtime_containers()
+    try:
+        set_step(ORCHESTRATOR_STATUS_ID, "deleting_runtimes")
+        _delete_all_runtime_containers()
 
-    _delete_netmon_container()
+        set_step(ORCHESTRATOR_STATUS_ID, "deleting_netmon")
+        _delete_netmon_container()
 
-    _delete_shared_volume()
+        set_step(ORCHESTRATOR_STATUS_ID, "deleting_volume")
+        _delete_shared_volume()
 
-    _delete_orchestrator_container()
+        set_step(ORCHESTRATOR_STATUS_ID, "removing_self")
+        _delete_orchestrator_container()
+
+    except Exception as e:
+        log_error(f"Self-destruct failed: {e}")
+        set_error(ORCHESTRATOR_STATUS_ID, str(e), "self_destruct")
+        raise

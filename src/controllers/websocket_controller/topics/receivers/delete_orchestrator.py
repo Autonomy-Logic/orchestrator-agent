@@ -1,7 +1,11 @@
 from tools.logger import log_warning, log_error, log_info
 from tools.contract_validation import BASE_MESSAGE
 from . import topic, validate_message
-from use_cases.docker_manager.selfdestruct import self_destruct
+from use_cases.docker_manager.selfdestruct import (
+    self_destruct,
+    start_self_destruct,
+    ORCHESTRATOR_STATUS_ID,
+)
 import asyncio
 
 NAME = "delete_orchestrator"
@@ -21,12 +25,13 @@ def init(client):
     3. Deletes the orchestrator-shared volume
     4. Deletes the orchestrator-agent container itself (last)
 
-    The response is returned BEFORE the self-destruct begins. If any cleanup step
-    fails, the self-destruct stops and an error is logged (but the response has
-    already been sent).
+    The response is returned IMMEDIATELY after validation passes. The actual
+    cleanup runs in a background task. Use get_device_status with
+    device_id="__orchestrator__" to poll for progress.
 
     Returns:
-        On success: {"correlation_id": ..., "status": "success"}
+        On accepted: {"correlation_id": ..., "status": "accepted", "poll_device_id": "__orchestrator__"}
+        On already in progress: {"correlation_id": ..., "status": "error", "error": "..."}
         On validation error: Standard validation error response
     """
 
@@ -36,12 +41,21 @@ def init(client):
         correlation_id = message.get("correlation_id")
         log_warning("Received delete_orchestrator command - initiating self-destruct...")
 
+        if not start_self_destruct():
+            log_error("Self-destruct operation already in progress")
+            return {
+                "action": NAME,
+                "correlation_id": correlation_id,
+                "status": "error",
+                "error": "Self-destruct operation already in progress",
+            }
+
         async def perform_self_destruct():
             """
             Perform self-destruct in a separate task after returning the response.
             This ensures the API call gets a response before the container is removed.
             """
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.1)
             try:
                 self_destruct()
             except Exception as e:
@@ -49,9 +63,11 @@ def init(client):
 
         asyncio.create_task(perform_self_destruct())
 
-        log_info("Self-destruct scheduled, returning success response")
+        log_info("Self-destruct scheduled, returning accepted response")
         return {
             "action": NAME,
             "correlation_id": correlation_id,
-            "status": "success",
+            "status": "accepted",
+            "message": "Self-destruct initiated. Poll get_device_status with device_id='__orchestrator__' for progress.",
+            "poll_device_id": ORCHESTRATOR_STATUS_ID,
         }
