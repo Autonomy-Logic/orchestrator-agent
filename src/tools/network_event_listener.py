@@ -446,11 +446,24 @@ class NetworkEventListener:
                                 
                                 if not mac_verified:
                                     log_warning(f"MAC enforcement may not have taken effect for {container_name}:{vnic_name} after {max_wait_seconds}s")
+                                    # Fall back to actual MAC since enforcement failed
+                                    # This ensures DHCP can still work even if MAC stability is lost
+                                    container.reload()
+                                    net_info = container.attrs.get("NetworkSettings", {}).get("Networks", {}).get(docker_network_name, {})
+                                    fallback_mac = net_info.get("MacAddress", "")
+                                    if fallback_mac:
+                                        log_warning(f"Using actual MAC {fallback_mac} instead of persisted {persisted_mac} for {container_name}:{vnic_name}")
+                                        mac_address = fallback_mac
+                                        # Update persisted MAC to match reality so future resyncs don't fail
+                                        vnic_config["mac_address"] = fallback_mac
+                                    else:
+                                        mac_address = persisted_mac
+                                else:
+                                    mac_address = persisted_mac
                                 
                                 # Refresh container info after waiting
                                 container.reload()
                                 container_pid = container.attrs.get("State", {}).get("Pid", 0)
-                                mac_address = persisted_mac
                             except Exception as e:
                                 log_error(f"Failed to enforce MAC for {container_name}:{vnic_name}: {e}")
                                 # Fall back to actual MAC if enforcement fails
