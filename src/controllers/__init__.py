@@ -4,6 +4,7 @@ from .websocket_controller import (
 )
 from tools.logger import *
 from tools.network_event_listener import network_event_listener
+from tools.docker_event_listener import docker_event_listener
 
 
 async def main_websocket_task(server_url):
@@ -15,6 +16,9 @@ async def main_websocket_task(server_url):
 
     await network_event_listener.start()
     log_info("Network event listener started")
+
+    await docker_event_listener.start()
+    log_info("Docker event listener started")
 
     await client.connect(
         f"https://{server_url}",
