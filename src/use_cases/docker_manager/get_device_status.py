@@ -154,7 +154,7 @@ def get_device_status_data(device_id: str) -> Dict[str, Any]:
 
         # Load vNIC configs to check for DHCP-assigned IPs
         vnic_configs = load_vnic_configs(device_id)
-        
+
         # Build mappings for DHCP IP lookup by docker_network_name and parent_interface
         dhcp_ips_by_network = {}
         dhcp_ips_by_parent = {}
@@ -172,6 +172,15 @@ def get_device_status_data(device_id: str) -> Dict[str, Any]:
                     dhcp_ips_by_parent[vnic_config["parent_interface"]] = dhcp_info
 
         for network_name, network_info in network_settings.items():
+            # Skip internal Docker networks (used for orchestrator-runtime communication)
+            # These networks are named {container_name}_internal and should not be
+            # exposed to users as they are only for internal container communication
+            if network_name.endswith("_internal"):
+                log_debug(
+                    f"Skipping internal network {network_name} from device status"
+                )
+                continue
+
             ip_address = network_info.get("IPAddress")
             gateway = network_info.get("Gateway")
 
@@ -185,7 +194,7 @@ def get_device_status_data(device_id: str) -> Dict[str, Any]:
                     if network_name.startswith(f"macvlan_{parent_interface}"):
                         dhcp_info = info
                         break
-            
+
             if dhcp_info:
                 ip_address = dhcp_info["ip"]
                 if dhcp_info.get("gateway"):
