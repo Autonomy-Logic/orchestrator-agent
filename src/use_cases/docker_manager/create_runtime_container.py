@@ -151,12 +151,47 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
         set_step(container_name, "creating_container")
         log_info(f"Creating container {container_name}")
 
+        networking_config = {}
+        api_version = CLIENT.api.api_version
+
+        for macvlan_network, vnic_config in macvlan_networks:
+            vnic_name = vnic_config.get("name")
+            network_mode = vnic_config.get("network_mode", "dhcp")
+
+            endpoint_kwargs = {}
+
+            if network_mode == "static":
+                ip_address = vnic_config.get("ip")
+                if ip_address:
+                    ip_address = ip_address.split("/")[0]
+                    endpoint_kwargs["ipv4_address"] = ip_address
+                    log_debug(f"Configured manual IP {ip_address} for vNIC {vnic_name}")
+
+            mac_address = vnic_config.get("mac_address")
+            if not mac_address:
+                mac_address = _generate_mac_address()
+                vnic_config["mac_address"] = mac_address
+                log_info(f"Generated MAC address {mac_address} for vNIC {vnic_name}")
+            else:
+                log_debug(
+                    f"Using user-provided MAC address {mac_address} for vNIC {vnic_name}"
+                )
+            endpoint_kwargs["mac_address"] = mac_address
+
+            networking_config[macvlan_network.name] = docker.types.EndpointConfig(
+                version=api_version, **endpoint_kwargs
+            )
+            log_debug(
+                f"Prepared EndpointConfig for MACVLAN network {macvlan_network.name}"
+            )
+
         create_kwargs = {
             "image": image_name,
             "name": container_name,
             "detach": True,
             "restart_policy": {"Name": "always"},
             "network": internal_network.name,
+            "networking_config": networking_config,
             # Real-time scheduling capabilities for PLC deterministic execution
             # SYS_NICE: Required for sched_setscheduler(SCHED_FIFO) in the PLC core
             "cap_add": ["SYS_NICE"],
@@ -178,45 +213,6 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
 
         container.start()
         log_info(f"Container {container_name} created and started successfully")
-
-        set_step(container_name, "connecting_networks")
-        for macvlan_network, vnic_config in macvlan_networks:
-            vnic_name = vnic_config.get("name")
-            network_mode = vnic_config.get("network_mode", "dhcp")
-
-            connect_kwargs = {}
-
-            if network_mode == "static":
-                ip_address = vnic_config.get("ip")
-                if ip_address:
-                    # Docker's network.connect() expects ipv4_address without CIDR prefix
-                    # (e.g., '192.168.1.10' not '192.168.1.10/24'). Normalize defensively
-                    # in case the user mistakenly provides a CIDR notation.
-                    ip_address = ip_address.split("/")[0]
-                    connect_kwargs["ipv4_address"] = ip_address
-                    log_debug(f"Configured manual IP {ip_address} for vNIC {vnic_name}")
-
-            # Generate MAC address upfront if user didn't provide one.
-            # This ensures MAC stability across reboots and reconnections.
-            mac_address = vnic_config.get("mac_address")
-            if not mac_address:
-                mac_address = _generate_mac_address()
-                vnic_config["mac_address"] = mac_address
-                log_info(f"Generated MAC address {mac_address} for vNIC {vnic_name}")
-            else:
-                log_debug(f"Using user-provided MAC address {mac_address} for vNIC {vnic_name}")
-            connect_kwargs["mac_address"] = mac_address
-
-            try:
-                macvlan_network.connect(container, **connect_kwargs)
-                log_info(
-                    f"Connected container {container_name} to MACVLAN network {macvlan_network.name}"
-                )
-            except docker.errors.APIError as e:
-                log_error(
-                    f"Failed to connect container {container_name} to MACVLAN network {macvlan_network.name}: {e}"
-                )
-                raise
 
         try:
             main_container = get_self_container()
