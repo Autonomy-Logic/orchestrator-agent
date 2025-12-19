@@ -216,7 +216,7 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
                 version=api_version, **endpoint_kwargs
             )
             ## Networking config for internal network has to exist otherwise
-            ## docker SDK will set it to None beacuse "network" param gets the internal_network name
+            ## docker SDK will set it to None because "network" param gets the internal_network name
             networking_config[internal_network.name] = docker.types.EndpointConfig(
                 version=api_version
             )
