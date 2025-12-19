@@ -70,7 +70,9 @@ class DHCPManager:
             self.lease_monitor_thread.join(timeout=2)
         logger.info("DHCP manager stopped")
 
-    def _find_interface_by_mac(self, container_pid: int, mac_address: str) -> Optional[str]:
+    def _find_interface_by_mac(
+        self, container_pid: int, mac_address: str
+    ) -> Optional[str]:
         """Find the interface name inside a container's netns by MAC address."""
         try:
             result = subprocess.run(
@@ -95,7 +97,7 @@ class DHCPManager:
         self, container_name: str, vnic_name: str, mac_address: str, container_pid: int
     ) -> Dict[str, Any]:
         """Start a DHCP client for a container's vNIC.
-        
+
         Args:
             container_name: Name of the container
             vnic_name: Name of the virtual NIC
@@ -112,62 +114,101 @@ class DHCPManager:
 
         if not container_pid or container_pid <= 0:
             logger.error(f"Invalid container PID: {container_pid}")
-            return {"success": False, "error": f"Invalid container PID: {container_pid}"}
-        
+            return {
+                "success": False,
+                "error": f"Invalid container PID: {container_pid}",
+            }
+
         netns_path = f"/proc/{container_pid}/ns/net"
         try:
             os.stat(netns_path)
         except FileNotFoundError:
-            logger.error(f"Network namespace not found: {netns_path} - PID may be invalid or container not running")
-            return {"success": False, "error": f"Container PID {container_pid} network namespace not found"}
+            logger.error(
+                f"Network namespace not found: {netns_path} - PID may be invalid or container not running"
+            )
+            return {
+                "success": False,
+                "error": f"Container PID {container_pid} network namespace not found",
+            }
         except PermissionError:
-            logger.error(f"Permission denied accessing {netns_path} - netmon may need CAP_SYS_ADMIN or CAP_SYS_PTRACE")
-            return {"success": False, "error": f"Permission denied accessing container PID {container_pid} network namespace"}
+            logger.error(
+                f"Permission denied accessing {netns_path} - netmon may need CAP_SYS_ADMIN or CAP_SYS_PTRACE"
+            )
+            return {
+                "success": False,
+                "error": f"Permission denied accessing container PID {container_pid} network namespace",
+            }
         except OSError as e:
             logger.error(f"OS error accessing {netns_path}: {e}")
-            return {"success": False, "error": f"Cannot access container PID {container_pid} network namespace: {e}"}
+            return {
+                "success": False,
+                "error": f"Cannot access container PID {container_pid} network namespace: {e}",
+            }
 
-        logger.info(f"Looking for interface with MAC {mac_address} in container PID {container_pid}")
-        
+        logger.info(
+            f"Looking for interface with MAC {mac_address} in container PID {container_pid}"
+        )
+
         # Retry interface discovery with backoff - interface may not be immediately
         # visible after network.connect() due to kernel/Docker timing
         max_retries = 10
         retry_delay = 0.3  # seconds
         interface = None
-        
+
         for attempt in range(max_retries):
             interface = self._find_interface_by_mac(container_pid, mac_address)
             if interface:
                 if attempt > 0:
-                    logger.info(f"Found interface {interface} after {attempt + 1} attempts")
+                    logger.info(
+                        f"Found interface {interface} after {attempt + 1} attempts"
+                    )
                 break
             if attempt < max_retries - 1:
-                logger.debug(f"Interface with MAC {mac_address} not found, retrying ({attempt + 1}/{max_retries})...")
+                logger.debug(
+                    f"Interface with MAC {mac_address} not found, retrying ({attempt + 1}/{max_retries})..."
+                )
                 time.sleep(retry_delay)
-        
-        if not interface:
-            logger.error(f"Interface with MAC {mac_address} not found in container PID {container_pid} after {max_retries} attempts")
-            return {"success": False, "error": f"Interface with MAC {mac_address} not found in container after {max_retries} retries"}
 
-        logger.info(f"Starting DHCP client for {key} on interface {interface} (MAC: {mac_address})")
+        if not interface:
+            logger.error(
+                f"Interface with MAC {mac_address} not found in container PID {container_pid} after {max_retries} attempts"
+            )
+            return {
+                "success": False,
+                "error": f"Interface with MAC {mac_address} not found in container after {max_retries} retries",
+            }
+
+        logger.info(
+            f"Starting DHCP client for {key} on interface {interface} (MAC: {mac_address})"
+        )
 
         try:
             # Create unique lease file key by replacing : with _ (filesystem-safe)
             lease_key = key.replace(":", "_")
-            
+
             # Set up environment with ORCH_DHCP_KEY for the udhcpc script
             # This ensures each container:vnic gets its own lease file
             env = os.environ.copy()
             env["ORCH_DHCP_KEY"] = lease_key
-            
+
             # Run udhcpc inside the container's network namespace
             # -f: foreground, -i: interface, -s: script, -t: retries, -T: timeout
             proc = subprocess.Popen(
                 [
-                    "nsenter", "-t", str(container_pid), "-n",
-                    "udhcpc", "-f", "-i", interface,
-                    "-s", "/usr/share/udhcpc/default.script",
-                    "-t", "5", "-T", "3",
+                    "nsenter",
+                    "-t",
+                    str(container_pid),
+                    "-n",
+                    "udhcpc",
+                    "-f",
+                    "-i",
+                    interface,
+                    "-s",
+                    "/usr/share/udhcpc/default.script",
+                    "-t",
+                    "5",
+                    "-T",
+                    "3",
                 ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -235,9 +276,7 @@ class DHCPManager:
 
                         if current_ip and current_ip != last_ip:
                             state["last_ip"] = current_ip
-                            logger.info(
-                                f"DHCP lease update for {key}: IP={current_ip}"
-                            )
+                            logger.info(f"DHCP lease update for {key}: IP={current_ip}")
 
                             # Send dhcp_update event to orchestrator
                             event = {
@@ -275,7 +314,9 @@ class DHCPManager:
                                 state["pid"],
                             )
                         else:
-                            logger.error(f"Cannot restart DHCP for {key}: missing PID in state")
+                            logger.error(
+                                f"Cannot restart DHCP for {key}: missing PID in state"
+                            )
 
             except Exception as e:
                 logger.error(f"Error in lease monitor: {e}")
@@ -506,7 +547,7 @@ class NetworkMonitor:
             vnic_name = command.get("vnic_name")
             mac_address = command.get("mac_address")
             container_pid = command.get("container_pid")
-            
+
             # Validate each parameter explicitly for better error messages
             if not container_name:
                 logger.error("start_dhcp: missing container_name")
@@ -520,16 +561,25 @@ class NetworkMonitor:
             if container_pid is None:
                 logger.error("start_dhcp: missing container_pid")
                 return {"success": False, "error": "Missing container_pid"}
-            
+
             # Ensure container_pid is an integer (JSON may send it as string)
             try:
                 container_pid = int(container_pid)
             except (ValueError, TypeError) as e:
-                logger.error(f"start_dhcp: invalid container_pid type: {type(container_pid)}, value: {container_pid}")
-                return {"success": False, "error": f"Invalid container_pid: {container_pid}"}
-            
-            logger.info(f"start_dhcp: container={container_name}, vnic={vnic_name}, mac={mac_address}, pid={container_pid}")
-            result = self.dhcp_manager.start_dhcp(container_name, vnic_name, mac_address, container_pid)
+                logger.error(
+                    f"start_dhcp: invalid container_pid type: {type(container_pid)}, value: {container_pid}"
+                )
+                return {
+                    "success": False,
+                    "error": f"Invalid container_pid: {container_pid}",
+                }
+
+            logger.info(
+                f"start_dhcp: container={container_name}, vnic={vnic_name}, mac={mac_address}, pid={container_pid}"
+            )
+            result = self.dhcp_manager.start_dhcp(
+                container_name, vnic_name, mac_address, container_pid
+            )
             logger.info(f"start_dhcp result: {result}")
             return result
 
@@ -571,9 +621,10 @@ class NetworkMonitor:
                         client.sendall(response_json.encode("utf-8"))
                     except json.JSONDecodeError as e:
                         logger.warning(f"Invalid JSON from client: {e}")
-                        error_response = json.dumps(
-                            {"success": False, "error": "Invalid JSON"}
-                        ) + "\n"
+                        error_response = (
+                            json.dumps({"success": False, "error": "Invalid JSON"})
+                            + "\n"
+                        )
                         client.sendall(error_response.encode("utf-8"))
 
             return True

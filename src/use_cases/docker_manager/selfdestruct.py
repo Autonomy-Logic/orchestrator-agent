@@ -42,7 +42,9 @@ def _delete_runtime_container_for_selfdestruct(container_name: str):
         container.remove(force=True)
         log_info(f"Container {container_name} removed successfully")
     except docker.errors.NotFound:
-        log_warning(f"Container {container_name} not found, may have been already deleted")
+        log_warning(
+            f"Container {container_name} not found, may have been already deleted"
+        )
     except Exception as e:
         log_error(f"Error stopping/removing container {container_name}: {e}")
         raise
@@ -69,7 +71,9 @@ def _delete_runtime_container_for_selfdestruct(container_name: str):
                 try:
                     internal_network.disconnect(container_id, force=True)
                 except Exception as e:
-                    log_warning(f"Error disconnecting container from {internal_network_name}: {e}")
+                    log_warning(
+                        f"Error disconnecting container from {internal_network_name}: {e}"
+                    )
 
         log_info(f"Removing internal network {internal_network_name}")
         internal_network.remove()
@@ -150,7 +154,9 @@ def _cleanup_orchestrator_networks():
             log_info(f"Network {network_name} removed successfully")
 
         except docker.errors.NotFound:
-            log_warning(f"Network {network_name} not found, may have been already deleted")
+            log_warning(
+                f"Network {network_name} not found, may have been already deleted"
+            )
         except Exception as e:
             log_warning(f"Could not remove network {network_name}: {e}")
             networks_skipped += 1
@@ -175,7 +181,9 @@ def _delete_netmon_container():
         container.remove(force=True)
         log_info(f"Container {NETMON_CONTAINER_NAME} removed successfully")
     except docker.errors.NotFound:
-        log_warning(f"Container {NETMON_CONTAINER_NAME} not found, may have been already deleted")
+        log_warning(
+            f"Container {NETMON_CONTAINER_NAME} not found, may have been already deleted"
+        )
     except Exception as e:
         log_error(f"Error stopping/removing container {NETMON_CONTAINER_NAME}: {e}")
         raise
@@ -197,7 +205,9 @@ def _delete_shared_volume():
         volume.remove(force=True)
         log_info(f"Volume {SHARED_VOLUME_NAME} removed successfully")
     except docker.errors.NotFound:
-        log_warning(f"Volume {SHARED_VOLUME_NAME} not found, may have been already deleted")
+        log_warning(
+            f"Volume {SHARED_VOLUME_NAME} not found, may have been already deleted"
+        )
     except Exception as e:
         log_warning(
             f"Could not remove volume {SHARED_VOLUME_NAME}: {e}. "
@@ -217,7 +227,9 @@ def _delete_orchestrator_container():
     self_container = get_self_container()
     if not self_container:
         log_error("Could not detect orchestrator-agent container")
-        raise RuntimeError("Could not detect orchestrator-agent container for self-destruct")
+        raise RuntimeError(
+            "Could not detect orchestrator-agent container for self-destruct"
+        )
 
     container_name = self_container.name
     log_info(f"Removing orchestrator-agent container: {container_name}")

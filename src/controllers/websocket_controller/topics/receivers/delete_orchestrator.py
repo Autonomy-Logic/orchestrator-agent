@@ -39,7 +39,9 @@ def init(client):
     @validate_message(MESSAGE_TYPE, NAME)
     async def callback(message):
         correlation_id = message.get("correlation_id")
-        log_warning("Received delete_orchestrator command - initiating self-destruct...")
+        log_warning(
+            "Received delete_orchestrator command - initiating self-destruct..."
+        )
 
         if not start_self_destruct():
             log_error("Self-destruct operation already in progress")
