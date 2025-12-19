@@ -167,7 +167,7 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
                     endpoint_kwargs["ipv4_address"] = ip_address
                     log_debug(f"Configured manual IP {ip_address} for vNIC {vnic_name}")
 
-            mac_address = vnic_config.get("mac_address")
+            mac_address = vnic_config.get("mac")
             if not mac_address:
                 mac_address = _generate_mac_address()
                 vnic_config["mac_address"] = mac_address
@@ -184,6 +184,11 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
             log_debug(
                 f"Prepared EndpointConfig for MACVLAN network {macvlan_network.name}"
             )
+
+        ## Needed to avoid docker SDK setting 'None' networking_config
+        networking_config[internal_network.name] = docker.types.EndpointConfig(
+            version=api_version
+        )
 
         create_kwargs = {
             "image": image_name,
