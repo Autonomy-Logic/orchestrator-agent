@@ -120,8 +120,7 @@ def init(client):
                         "correlation_id": correlation_id,
                         "status": "error",
                         "error": (
-                            f"MAC address {mac_address} is already in use by container "
-                            f"'{conflicting_container}' on interface {parent_interface}"
+                            f"MAC address {mac_address} is already in use."
                         ),
                     }
 
