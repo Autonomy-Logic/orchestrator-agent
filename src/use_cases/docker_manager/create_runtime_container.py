@@ -185,19 +185,9 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
                 f"Prepared EndpointConfig for MACVLAN network {macvlan_network.name}"
             )
 
-        create_kwargs = {
-            "image": image_name,
-            "name": container_name,
-            "detach": True,
+        host_config_kwargs = {
             "restart_policy": {"Name": "always"},
-            "network": internal_network.name,
-            "networking_config": networking_config,
-            # Real-time scheduling capabilities for PLC deterministic execution
-            # SYS_NICE: Required for sched_setscheduler(SCHED_FIFO) in the PLC core
             "cap_add": ["SYS_NICE"],
-            # ulimits for real-time scheduling:
-            # - rtprio: Maximum real-time priority (99 is highest)
-            # - memlock: Unlimited memory locking for future mlockall() support
             "ulimits": [
                 docker.types.Ulimit(name="rtprio", soft=99, hard=99),
                 docker.types.Ulimit(name="memlock", soft=-1, hard=-1),
@@ -206,19 +196,42 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
 
         if dns_servers:
             unique_dns = list(dict.fromkeys(dns_servers))
-            create_kwargs["dns"] = unique_dns
+            host_config_kwargs["dns"] = unique_dns
             log_debug(f"Configuring DNS servers: {unique_dns}")
 
-        container = CLIENT.containers.create(**create_kwargs)
+        host_config = CLIENT.api.create_host_config(**host_config_kwargs)
 
-        container.start()
+        container_response = CLIENT.api.create_container(
+            image=image_name,
+            name=container_name,
+            detach=True,
+            host_config=host_config,
+            networking_config=networking_config,
+        )
+        container_id = container_response.get("Id")
+
+        CLIENT.api.start(container_id)
         log_info(f"Container {container_name} created and started successfully")
+
+        set_step(container_name, "connecting_internal_network")
+        try:
+            CLIENT.api.connect_container_to_network(container_id, internal_network.id)
+            log_debug(
+                f"Connected container {container_name} to internal network {internal_network.name}"
+            )
+        except docker.errors.APIError as e:
+            log_error(
+                f"Failed to connect container {container_name} to internal network {internal_network.name}: {e}"
+            )
+            raise
 
         try:
             main_container = get_self_container()
             if main_container:
                 try:
-                    internal_network.connect(main_container)
+                    CLIENT.api.connect_container_to_network(
+                        main_container.id, internal_network.id
+                    )
                     log_debug(
                         f"Connected {main_container.name} to internal network {internal_network.name}"
                     )
@@ -240,6 +253,8 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
                 )
         except Exception as e:
             log_warning(f"Error connecting orchestrator-agent to internal network: {e}")
+
+        container = CLIENT.containers.get(container_id)
 
         container.reload()
         network_settings = container.attrs["NetworkSettings"]["Networks"]
