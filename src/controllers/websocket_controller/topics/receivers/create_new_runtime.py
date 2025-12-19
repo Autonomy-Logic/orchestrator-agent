@@ -95,7 +95,7 @@ def init(client):
                 "action": NAME,
                 "correlation_id": correlation_id,
                 "status": "error",
-                "error": f"MAC address {conflicting_mac} is already in use by container {conflicting_container}",
+                "error": f"MAC address {conflicting_mac} is already in use.",
             }
 
         if not set_creating(container_name):

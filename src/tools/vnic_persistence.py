@@ -102,17 +102,17 @@ def get_all_mac_addresses() -> dict[str, str]:
     Returns:
         Dictionary mapping MAC address (lowercase) to container name.
     """
-    mac_to_container = {}
+    macs = []
     try:
         all_configs = load_vnic_configs()
-        for container_name, vnic_configs in all_configs.items():
+        for _, vnic_configs in all_configs.items():
             for vnic_config in vnic_configs:
                 mac_address = vnic_config.get("mac_address")
                 if mac_address:
-                    mac_to_container[mac_address.lower()] = container_name
+                    macs.append(mac_address.lower())
     except Exception as e:
         log_error(f"Failed to get all MAC addresses: {e}")
-    return mac_to_container
+    return macs
 
 
 def check_mac_conflicts(vnic_configs: list) -> tuple[bool, str, str]:
@@ -133,6 +133,6 @@ def check_mac_conflicts(vnic_configs: list) -> tuple[bool, str, str]:
         if mac_address:
             mac_lower = mac_address.lower()
             if mac_lower in existing_macs:
-                return True, mac_address, existing_macs[mac_lower]
+                return True, mac_address
 
     return False, "", ""
