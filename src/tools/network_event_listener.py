@@ -87,11 +87,15 @@ class NetworkEventListener:
 
                     # Resync DHCP for existing containers on startup/reconnect
                     await self._resync_dhcp_for_existing_containers()
-                    
+
                     # Start background retry task for failed DHCP resyncs
                     if self.pending_dhcp_resyncs and not self.dhcp_retry_task:
-                        self.dhcp_retry_task = asyncio.create_task(self._dhcp_retry_loop())
-                        log_info(f"Started DHCP retry task for {len(self.pending_dhcp_resyncs)} pending resyncs")
+                        self.dhcp_retry_task = asyncio.create_task(
+                            self._dhcp_retry_loop()
+                        )
+                        log_info(
+                            f"Started DHCP retry task for {len(self.pending_dhcp_resyncs)} pending resyncs"
+                        )
 
                     while self.running:
                         try:
@@ -344,7 +348,7 @@ class NetworkEventListener:
     async def _resync_dhcp_for_existing_containers(self):
         """
         Resync DHCP for existing containers on startup or reconnect.
-        
+
         This handles the case where the host reboots and containers resume,
         but DHCP clients need to be restarted to obtain/renew IP addresses.
         """
@@ -355,52 +359,63 @@ class NetworkEventListener:
                 return
 
             log_info("Resyncing DHCP for existing containers...")
-            
+
             for container_name, vnic_configs in all_vnic_configs.items():
                 for vnic_config in vnic_configs:
                     network_mode = vnic_config.get("network_mode", "dhcp")
                     if network_mode != "dhcp":
                         continue
-                    
+
                     vnic_name = vnic_config.get("name")
                     parent_interface = vnic_config.get("parent_interface")
-                    
+
                     try:
                         # Get fresh container info from Docker
                         container = CLIENT.containers.get(container_name)
                         container.reload()
-                        
+
                         # Skip if container is not running
                         if container.status != "running":
-                            log_debug(f"Container {container_name} is not running, skipping DHCP resync")
+                            log_debug(
+                                f"Container {container_name} is not running, skipping DHCP resync"
+                            )
                             continue
-                        
+
                         # Get fresh PID from Docker
                         container_pid = container.attrs.get("State", {}).get("Pid", 0)
                         if container_pid <= 0:
-                            log_warning(f"Container {container_name} has invalid PID, skipping DHCP resync")
+                            log_warning(
+                                f"Container {container_name} has invalid PID, skipping DHCP resync"
+                            )
                             continue
-                        
+
                         # Get actual MAC address from Docker for the macvlan network
-                        network_settings = container.attrs.get("NetworkSettings", {}).get("Networks", {})
+                        network_settings = container.attrs.get(
+                            "NetworkSettings", {}
+                        ).get("Networks", {})
                         actual_mac = None
                         docker_network_name = None
-                        
+
                         for net_name, net_info in network_settings.items():
                             if net_name.startswith(f"macvlan_{parent_interface}"):
                                 actual_mac = net_info.get("MacAddress")
                                 docker_network_name = net_name
                                 break
-                        
+
                         if not actual_mac:
-                            log_warning(f"Could not find MAC address for {container_name}:{vnic_name}, skipping DHCP resync")
+                            log_warning(
+                                f"Could not find MAC address for {container_name}:{vnic_name}, skipping DHCP resync"
+                            )
                             continue
-                        
+
                         # Get persisted MAC address (authoritative for stability)
                         persisted_mac = vnic_config.get("mac_address")
-                        
+
                         # Check for MAC mismatch and enforce persisted MAC if needed
-                        if persisted_mac and persisted_mac.lower() != actual_mac.lower():
+                        if (
+                            persisted_mac
+                            and persisted_mac.lower() != actual_mac.lower()
+                        ):
                             log_warning(
                                 f"MAC mismatch for {container_name}:{vnic_name}: "
                                 f"persisted={persisted_mac}, actual={actual_mac}. "
@@ -410,17 +425,21 @@ class NetworkEventListener:
                             try:
                                 network = CLIENT.networks.get(docker_network_name)
                                 network.disconnect(container, force=True)
-                                
+
                                 connect_kwargs = {"mac_address": persisted_mac}
                                 network_mode = vnic_config.get("network_mode", "dhcp")
                                 if network_mode == "static":
                                     ip_address = vnic_config.get("ip")
                                     if ip_address:
-                                        connect_kwargs["ipv4_address"] = ip_address.split("/")[0]
-                                
+                                        connect_kwargs["ipv4_address"] = (
+                                            ip_address.split("/")[0]
+                                        )
+
                                 network.connect(container, **connect_kwargs)
-                                log_info(f"Reconnected {container_name}:{vnic_name} with persisted MAC {persisted_mac}")
-                                
+                                log_info(
+                                    f"Reconnected {container_name}:{vnic_name} with persisted MAC {persisted_mac}"
+                                )
+
                                 # Wait for Docker to report the endpoint with correct MAC
                                 # This is necessary because network.connect() returns before
                                 # the interface is fully created in the container's netns
@@ -428,31 +447,51 @@ class NetworkEventListener:
                                 poll_interval = 0.2
                                 waited = 0
                                 mac_verified = False
-                                
+
                                 while waited < max_wait_seconds:
                                     await asyncio.sleep(poll_interval)
                                     waited += poll_interval
                                     container.reload()
-                                    
-                                    net_info = container.attrs.get("NetworkSettings", {}).get("Networks", {}).get(docker_network_name, {})
+
+                                    net_info = (
+                                        container.attrs.get("NetworkSettings", {})
+                                        .get("Networks", {})
+                                        .get(docker_network_name, {})
+                                    )
                                     reported_mac = net_info.get("MacAddress", "")
-                                    
-                                    if reported_mac and reported_mac.lower() == persisted_mac.lower():
-                                        log_info(f"MAC enforcement verified for {container_name}:{vnic_name} after {waited:.1f}s")
+
+                                    if (
+                                        reported_mac
+                                        and reported_mac.lower()
+                                        == persisted_mac.lower()
+                                    ):
+                                        log_info(
+                                            f"MAC enforcement verified for {container_name}:{vnic_name} after {waited:.1f}s"
+                                        )
                                         mac_verified = True
                                         break
-                                    
-                                    log_debug(f"Waiting for MAC enforcement... reported={reported_mac}, expected={persisted_mac}")
-                                
+
+                                    log_debug(
+                                        f"Waiting for MAC enforcement... reported={reported_mac}, expected={persisted_mac}"
+                                    )
+
                                 if not mac_verified:
-                                    log_warning(f"MAC enforcement may not have taken effect for {container_name}:{vnic_name} after {max_wait_seconds}s")
+                                    log_warning(
+                                        f"MAC enforcement may not have taken effect for {container_name}:{vnic_name} after {max_wait_seconds}s"
+                                    )
                                     # Fall back to actual MAC since enforcement failed
                                     # This ensures DHCP can still work even if MAC stability is lost
                                     container.reload()
-                                    net_info = container.attrs.get("NetworkSettings", {}).get("Networks", {}).get(docker_network_name, {})
+                                    net_info = (
+                                        container.attrs.get("NetworkSettings", {})
+                                        .get("Networks", {})
+                                        .get(docker_network_name, {})
+                                    )
                                     fallback_mac = net_info.get("MacAddress", "")
                                     if fallback_mac:
-                                        log_warning(f"Using actual MAC {fallback_mac} instead of persisted {persisted_mac} for {container_name}:{vnic_name}")
+                                        log_warning(
+                                            f"Using actual MAC {fallback_mac} instead of persisted {persisted_mac} for {container_name}:{vnic_name}"
+                                        )
                                         mac_address = fallback_mac
                                         # Update persisted MAC to match reality so future resyncs don't fail
                                         vnic_config["mac_address"] = fallback_mac
@@ -460,12 +499,16 @@ class NetworkEventListener:
                                         mac_address = persisted_mac
                                 else:
                                     mac_address = persisted_mac
-                                
+
                                 # Refresh container info after waiting
                                 container.reload()
-                                container_pid = container.attrs.get("State", {}).get("Pid", 0)
+                                container_pid = container.attrs.get("State", {}).get(
+                                    "Pid", 0
+                                )
                             except Exception as e:
-                                log_error(f"Failed to enforce MAC for {container_name}:{vnic_name}: {e}")
+                                log_error(
+                                    f"Failed to enforce MAC for {container_name}:{vnic_name}: {e}"
+                                )
                                 # Fall back to actual MAC if enforcement fails
                                 mac_address = actual_mac
                         else:
@@ -473,26 +516,38 @@ class NetworkEventListener:
                             # Only fill MAC if missing, never overwrite existing
                             if not persisted_mac:
                                 vnic_config["mac_address"] = actual_mac
-                                log_info(f"Stored MAC address {actual_mac} for {container_name}:{vnic_name}")
-                        
+                                log_info(
+                                    f"Stored MAC address {actual_mac} for {container_name}:{vnic_name}"
+                                )
+
                         # Update docker_network_name if missing
-                        if docker_network_name and not vnic_config.get("docker_network_name"):
+                        if docker_network_name and not vnic_config.get(
+                            "docker_network_name"
+                        ):
                             vnic_config["docker_network_name"] = docker_network_name
-                        
-                        log_info(f"Starting DHCP for {container_name}:{vnic_name} (MAC: {mac_address}, PID: {container_pid})")
-                        
+
+                        log_info(
+                            f"Starting DHCP for {container_name}:{vnic_name} (MAC: {mac_address}, PID: {container_pid})"
+                        )
+
                         # Request DHCP from netmon
                         key = f"{container_name}:{vnic_name}"
-                        result = await self.start_dhcp(container_name, vnic_name, mac_address, container_pid)
+                        result = await self.start_dhcp(
+                            container_name, vnic_name, mac_address, container_pid
+                        )
                         if result.get("success"):
                             log_info(f"DHCP resync initiated for {key}")
                             # Remove from pending if it was there
                             self.pending_dhcp_resyncs.pop(key, None)
                         else:
-                            log_warning(f"DHCP resync failed for {key}: {result.get('error')}")
+                            log_warning(
+                                f"DHCP resync failed for {key}: {result.get('error')}"
+                            )
                             # Clear stale DHCP IP since resync failed - status should reflect reality
                             if vnic_config.get("dhcp_ip"):
-                                log_info(f"Clearing stale DHCP IP {vnic_config['dhcp_ip']} for {key}")
+                                log_info(
+                                    f"Clearing stale DHCP IP {vnic_config['dhcp_ip']} for {key}"
+                                )
                                 vnic_config.pop("dhcp_ip", None)
                                 vnic_config.pop("dhcp_gateway", None)
                             # Add to pending for background retry
@@ -503,74 +558,84 @@ class NetworkEventListener:
                                 "next_retry_at": time.time() + DHCP_RETRY_BACKOFF_BASE,
                                 "retry_count": 0,
                             }
-                            log_info(f"Added {key} to pending DHCP resyncs for background retry")
-                        
+                            log_info(
+                                f"Added {key} to pending DHCP resyncs for background retry"
+                            )
+
                     except docker.errors.NotFound:
-                        log_debug(f"Container {container_name} not found, skipping DHCP resync")
+                        log_debug(
+                            f"Container {container_name} not found, skipping DHCP resync"
+                        )
                     except Exception as e:
-                        log_error(f"Error resyncing DHCP for {container_name}:{vnic_name}: {e}")
-            
+                        log_error(
+                            f"Error resyncing DHCP for {container_name}:{vnic_name}: {e}"
+                        )
+
             # Save updated vnic configs with fresh MAC addresses
             for container_name, vnic_configs in all_vnic_configs.items():
                 save_vnic_configs(container_name, vnic_configs)
-            
+
             log_info("DHCP resync completed")
-            
+
         except Exception as e:
             log_error(f"Error during DHCP resync: {e}")
 
     async def _dhcp_retry_loop(self):
         """
         Background task that retries failed DHCP resyncs with exponential backoff.
-        
+
         Runs until all pending resyncs succeed or containers are no longer applicable.
         """
         log_info("DHCP retry loop started")
-        
+
         try:
             while self.running and self.pending_dhcp_resyncs:
                 now = time.time()
-                
+
                 # Find the next key to retry
                 next_key = None
-                next_time = float('inf')
-                
+                next_time = float("inf")
+
                 for key, state in list(self.pending_dhcp_resyncs.items()):
                     if state["next_retry_at"] < next_time:
                         next_time = state["next_retry_at"]
                         next_key = key
-                
+
                 if next_key is None:
                     break
-                
+
                 # Wait until next retry time
                 wait_time = max(0, next_time - now)
                 if wait_time > 0:
-                    log_debug(f"DHCP retry: waiting {wait_time:.1f}s until next retry for {next_key}")
+                    log_debug(
+                        f"DHCP retry: waiting {wait_time:.1f}s until next retry for {next_key}"
+                    )
                     await asyncio.sleep(wait_time)
-                
+
                 if not self.running or next_key not in self.pending_dhcp_resyncs:
                     continue
-                
+
                 state = self.pending_dhcp_resyncs[next_key]
                 container_name = state["container_name"]
                 vnic_name = state["vnic_name"]
                 parent_interface = state["parent_interface"]
                 retry_count = state["retry_count"]
-                
+
                 log_info(f"DHCP retry attempt {retry_count + 1} for {next_key}")
-                
+
                 try:
                     # Re-fetch fresh container state
                     container = CLIENT.containers.get(container_name)
                     container.reload()
-                    
+
                     # Check if container is still running
                     if container.status != "running":
-                        log_info(f"Container {container_name} is not running, removing from pending DHCP resyncs")
+                        log_info(
+                            f"Container {container_name} is not running, removing from pending DHCP resyncs"
+                        )
                         self.pending_dhcp_resyncs.pop(next_key, None)
                         continue
-                    
+
                     # Re-load vnic config to check if still DHCP mode
                     all_vnic_configs = load_vnic_configs()
                     vnic_configs = all_vnic_configs.get(container_name, [])
@@ -579,63 +644,81 @@ class NetworkEventListener:
                         if vc.get("name") == vnic_name:
                             vnic_config = vc
                             break
-                    
+
                     if not vnic_config:
-                        log_info(f"vNIC config for {next_key} not found, removing from pending DHCP resyncs")
+                        log_info(
+                            f"vNIC config for {next_key} not found, removing from pending DHCP resyncs"
+                        )
                         self.pending_dhcp_resyncs.pop(next_key, None)
                         continue
-                    
+
                     if vnic_config.get("network_mode", "dhcp") != "dhcp":
-                        log_info(f"vNIC {next_key} is no longer DHCP mode, removing from pending DHCP resyncs")
+                        log_info(
+                            f"vNIC {next_key} is no longer DHCP mode, removing from pending DHCP resyncs"
+                        )
                         self.pending_dhcp_resyncs.pop(next_key, None)
                         continue
-                    
+
                     # Get fresh PID
                     container_pid = container.attrs.get("State", {}).get("Pid", 0)
                     if container_pid <= 0:
-                        log_warning(f"Container {container_name} has invalid PID, will retry later")
+                        log_warning(
+                            f"Container {container_name} has invalid PID, will retry later"
+                        )
                         self._schedule_next_retry(next_key, state)
                         continue
-                    
+
                     # Get fresh MAC from Docker
-                    network_settings = container.attrs.get("NetworkSettings", {}).get("Networks", {})
+                    network_settings = container.attrs.get("NetworkSettings", {}).get(
+                        "Networks", {}
+                    )
                     actual_mac = None
                     docker_network_name = None
-                    
+
                     for net_name, net_info in network_settings.items():
                         if net_name.startswith(f"macvlan_{parent_interface}"):
                             actual_mac = net_info.get("MacAddress")
                             docker_network_name = net_name
                             break
-                    
+
                     if not actual_mac:
-                        log_warning(f"Could not find MAC for {next_key}, will retry later")
+                        log_warning(
+                            f"Could not find MAC for {next_key}, will retry later"
+                        )
                         self._schedule_next_retry(next_key, state)
                         continue
-                    
+
                     # Use persisted MAC if available, otherwise use actual
                     persisted_mac = vnic_config.get("mac_address")
                     mac_address = persisted_mac if persisted_mac else actual_mac
-                    
+
                     # Request DHCP from netmon
-                    result = await self.start_dhcp(container_name, vnic_name, mac_address, container_pid)
-                    
+                    result = await self.start_dhcp(
+                        container_name, vnic_name, mac_address, container_pid
+                    )
+
                     if result.get("success"):
-                        log_info(f"DHCP retry succeeded for {next_key} after {retry_count + 1} attempts")
+                        log_info(
+                            f"DHCP retry succeeded for {next_key} after {retry_count + 1} attempts"
+                        )
                         self.pending_dhcp_resyncs.pop(next_key, None)
                     else:
-                        log_warning(f"DHCP retry failed for {next_key}: {result.get('error')}")
+                        log_warning(
+                            f"DHCP retry failed for {next_key}: {result.get('error')}"
+                        )
                         self._schedule_next_retry(next_key, state)
-                    
+
                 except docker.errors.NotFound:
-                    log_info(f"Container {container_name} not found, removing from pending DHCP resyncs")
+                    log_info(
+                        f"Container {container_name} not found, removing from pending DHCP resyncs"
+                    )
                     self.pending_dhcp_resyncs.pop(next_key, None)
                 except Exception as e:
                     log_error(f"Error during DHCP retry for {next_key}: {e}")
                     self._schedule_next_retry(next_key, state)
-            
+
             log_info("DHCP retry loop completed - no more pending resyncs")
-            
+
         except asyncio.CancelledError:
             log_info("DHCP retry loop cancelled")
             raise
@@ -647,21 +730,20 @@ class NetworkEventListener:
     def _schedule_next_retry(self, key: str, state: dict):
         """Schedule the next retry with exponential backoff and jitter."""
         retry_count = state["retry_count"] + 1
-        
+
         # Exponential backoff: base * 2^retry_count, capped at max
-        delay = min(
-            DHCP_RETRY_BACKOFF_BASE * (2 ** retry_count),
-            DHCP_RETRY_BACKOFF_MAX
-        )
-        
+        delay = min(DHCP_RETRY_BACKOFF_BASE * (2**retry_count), DHCP_RETRY_BACKOFF_MAX)
+
         # Add jitter (±30%)
         jitter = delay * DHCP_RETRY_JITTER * (2 * random.random() - 1)
         delay = max(DHCP_RETRY_BACKOFF_BASE, delay + jitter)
-        
+
         state["retry_count"] = retry_count
         state["next_retry_at"] = time.time() + delay
-        
-        log_debug(f"Scheduled next DHCP retry for {key} in {delay:.1f}s (attempt {retry_count + 1})")
+
+        log_debug(
+            f"Scheduled next DHCP retry for {key} in {delay:.1f}s (attempt {retry_count + 1})"
+        )
 
     async def _reconnect_containers(self, interface: str, iface_data: dict):
         """Reconnect runtime containers to new MACVLAN network after interface change"""

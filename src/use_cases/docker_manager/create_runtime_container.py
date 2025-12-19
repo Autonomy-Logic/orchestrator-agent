@@ -18,21 +18,21 @@ import random
 def _generate_mac_address() -> str:
     """
     Generate a locally-administered unicast MAC address.
-    
+
     Locally-administered addresses have bit 1 (second-least-significant) of the
     first octet set to 1, and bit 0 (least-significant) set to 0 for unicast.
     This ensures the MAC won't conflict with globally-assigned manufacturer MACs.
-    
+
     The first octet will be one of: 0x02, 0x06, 0x0A, 0x0E, 0x12, etc.
     (any even number with bit 1 set)
     """
     # Generate random value, shift left by 2 to preserve bits 0-1, then set bit 1
     # This produces values like 0x02, 0x06, 0x0A, 0x0E, 0x12, etc.
     first_octet = 0x02 | (random.randint(0, 63) << 2)
-    
+
     # Generate remaining 5 octets randomly
     octets = [first_octet] + [random.randint(0, 255) for _ in range(5)]
-    
+
     return ":".join(f"{octet:02x}" for octet in octets)
 
 
@@ -167,7 +167,7 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
                     endpoint_kwargs["ipv4_address"] = ip_address
                     log_debug(f"Configured manual IP {ip_address} for vNIC {vnic_name}")
 
-            mac_address = vnic_config.get("mac_address")
+            mac_address = vnic_config.get("mac")
             if not mac_address:
                 mac_address = _generate_mac_address()
                 vnic_config["mac_address"] = mac_address
@@ -180,6 +180,11 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
 
             networking_config[macvlan_network.name] = docker.types.EndpointConfig(
                 version=api_version, **endpoint_kwargs
+            )
+            ## Networking config for internal network has to exist otherwise
+            ## docker SDK will set it to None beacuse "network" param gets the internal_network name
+            networking_config[internal_network.name] = docker.types.EndpointConfig(
+                version=api_version
             )
             log_debug(
                 f"Prepared EndpointConfig for MACVLAN network {macvlan_network.name}"
