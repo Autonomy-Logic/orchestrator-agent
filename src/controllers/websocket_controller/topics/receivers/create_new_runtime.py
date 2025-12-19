@@ -2,9 +2,11 @@ from use_cases.docker_manager.create_runtime_container import create_runtime_con
 from tools.operations_state import (
     set_creating,
     is_operation_in_progress,
+    clear_state,
 )
 from tools.logger import *
 from tools.contract_validation import StringType, ListType, OptionalType, BASE_MESSAGE
+from tools.docker_tools import get_existing_mac_addresses_on_interface
 from . import topic, validate_message
 import asyncio
 
@@ -93,6 +95,34 @@ def init(client):
                 "status": "error",
                 "error": f"Failed to start creation for {container_name}",
             }
+
+        # Check for MAC address conflicts before proceeding with container creation
+        for vnic_config in vnic_configs:
+            mac_address = vnic_config.get("mac")
+            if mac_address:
+                parent_interface = vnic_config.get("parent_interface")
+                vnic_name = vnic_config.get("name", "unnamed")
+
+                existing_macs = get_existing_mac_addresses_on_interface(
+                    parent_interface
+                )
+                mac_lower = mac_address.lower()
+
+                if mac_lower in existing_macs:
+                    conflicting_container = existing_macs[mac_lower]
+                    log_error(
+                        f"MAC address {mac_address} for vNIC {vnic_name} already exists "
+                        f"on container {conflicting_container} (interface: {parent_interface})"
+                    )
+                    clear_state(container_name)
+                    return {
+                        "action": NAME,
+                        "correlation_id": correlation_id,
+                        "status": "error",
+                        "error": (
+                            f"MAC address {mac_address} is already in use."
+                        ),
+                    }
 
         log_info(f"Creating runtime container: {container_name}")
 
