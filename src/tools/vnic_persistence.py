@@ -95,12 +95,12 @@ def delete_vnic_configs(container_name: str):
         log_error(f"Failed to delete vNIC configurations for {container_name}: {e}")
 
 
-def get_all_mac_addresses() -> dict[str, str]:
+def get_all_mac_addresses() -> list[str]:
     """
     Get all MAC addresses currently in use by existing containers.
 
     Returns:
-        Dictionary mapping MAC address (lowercase) to container name.
+        List of MAC addresses (lowercase).
     """
     macs = []
     try:
@@ -115,7 +115,7 @@ def get_all_mac_addresses() -> dict[str, str]:
     return macs
 
 
-def check_mac_conflicts(vnic_configs: list) -> tuple[bool, str, str]:
+def check_mac_conflicts(vnic_configs: list) -> tuple[bool, str]:
     """
     Check if any MAC addresses in the vNIC configs conflict with existing containers.
 
@@ -123,8 +123,8 @@ def check_mac_conflicts(vnic_configs: list) -> tuple[bool, str, str]:
         vnic_configs: List of vNIC configurations to check
 
     Returns:
-        Tuple of (has_conflict, conflicting_mac, conflicting_container).
-        If no conflict, returns (False, "", "").
+        Tuple of (has_conflict, conflicting_mac).
+        If no conflict, returns (False, "").
     """
     existing_macs = get_all_mac_addresses()
 
@@ -135,4 +135,4 @@ def check_mac_conflicts(vnic_configs: list) -> tuple[bool, str, str]:
             if mac_lower in existing_macs:
                 return True, mac_address
 
-    return False, "", ""
+    return False, ""

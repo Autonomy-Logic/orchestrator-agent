@@ -84,13 +84,9 @@ def init(client):
                 "error": f"Container {container_name} already has a {operation_type} operation in progress",
             }
 
-        has_mac_conflict, conflicting_mac, conflicting_container = check_mac_conflicts(
-            vnic_configs
-        )
+        has_mac_conflict, conflicting_mac = check_mac_conflicts(vnic_configs)
         if has_mac_conflict:
-            log_error(
-                f"MAC address {conflicting_mac} is already in use by container {conflicting_container}"
-            )
+            log_error(f"MAC address {conflicting_mac} is already in use")
             return {
                 "action": NAME,
                 "correlation_id": correlation_id,
