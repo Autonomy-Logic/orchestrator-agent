@@ -215,15 +215,15 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
             networking_config[macvlan_network.name] = docker.types.EndpointConfig(
                 version=api_version, **endpoint_kwargs
             )
-            ## Networking config for internal network has to exist otherwise
-            ## docker SDK will set it to None because "network" param gets the internal_network name
-            networking_config[internal_network.name] = docker.types.EndpointConfig(
-                version=api_version
-            )
             log_debug(
                 f"Prepared EndpointConfig for MACVLAN network {macvlan_network.name}"
             )
 
+        ## Networking config for internal network has to exist otherwise
+        ## docker SDK will set it to None beacuse "network" param gets the internal_network name
+        networking_config[internal_network.name] = docker.types.EndpointConfig(
+            version=api_version
+        )
         host_config_kwargs = {
             "restart_policy": {"Name": "always"},
             "cap_add": ["SYS_NICE"],
