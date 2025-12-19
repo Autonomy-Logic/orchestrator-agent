@@ -174,7 +174,7 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
         networking_config = {}
         api_version = CLIENT.api.api_version
 
-        existing_macs = set(get_all_mac_addresses().keys())
+        existing_macs = set(get_all_mac_addresses())
 
         for macvlan_network, vnic_config in macvlan_networks:
             vnic_name = vnic_config.get("name")
