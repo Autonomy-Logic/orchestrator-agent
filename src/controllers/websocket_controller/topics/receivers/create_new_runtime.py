@@ -5,6 +5,7 @@ from tools.operations_state import (
 )
 from tools.logger import *
 from tools.contract_validation import StringType, ListType, OptionalType, BASE_MESSAGE
+from tools.vnic_persistence import check_mac_conflicts
 from . import topic, validate_message
 import asyncio
 
@@ -81,6 +82,20 @@ def init(client):
                 "correlation_id": correlation_id,
                 "status": "error",
                 "error": f"Container {container_name} already has a {operation_type} operation in progress",
+            }
+
+        has_mac_conflict, conflicting_mac, conflicting_container = check_mac_conflicts(
+            vnic_configs
+        )
+        if has_mac_conflict:
+            log_error(
+                f"MAC address {conflicting_mac} is already in use by container {conflicting_container}"
+            )
+            return {
+                "action": NAME,
+                "correlation_id": correlation_id,
+                "status": "error",
+                "error": f"MAC address {conflicting_mac} is already in use by container {conflicting_container}",
             }
 
         if not set_creating(container_name):

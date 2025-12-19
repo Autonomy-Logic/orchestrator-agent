@@ -1,7 +1,7 @@
 from . import CLIENTS, add_client, get_self_container
 from tools.operations_state import set_step, set_error, clear_state
 from tools.logger import *
-from tools.vnic_persistence import save_vnic_configs
+from tools.vnic_persistence import save_vnic_configs, get_all_mac_addresses
 from tools.docker_tools import (
     CLIENT,
     get_or_create_macvlan_network,
@@ -34,6 +34,26 @@ def _generate_mac_address() -> str:
     octets = [first_octet] + [random.randint(0, 255) for _ in range(5)]
 
     return ":".join(f"{octet:02x}" for octet in octets)
+
+
+def _generate_unique_mac_address(existing_macs: set[str]) -> str:
+    """
+    Generate a unique MAC address that doesn't conflict with existing ones.
+
+    Args:
+        existing_macs: Set of existing MAC addresses (lowercase) to avoid
+
+    Returns:
+        A unique locally-administered MAC address
+    """
+    max_attempts = 100
+    for _ in range(max_attempts):
+        mac = _generate_mac_address()
+        if mac.lower() not in existing_macs:
+            return mac
+    raise RuntimeError(
+        f"Failed to generate unique MAC address after {max_attempts} attempts"
+    )
 
 
 def _validate_vnic_configs(vnic_configs: list) -> tuple[bool, str]:
@@ -154,6 +174,8 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
         networking_config = {}
         api_version = CLIENT.api.api_version
 
+        existing_macs = set(get_all_mac_addresses().keys())
+
         for macvlan_network, vnic_config in macvlan_networks:
             vnic_name = vnic_config.get("name")
             network_mode = vnic_config.get("network_mode", "dhcp")
@@ -169,13 +191,25 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
 
             mac_address = vnic_config.get("mac")
             if not mac_address:
-                mac_address = _generate_mac_address()
+                mac_address = _generate_unique_mac_address(existing_macs)
+                existing_macs.add(mac_address.lower())
                 vnic_config["mac_address"] = mac_address
                 log_info(f"Generated MAC address {mac_address} for vNIC {vnic_name}")
             else:
-                log_debug(
-                    f"Using user-provided MAC address {mac_address} for vNIC {vnic_name}"
-                )
+                if mac_address.lower() in existing_macs:
+                    old_mac = mac_address
+                    mac_address = _generate_unique_mac_address(existing_macs)
+                    existing_macs.add(mac_address.lower())
+                    vnic_config["mac_address"] = mac_address
+                    log_warning(
+                        f"MAC address {old_mac} for vNIC {vnic_name} conflicts with existing container, "
+                        f"generated new MAC {mac_address}"
+                    )
+                else:
+                    existing_macs.add(mac_address.lower())
+                    log_debug(
+                        f"Using user-provided MAC address {mac_address} for vNIC {vnic_name}"
+                    )
             endpoint_kwargs["mac_address"] = mac_address
 
             networking_config[macvlan_network.name] = docker.types.EndpointConfig(
