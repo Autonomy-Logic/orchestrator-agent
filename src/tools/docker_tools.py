@@ -218,6 +218,60 @@ def get_or_create_macvlan_network(
                 raise
 
 
+def get_existing_mac_addresses_on_interface(parent_interface: str) -> dict[str, str]:
+    """
+    Get all MAC addresses currently in use by containers on MACVLAN networks
+    attached to a specific parent interface.
+
+    Args:
+        parent_interface: Physical network interface on host (e.g., "eth0", "ens33")
+
+    Returns:
+        Dictionary mapping MAC address (lowercase) to container name
+    """
+    mac_to_container: dict[str, str] = {}
+
+    try:
+        # Find all MACVLAN networks attached to this parent interface
+        macvlan_networks = []
+        all_networks = CLIENT.networks.list()
+        for net in all_networks:
+            if net.attrs.get("Driver") == "macvlan":
+                net_options = net.attrs.get("Options", {})
+                net_parent = net_options.get("parent")
+                if net_parent == parent_interface:
+                    macvlan_networks.append(net.name)
+
+        if not macvlan_networks:
+            log_debug(
+                f"No MACVLAN networks found for parent interface {parent_interface}"
+            )
+            return mac_to_container
+
+        # Get all containers and check their network connections
+        all_containers = CLIENT.containers.list(all=True)
+        for container in all_containers:
+            network_settings = container.attrs.get("NetworkSettings", {}).get(
+                "Networks", {}
+            )
+            for net_name, net_info in network_settings.items():
+                if net_name in macvlan_networks:
+                    mac_address = net_info.get("MacAddress", "")
+                    if mac_address:
+                        mac_to_container[mac_address.lower()] = container.name
+                        log_debug(
+                            f"Found MAC {mac_address} on container {container.name} "
+                            f"(network: {net_name})"
+                        )
+
+    except Exception as e:
+        log_error(
+            f"Error getting existing MAC addresses for interface {parent_interface}: {e}"
+        )
+
+    return mac_to_container
+
+
 def create_internal_network(container_name: str):
     """
     Create an internal bridge network for orchestrator-runtime communication.
