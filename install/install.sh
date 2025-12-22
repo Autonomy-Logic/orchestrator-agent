@@ -9,13 +9,13 @@ fi
 
 # --- Auto-save if running from a pipe ---
 if [ -p /dev/stdin ]; then
-    TMP_SCRIPT="/tmp/install-edge.sh"
-    echo "[INFO] Detected script running from a pipe. Saving to $TMP_SCRIPT..."
-    cat > "$TMP_SCRIPT"
-    chmod +x "$TMP_SCRIPT"
+  TMP_SCRIPT="/tmp/install-edge.sh"
+  echo "[INFO] Detected script running from a pipe. Saving to $TMP_SCRIPT..."
+  cat >"$TMP_SCRIPT"
+  chmod +x "$TMP_SCRIPT"
 
-    echo "[INFO] Re-running saved script..."
-    exec /usr/bin/env bash "$TMP_SCRIPT" "$@"
+  echo "[INFO] Re-running saved script..."
+  exec /usr/bin/env bash "$TMP_SCRIPT" "$@"
 fi
 
 ### --- CONFIGURATION --- ###
@@ -25,23 +25,24 @@ CONTAINER_NAME="orchestrator_agent"
 NETMON_CONTAINER_NAME="autonomy_netmon"
 SOURCE_DIR="/tmp/orchestrator-agent"
 SHARED_VOLUME="orchestrator-shared"
-SERVER_DNS="tegcayxzurngxjwexsha.supabase.co/functions/v1"
+SERVER_DNS="api.autonomylogic.com"
 SERVER_URL="https://$SERVER_DNS"
-GET_ID_URL="$SERVER_URL/generate-orchestrator-id"
-UPLOAD_CERT_URL="$SERVER_URL/upload-orchestrator-certificate"
+GET_ID_URL="$SERVER_URL/orchestrators/id"
+ENROLL_URL="$SERVER_URL/orchestrators/enroll"
 MTLS_DIR="$HOME/.mtls"
 KEY_PATH="$MTLS_DIR/client.key"
 CRT_PATH="$MTLS_DIR/client.crt"
+CSR_PATH="$MTLS_DIR/client.csr"
+CSR_CONFIG_FILE="$MTLS_DIR/client.conf"
 
 # Check for root privileges
-check_root() 
-{
-    if [[ $EUID -ne 0 ]]; then
-        echo "[INFO] Root privileges are required. Trying to elevate with sudo..."
-        # Re-run the script with sudo, passing all original arguments
-        exec sudo /usr/bin/env bash "$0" "$@"
-        # exec replaces the current shell with the new command, so the rest of the script continues as root
-    fi
+check_root() {
+  if [[ $EUID -ne 0 ]]; then
+    echo "[INFO] Root privileges are required. Trying to elevate with sudo..."
+    # Re-run the script with sudo, passing all original arguments
+    exec sudo /usr/bin/env bash "$0" "$@"
+    # exec replaces the current shell with the new command, so the rest of the script continues as root
+  fi
 }
 
 # Make sure we are root before proceeding
@@ -107,20 +108,20 @@ done
 if [ ${#MISSING_PKGS[@]} -ne 0 ]; then
   echo "Updating package lists and installing missing dependencies: ${MISSING_PKGS[*]}"
   case "$PKG_MANAGER" in
-    apt-get)
-      sudo apt-get update -y
-      sudo apt-get install -y "${MISSING_PKGS[@]}"
-      ;;
-    dnf)
-      sudo dnf install -y "${MISSING_PKGS[@]}"
-      ;;
-    yum)
-      sudo yum install -y "${MISSING_PKGS[@]}"
-      ;;
-    none)
-      echo "[ERROR] Cannot install dependencies automatically. Please install: ${MISSING_PKGS[*]}"
-      exit 1
-      ;;
+  apt-get)
+    sudo apt-get update -y
+    sudo apt-get install -y "${MISSING_PKGS[@]}"
+    ;;
+  dnf)
+    sudo dnf install -y "${MISSING_PKGS[@]}"
+    ;;
+  yum)
+    sudo yum install -y "${MISSING_PKGS[@]}"
+    ;;
+  none)
+    echo "[ERROR] Cannot install dependencies automatically. Please install: ${MISSING_PKGS[*]}"
+    exit 1
+    ;;
   esac
 fi
 
@@ -139,7 +140,7 @@ if docker pull "$NETMON_IMAGE_NAME" 2>/dev/null; then
   echo "[SUCCESS] Pulled network monitor image: $NETMON_IMAGE_NAME"
 else
   echo "[WARNING] No prebuilt netmon image found. Falling back to local build..."
-  
+
   if [ -d "$SOURCE_DIR/.git" ]; then
     echo "Updating existing source clone..."
     if ! git -C "$SOURCE_DIR" pull --rebase; then
@@ -154,10 +155,10 @@ else
     echo "Cloning source to $SOURCE_DIR..."
     git clone https://github.com/autonomy-logic/orchestrator-agent.git "$SOURCE_DIR"
   fi
-  
+
   echo "Building network monitor image locally..."
   docker build -t "$NETMON_IMAGE_NAME" -f "$SOURCE_DIR/install/Dockerfile.netmon" "$SOURCE_DIR/install"
-  
+
   echo "[SUCCESS] Local netmon build completed: $NETMON_IMAGE_NAME"
 fi
 
@@ -165,6 +166,7 @@ if docker ps -a --format '{{.Names}}' | grep -q "^${NETMON_CONTAINER_NAME}$"; th
   echo "Removing existing network monitor container..."
   docker rm -f "$NETMON_CONTAINER_NAME"
 fi
+
 
 docker run -d \
   --name "$NETMON_CONTAINER_NAME" \
@@ -183,36 +185,36 @@ echo "[SUCCESS] Network monitor sidecar started"
 ### --- STEP 1: PULL ORCHESTRATOR AGENT IMAGE AND CREATE CONTAINER --- ###
 echo "Pulling Docker image: $IMAGE_NAME"
 if docker pull "$IMAGE_NAME"; then
-    echo "Pulled image: $IMAGE_NAME"
+  echo "Pulled image: $IMAGE_NAME"
 else
-    echo "[WARNING] No prebuilt image found for this host architecture. Falling back to local build..."
-    # Clone or update the source tree
-    if [ -d "$SOURCE_DIR/.git" ]; then
-        echo "Updating existing source clone..."
-        if ! git -C "$SOURCE_DIR" pull --rebase; then
-            echo "Pull failed, stashing local changes and retrying..."
-            git -C "$SOURCE_DIR" stash push --include-untracked -m "installer-auto-stash $(date +%s)" || true
-            if ! git -C "$SOURCE_DIR" pull --rebase; then
-                echo "[ERROR] git pull still failing after stash. Please inspect $SOURCE_DIR."
-                exit 1
-            fi
-        fi
-    else
-        echo "Cloning source to $SOURCE_DIR..."
-        git clone https://github.com/autonomy-logic/orchestrator-agent.git "$SOURCE_DIR"
+  echo "[WARNING] No prebuilt image found for this host architecture. Falling back to local build..."
+  # Clone or update the source tree
+  if [ -d "$SOURCE_DIR/.git" ]; then
+    echo "Updating existing source clone..."
+    if ! git -C "$SOURCE_DIR" pull --rebase; then
+      echo "Pull failed, stashing local changes and retrying..."
+      git -C "$SOURCE_DIR" stash push --include-untracked -m "installer-auto-stash $(date +%s)" || true
+      if ! git -C "$SOURCE_DIR" pull --rebase; then
+        echo "[ERROR] git pull still failing after stash. Please inspect $SOURCE_DIR."
+        exit 1
+      fi
     fi
+  else
+    echo "Cloning source to $SOURCE_DIR..."
+    git clone https://github.com/autonomy-logic/orchestrator-agent.git "$SOURCE_DIR"
+  fi
 
-    # Build locally for the host architecture
-    # Use 'docker build' which builds for the local machine arch (simplest and most reliable for fallback)
-    info "Building Docker image locally for this host architecture..."
-    docker build -t "$IMAGE_NAME" "$SOURCE_DIR"
+  # Build locally for the host architecture
+  # Use 'docker build' which builds for the local machine arch (simplest and most reliable for fallback)
+  echo "Building Docker image locally for this host architecture..."
+  docker build -t "$IMAGE_NAME" "$SOURCE_DIR"
 
-    info "Local build completed: $IMAGE_NAME"
+  echo "Local build completed: $IMAGE_NAME"
 fi
 
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-    echo "Existing container detected. Removing and recreating..."
-    docker rm -f "$CONTAINER_NAME"
+  echo "Existing container detected. Removing and recreating..."
+  docker rm -f "$CONTAINER_NAME"
 fi
 
 echo "Creating new container: $CONTAINER_NAME"
@@ -244,48 +246,124 @@ if [[ -z "$CUSTOM_ID" || "$CUSTOM_ID" == "null" ]]; then
   exit 1
 fi
 
-### --- STEP 3: GENERATE CLIENT CERTIFICATE --- ###
-echo "Generating mTLS certificate for ID: $CUSTOM_ID"
+### --- STEP 3: GENERATE CLIENT KEY AND CSR --- ###
+echo "Generating client key and certificate signing request..."
 mkdir -p "$MTLS_DIR"
 chmod 700 "$MTLS_DIR"
 
-openssl req -x509 -newkey rsa:4096 -nodes \
-  -keyout "$KEY_PATH" \
-  -out "$CRT_PATH" \
-  -subj "/C=BR/ST=SP/L=SaoPaulo/O=AutonomyLogic/OU=Development/CN=${CUSTOM_ID}" \
-  -days 365 >/dev/null 2>&1
+echo ""
+echo "Generating client certificate for orchestrator ID: $CUSTOM_ID"
+echo ""
+
+# STEP 3.1: Generate client private key
+echo "--- 1. Generating client private key ---"
+openssl genrsa -out "$KEY_PATH" 4096 2>/dev/null
 chmod 600 "$KEY_PATH"
+echo "Client private key generated: $KEY_PATH"
 
-echo "[SUCCESS] Certificate generated: $CRT_PATH"
+# STEP 3.2: Create CSR configuration file
+echo "--- 2. Creating CSR configuration ---"
+cat << EOF > "$CSR_CONFIG_FILE"
+[req]
+distinguished_name = req_distinguished_name
+req_extensions = v3_req
+prompt = no
 
-### --- STEP 5: UPLOAD CERTIFICATE --- ###
-echo "Uploading certificate to $UPLOAD_CERT_URL..."
-upload_response=$(curl -s -w "%{http_code}" -o /tmp/upload_resp.json \
-  -X POST "$UPLOAD_CERT_URL" \
-  -F "certificate=@$CRT_PATH" \
-  -F "id=$CUSTOM_ID")
+[req_distinguished_name]
+C=BR
+ST=SP
+L=SaoPaulo
+O=AutonomyLogic
+OU=Production
+CN=${CUSTOM_ID}
 
-if [[ "$upload_response" -ne 200 ]]; then
-  echo "[ERROR] Upload failed. HTTP code: $upload_response"
+[v3_req]
+keyUsage = keyEncipherment, dataEncipherment
+extendedKeyUsage = clientAuth
+EOF
+
+echo "CSR configuration created"
+
+# STEP 3.3: Generate CSR (Certificate Signing Request)
+echo "--- 3. Generating Certificate Signing Request (CSR) ---"
+openssl req -new \
+  -key "$KEY_PATH" \
+  -out "$CSR_PATH" \
+  -config "$CSR_CONFIG_FILE" 2>/dev/null
+
+echo "CSR generated: $CSR_PATH"
+
+### --- STEP 4: ENROLL WITH SERVER (CSR SIGNING) --- ###
+echo "--- 4. Submitting CSR to server for signing ---"
+echo "Enrolling with $ENROLL_URL..."
+enroll_response=$(curl -s -w "%{http_code}" -o /tmp/enroll_resp.json \
+  -X POST "$ENROLL_URL" \
+  -F "csr=@$CSR_PATH")
+
+http_code="${enroll_response: -3}"
+
+if [[ "$http_code" -ne 200 ]]; then
+  echo "[ERROR] Enrollment failed. HTTP code: $http_code"
   echo "Server response:"
-  cat /tmp/upload_resp.json
+  cat /tmp/enroll_resp.json
   echo
   exit 1
 fi
 
-# Extract fields from response JSON
-message=$(jq -r '.data.message' /tmp/upload_resp.json)
-status=$(jq -r '.statusCode' /tmp/upload_resp.json)
-id_resp=$(jq -r '.data.id' /tmp/upload_resp.json)
+# Extract certificate from response JSON
+certificate=$(jq -r '.data.certificate' /tmp/enroll_resp.json)
+message=$(jq -r '.data.message' /tmp/enroll_resp.json)
+id_resp=$(jq -r '.data.id' /tmp/enroll_resp.json)
+status=$(jq -r '.statusCode' /tmp/enroll_resp.json)
 
-if [[ $status != 200 ]]; then
+if [[ "$status" != "200" ]]; then
   echo "[WARNING] Unexpected server status: $status"
-  cat /tmp/upload_resp.json
+  cat /tmp/enroll_resp.json
   echo
   exit 1
 fi
 
-echo "[SUCCESS] Upload completed: $message (ID: $id_resp)"
+if [[ -z "$certificate" || "$certificate" == "null" ]]; then
+  echo "[ERROR] No certificate received from server"
+  cat /tmp/enroll_resp.json
+  echo
+  exit 1
+fi
+
+# Save the signed certificate
+echo "$certificate" > "$CRT_PATH"
+chmod 644 "$CRT_PATH"
+echo "Client certificate signed and saved: $CRT_PATH"
+
+# STEP 3.5: Cleanup temporary files
+echo "--- 5. Cleaning up temporary files ---"
+rm -f "$CSR_PATH" "$CSR_CONFIG_FILE" /tmp/enroll_resp.json
+echo "Cleanup completed"
+
+echo ""
+echo "CERTIFICATE ENROLLMENT COMPLETE!"
+echo "=================================================="
+echo "Files created:"
+echo "   - Client key:         $KEY_PATH"
+echo "   - Client certificate: $CRT_PATH"
+echo ""
+echo "Certificate verification:"
+echo "   Subject:"
+openssl x509 -in "$CRT_PATH" -noout -subject
+echo ""
+echo "   Issuer:"
+openssl x509 -in "$CRT_PATH" -noout -issuer
+echo ""
+echo "   Valid until:"
+openssl x509 -in "$CRT_PATH" -noout -enddate
+echo ""
+echo "   Fingerprint SHA256:"
+openssl x509 -in "$CRT_PATH" -noout -fingerprint -sha256
+echo ""
+echo "=================================================="
+echo ""
+
+echo "[SUCCESS] Enrollment completed: $message (ID: $id_resp)"
 
 ### --- STEP 6: RESTART CONTAINER --- ###
 echo "Restarting container: $CONTAINER_NAME"
