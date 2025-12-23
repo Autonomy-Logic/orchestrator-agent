@@ -35,6 +35,12 @@ CRT_PATH="$MTLS_DIR/client.crt"
 CSR_PATH="$MTLS_DIR/client.csr"
 CSR_CONFIG_FILE="$MTLS_DIR/client.conf"
 
+# Cleanup function for trap - ensures temp files are removed on exit
+cleanup_temp_files() {
+  rm -f "${CSR_PATH:-}" "${CSR_CONFIG_FILE:-}" /tmp/enroll_resp.json 2>/dev/null || true
+}
+trap cleanup_temp_files EXIT
+
 # Check for root privileges
 check_root() {
   if [[ $EUID -ne 0 ]]; then
@@ -257,7 +263,10 @@ echo ""
 
 # STEP 3.1: Generate client private key
 echo "--- 1. Generating client private key ---"
-openssl genrsa -out "$KEY_PATH" 4096 2>/dev/null
+if ! openssl genrsa -out "$KEY_PATH" 4096 2>/dev/null; then
+  echo "[ERROR] Failed to generate client private key. Aborting."
+  exit 1
+fi
 chmod 600 "$KEY_PATH"
 echo "Client private key generated: $KEY_PATH"
 
@@ -296,11 +305,17 @@ echo "CSR generated: $CSR_PATH"
 ### --- STEP 4: ENROLL WITH SERVER (CSR SIGNING) --- ###
 echo "--- 4. Submitting CSR to server for signing ---"
 echo "Enrolling with $ENROLL_URL..."
-enroll_response=$(curl -s -w "%{http_code}" -o /tmp/enroll_resp.json \
+http_code=$(curl -sS -w "%{http_code}" -o /tmp/enroll_resp.json \
   -X POST "$ENROLL_URL" \
-  -F "csr=@$CSR_PATH")
+  -F "csr=@$CSR_PATH") || {
+  echo "[ERROR] Enrollment request failed. Please check network connectivity."
+  exit 1
+}
 
-http_code="${enroll_response: -3}"
+if [[ -z "$http_code" || ! "$http_code" =~ ^[0-9]{3}$ ]]; then
+  echo "[ERROR] Invalid HTTP response code received: $http_code"
+  exit 1
+fi
 
 if [[ "$http_code" -ne 200 ]]; then
   echo "[ERROR] Enrollment failed. HTTP code: $http_code"
@@ -335,10 +350,16 @@ echo "$certificate" > "$CRT_PATH"
 chmod 644 "$CRT_PATH"
 echo "Client certificate signed and saved: $CRT_PATH"
 
-# STEP 3.5: Cleanup temporary files
-echo "--- 5. Cleaning up temporary files ---"
-rm -f "$CSR_PATH" "$CSR_CONFIG_FILE" /tmp/enroll_resp.json
-echo "Cleanup completed"
+# Verify the certificate has correct extensions for mTLS client auth
+echo "--- 5. Verifying certificate extensions ---"
+if ! openssl x509 -in "$CRT_PATH" -noout -purpose 2>/dev/null | grep -q "SSL client : Yes"; then
+  echo "[ERROR] Server returned a certificate that is not valid for SSL client authentication."
+  echo "This may indicate a server misconfiguration. Please contact support."
+  exit 1
+fi
+echo "Certificate verified: valid for SSL client authentication"
+
+# Note: Temporary files (CSR, config, response) are cleaned up automatically by trap handler
 
 echo ""
 echo "CERTIFICATE ENROLLMENT COMPLETE!"
