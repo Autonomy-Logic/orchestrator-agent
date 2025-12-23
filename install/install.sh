@@ -368,13 +368,6 @@ echo "Files created:"
 echo "   - Client key:         $KEY_PATH"
 echo "   - Client certificate: $CRT_PATH"
 echo ""
-echo "Certificate verification:"
-echo "   Subject:"
-openssl x509 -in "$CRT_PATH" -noout -subject
-echo ""
-echo "   Issuer:"
-openssl x509 -in "$CRT_PATH" -noout -issuer
-echo ""
 echo "   Valid until:"
 openssl x509 -in "$CRT_PATH" -noout -enddate
 echo ""
