@@ -6,7 +6,7 @@ Collects static system information at boot time (IP addresses, OS, kernel, CPU c
 import psutil
 import platform
 import socket
-from typing import List, Dict, Tuple
+from typing import List, Dict
 
 # Virtual interface prefixes to filter out (Docker bridges, VPNs, etc.)
 VIRTUAL_INTERFACE_PREFIXES = [
@@ -43,13 +43,13 @@ def _is_physical_interface(interface_name: str) -> bool:
     return True
 
 
-def get_ip_addresses() -> List[Tuple[str, str]]:
+def get_ip_addresses() -> List[Dict[str, str]]:
     """
     Get all IP addresses from physical network interfaces.
     Filters out virtual interfaces (Docker bridges, VPNs, etc.).
 
     Returns:
-        List[Tuple[str, str]]: List of (interface_name, ip_address) tuples
+        List[Dict[str, str]]: List of {"interface": name, "ip_address": ip} dicts
     """
     ip_addresses = []
 
@@ -62,7 +62,10 @@ def get_ip_addresses() -> List[Tuple[str, str]]:
         for address in addresses:
             if address.family == socket.AF_INET:
                 if not address.address.startswith("127."):
-                    ip_addresses.append((interface_name, address.address))
+                    ip_addresses.append({
+                        "interface": interface_name,
+                        "ip_address": address.address,
+                    })
 
     return ip_addresses
 
@@ -184,14 +187,8 @@ def get_system_info() -> Dict:
             - kernel: str - Kernel version
             - disk: int - Total disk space in GB
     """
-    # Convert list of tuples to list of dicts for JSON serialization
-    ip_address_tuples = get_ip_addresses()
-    ip_addresses = [
-        {"interface": iface, "ip_address": ip} for iface, ip in ip_address_tuples
-    ]
-
     return {
-        "ip_addresses": ip_addresses,
+        "ip_addresses": get_ip_addresses(),
         "memory": get_total_memory(),
         "cpu": get_cpu_count(),
         "os": get_os_info(),
