@@ -5,8 +5,8 @@ import argparse
 import asyncio
 from time import sleep
 
-## AWS Dummy Server Address
-SERVER_HOST = "api.getedge.me"
+## AWS Server Address
+SERVER_HOST = "api.autonomylogic.com:3001"
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Orchestrator Agent")
