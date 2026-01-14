@@ -5,8 +5,9 @@ Collects static system information at boot time (IP addresses, OS, kernel, CPU c
 
 import psutil
 import platform
-import socket
 from typing import List, Dict
+
+from tools.interface_cache import INTERFACE_CACHE
 
 # Virtual interface prefixes to filter out (Docker bridges, VPNs, etc.)
 VIRTUAL_INTERFACE_PREFIXES = [
@@ -45,7 +46,9 @@ def _is_physical_interface(interface_name: str) -> bool:
 
 def get_ip_addresses() -> List[Dict[str, str]]:
     """
-    Get all IP addresses from physical network interfaces.
+    Get all IP addresses from physical HOST network interfaces.
+    Uses the INTERFACE_CACHE populated by the netmon sidecar to access host
+    network information from within the container.
     Filters out virtual interfaces (Docker bridges, VPNs, etc.).
 
     Returns:
@@ -53,18 +56,18 @@ def get_ip_addresses() -> List[Dict[str, str]]:
     """
     ip_addresses = []
 
-    net_if_addrs = psutil.net_if_addrs()
-
-    for interface_name, addresses in net_if_addrs.items():
+    for interface_name, cache_data in INTERFACE_CACHE.items():
         if not _is_physical_interface(interface_name):
             continue
 
-        for address in addresses:
-            if address.family == socket.AF_INET:
-                if not address.address.startswith("127."):
+        addresses_list = cache_data.get("addresses", [])
+        for addr_obj in addresses_list:
+            if isinstance(addr_obj, dict):
+                address = addr_obj.get("address")
+                if address and not address.startswith("127."):
                     ip_addresses.append({
                         "interface": interface_name,
-                        "ip_address": address.address,
+                        "ip_address": address,
                     })
 
     return ip_addresses
