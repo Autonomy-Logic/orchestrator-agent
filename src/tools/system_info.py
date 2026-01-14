@@ -56,7 +56,10 @@ def get_ip_addresses() -> List[Dict[str, str]]:
     """
     ip_addresses = []
 
-    for interface_name, cache_data in INTERFACE_CACHE.items():
+    # Take a snapshot for thread safety (cache may be updated by netmon events)
+    cache_snapshot = dict(INTERFACE_CACHE)
+
+    for interface_name, cache_data in cache_snapshot.items():
         if not _is_physical_interface(interface_name):
             continue
 
