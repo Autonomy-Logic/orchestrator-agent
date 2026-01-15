@@ -8,6 +8,7 @@ Bridges data channel messages to PTY sessions on runtime containers.
 from tools.logger import log_info, log_debug, log_error, log_warning
 import json
 import asyncio
+from typing import Optional
 
 
 class TerminalChannel:
@@ -29,6 +30,8 @@ class TerminalChannel:
             {"type": "pong"}
             {"type": "close"}
             {"type": "ready"}  # Sent when channel is ready for terminal I/O
+            {"type": "pty_connected"}  # Sent when PTY is connected
+            {"type": "pty_disconnected"}  # Sent when PTY is disconnected
     """
 
     def __init__(self, data_channel, session_id: str, session_manager=None):
@@ -46,7 +49,9 @@ class TerminalChannel:
         self.pty_bridge = None
         self._closed = False
         self._ready = False
-        self._message_queue = asyncio.Queue()
+        self._device_id: Optional[str] = None
+        self._cols = 80
+        self._rows = 24
         self._setup_handlers()
 
     def _setup_handlers(self):
@@ -62,6 +67,12 @@ class TerminalChannel:
             if self.session_manager:
                 from .. import SessionState
                 self.session_manager.update_session_state(self.session_id, SessionState.CONNECTED)
+                # Get device_id from session
+                session = self.session_manager.get_session(self.session_id)
+                if session:
+                    self._device_id = session.get("device_id")
+                    # Auto-connect to PTY
+                    asyncio.create_task(self._auto_connect_pty())
 
         @self.channel.on("close")
         def on_close():
@@ -75,14 +86,66 @@ class TerminalChannel:
 
         @self.channel.on("message")
         def on_message(message):
-            # Queue message for async processing
-            try:
-                asyncio.get_event_loop().call_soon_threadsafe(
-                    lambda: asyncio.create_task(self._handle_message(message))
-                )
-            except RuntimeError:
-                # If no event loop, handle synchronously (shouldn't happen in production)
-                log_warning(f"No event loop for message handling in session {self.session_id}")
+            # Handle message in async context
+            asyncio.create_task(self._handle_message(message))
+
+    async def _auto_connect_pty(self):
+        """Automatically connect to PTY when channel opens."""
+        if not self._device_id:
+            log_warning(f"No device_id for session {self.session_id}, cannot auto-connect PTY")
+            return
+
+        error = await self.connect_pty(self._device_id, self._cols, self._rows)
+        if error:
+            self._send_message({
+                "type": "error",
+                "message": f"Failed to connect PTY: {error}"
+            })
+
+    async def connect_pty(self, container_name: str, cols: int = 80, rows: int = 24) -> Optional[str]:
+        """
+        Connect to a container PTY.
+
+        Args:
+            container_name: Target container name
+            cols: Terminal columns
+            rows: Terminal rows
+
+        Returns:
+            Error message if failed, None if successful
+        """
+        if self.pty_bridge and self.pty_bridge.is_connected:
+            return "PTY already connected"
+
+        self._cols = cols
+        self._rows = rows
+
+        try:
+            # Import here to avoid circular imports
+            from use_cases.terminal_pty import PTYBridge
+
+            # Create PTY bridge with output callback
+            self.pty_bridge = PTYBridge(
+                container_name=container_name,
+                output_callback=self.send_output_bytes,
+                cols=cols,
+                rows=rows,
+            )
+
+            # Connect to container
+            error = await self.pty_bridge.connect()
+            if error:
+                self.pty_bridge = None
+                return error
+
+            log_info(f"PTY connected for session {self.session_id} to container {container_name}")
+            self._send_message({"type": "pty_connected", "container": container_name})
+            return None
+
+        except Exception as e:
+            log_error(f"Error connecting PTY for session {self.session_id}: {e}")
+            self.pty_bridge = None
+            return str(e)
 
     async def _handle_message(self, raw_message):
         """
@@ -117,6 +180,17 @@ class TerminalChannel:
             elif msg_type == "close":
                 log_info(f"Close request received for session {self.session_id}")
                 self.close()
+            elif msg_type == "connect_pty":
+                # Manual PTY connection request
+                container = message.get("container")
+                cols = message.get("cols", 80)
+                rows = message.get("rows", 24)
+                if container:
+                    error = await self.connect_pty(container, cols, rows)
+                    if error:
+                        self._send_error(f"PTY connection failed: {error}")
+                else:
+                    self._send_error("Container name required for connect_pty")
             else:
                 log_debug(f"Unknown message type: {msg_type}")
 
@@ -134,18 +208,17 @@ class TerminalChannel:
         Args:
             data: Input data to write to PTY
         """
-        if self.pty_bridge:
-            try:
-                await self.pty_bridge.write(data)
-            except Exception as e:
-                log_error(f"Error writing to PTY: {e}")
-                self._send_error(f"PTY write error: {e}")
+        if self.pty_bridge and self.pty_bridge.is_connected:
+            error = await self.pty_bridge.write(data)
+            if error:
+                log_error(f"Error writing to PTY: {error}")
+                self._send_error(f"PTY write error: {error}")
         else:
-            log_debug(f"Terminal input received but no PTY attached: {repr(data[:50])}")
+            log_debug(f"Terminal input received but no PTY connected: {repr(data[:50] if len(data) > 50 else data)}")
             # Echo back for testing when no PTY is attached
             self._send_message({
                 "type": "output",
-                "data": f"[No PTY attached] Received: {repr(data)}\r\n"
+                "data": f"[No PTY connected] Input received: {len(data)} bytes\r\n"
             })
 
     async def _handle_resize(self, cols: int, rows: int):
@@ -156,12 +229,14 @@ class TerminalChannel:
             cols: New column count
             rows: New row count
         """
+        self._cols = cols
+        self._rows = rows
         log_debug(f"Terminal resize for session {self.session_id}: {cols}x{rows}")
-        if self.pty_bridge:
-            try:
-                await self.pty_bridge.resize(cols, rows)
-            except Exception as e:
-                log_error(f"Error resizing PTY: {e}")
+
+        if self.pty_bridge and self.pty_bridge.is_connected:
+            error = await self.pty_bridge.resize(cols, rows)
+            if error:
+                log_warning(f"PTY resize warning: {error}")
 
     def _send_message(self, message: dict):
         """
@@ -210,16 +285,6 @@ class TerminalChannel:
         except Exception as e:
             log_error(f"Error decoding output bytes: {e}")
 
-    def set_pty_bridge(self, pty_bridge):
-        """
-        Associate a PTY bridge with this channel.
-
-        Args:
-            pty_bridge: PTY bridge instance
-        """
-        self.pty_bridge = pty_bridge
-        log_debug(f"PTY bridge attached to session {self.session_id}")
-
     def close(self):
         """Close the terminal channel and cleanup resources."""
         if self._closed:
@@ -228,6 +293,8 @@ class TerminalChannel:
         self._closed = True
         self._ready = False
 
+        log_info(f"Closing terminal channel for session {self.session_id}")
+
         # Close PTY bridge if attached
         if self.pty_bridge:
             try:
@@ -235,6 +302,12 @@ class TerminalChannel:
             except Exception as e:
                 log_debug(f"Error closing PTY bridge: {e}")
             self.pty_bridge = None
+
+        # Notify browser
+        try:
+            self._send_message({"type": "pty_disconnected"})
+        except Exception:
+            pass
 
         # Close the data channel
         if self.channel:
@@ -254,3 +327,8 @@ class TerminalChannel:
     def is_closed(self) -> bool:
         """Check if channel is closed."""
         return self._closed
+
+    @property
+    def is_pty_connected(self) -> bool:
+        """Check if PTY is connected."""
+        return self.pty_bridge is not None and self.pty_bridge.is_connected
