@@ -15,6 +15,7 @@ from tools.contract_validation import (
     validate_contract_with_error_response,
 )
 from use_cases.docker_manager import CLIENTS
+from .. import SessionState
 
 
 NAME = "webrtc:offer"
@@ -85,6 +86,7 @@ def init(client, session_manager):
         try:
             # Create peer connection for this session
             pc = await session_manager.create_session(session_id, device_id)
+            session_manager.update_session_state(session_id, SessionState.CONNECTING)
 
             # Set up ICE candidate handler - emit local candidates to browser
             @pc.on("icecandidate")
@@ -101,14 +103,26 @@ def init(client, session_manager):
             # Set up connection state handler
             @pc.on("connectionstatechange")
             async def on_connection_state_change():
-                log_info(f"Session {session_id} connection state: {pc.connectionState}")
-                if pc.connectionState in ("failed", "closed"):
-                    await session_manager.close_session(session_id)
+                state = pc.connectionState
+                log_info(f"Session {session_id} connection state: {state}")
+                session_manager.update_connection_state(session_id, state)
+
+                if state == "failed":
+                    log_warning(f"Session {session_id} connection failed")
+                    await session_manager.close_session(session_id, reason="connection_failed")
+                elif state == "closed":
+                    await session_manager.close_session(session_id, reason="connection_closed")
 
             # Set up ICE connection state handler
             @pc.on("iceconnectionstatechange")
             async def on_ice_connection_state_change():
-                log_debug(f"Session {session_id} ICE state: {pc.iceConnectionState}")
+                ice_state = pc.iceConnectionState
+                log_debug(f"Session {session_id} ICE state: {ice_state}")
+                session_manager.update_connection_state(
+                    session_id,
+                    pc.connectionState,
+                    ice_state
+                )
 
             # Set up data channel handler (browser creates the channel)
             @pc.on("datachannel")
@@ -118,8 +132,8 @@ def init(client, session_manager):
 
                 # Import here to avoid circular imports
                 from ..data_channel import TerminalChannel
-                terminal = TerminalChannel(channel, session_id)
-                session_manager.set_pty_session(session_id, terminal)
+                terminal = TerminalChannel(channel, session_id, session_manager)
+                session_manager.set_terminal_channel(session_id, terminal)
 
             # Set remote description (the offer from browser)
             offer = RTCSessionDescription(sdp=sdp, type=sdp_type)
@@ -145,7 +159,7 @@ def init(client, session_manager):
         except Exception as e:
             log_error(f"Error handling WebRTC offer: {e}")
             # Clean up on error
-            await session_manager.close_session(session_id)
+            await session_manager.close_session(session_id, reason="error")
             return {
                 "action": NAME,
                 "correlation_id": correlation_id,
