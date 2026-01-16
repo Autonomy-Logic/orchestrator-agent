@@ -1,31 +1,46 @@
-# WebRTC Controller Implementation Plan
+# WebRTC Controller Implementation
 
-This document outlines the investigation and implementation plan for the WebRTC controller that will enable remote terminal access to runtime containers (vPLCs) for debugging purposes.
+This document describes the WebRTC controller implementation for remote terminal access to runtime containers.
 
 ## Table of Contents
 1. [Overview](#overview)
 2. [Architecture](#architecture)
-3. [Python WebRTC Libraries Comparison](#python-webrtc-libraries-comparison)
-4. [Implementation Plan](#implementation-plan)
-5. [Use Case Design](#use-case-design)
-6. [Security Considerations](#security-considerations)
-7. [References](#references)
+3. [File Structure](#file-structure)
+4. [Signaling Protocol](#signaling-protocol)
+5. [Data Channel Protocol](#data-channel-protocol)
+6. [Usage](#usage)
+7. [Testing](#testing)
 
 ---
 
 ## Overview
 
-### Purpose
-Enable browser-based remote terminal access to runtime containers (vPLCs) managed by the orchestrator-agent. This allows developers and operators to debug runtime containers directly from a web interface without SSH access to the host machine.
+The WebRTC controller enables browser-based remote terminal access to runtime containers (vPLCs) managed by the orchestrator-agent. It uses WebRTC data channels for low-latency, peer-to-peer terminal I/O.
+
+### Key Features
+- WebRTC signaling via existing Socket.IO connection
+- Data channel for terminal I/O (not video/audio)
+- Docker exec PTY integration
+- Session timeout and cleanup
+- Terminal resize support
+
+### Library Choice: aiortc
+- **Pure Python** WebRTC implementation
+- **Asyncio native** - integrates with existing codebase
+- **Sufficient performance** for terminal I/O (~5 Mbps data channel)
+
+---
+
+## Architecture
 
 ### Communication Flow
 ```
 ┌─────────────────┐         ┌─────────────────┐         ┌─────────────────────────┐
 │   Web Browser   │◄───────►│  Signaling      │◄───────►│   Orchestrator Agent    │
-│   (Client)      │   WS    │  Server (Cloud) │   WS    │   (WebRTC Peer)         │
+│   (xterm.js)    │   WS    │  Server (Cloud) │   WS    │   (WebRTC Peer)         │
 └────────┬────────┘         └─────────────────┘         └───────────┬─────────────┘
          │                                                          │
-         │         WebRTC Data Channel (P2P or relayed)             │
+         │         WebRTC Data Channel (P2P)                        │
          └──────────────────────────────────────────────────────────┘
                                     │
                                     ▼
@@ -35,400 +50,306 @@ Enable browser-based remote terminal access to runtime containers (vPLCs) manage
                          └─────────────────────┘
 ```
 
-### Key Components
-1. **Browser Client**: xterm.js frontend rendering terminal output
-2. **Signaling Server**: Separate cloud application handling WebRTC offer/answer exchange
-3. **Orchestrator Agent**: WebRTC peer that bridges data channel I/O to container PTY
-4. **Runtime Container**: Target container where terminal commands are executed
+### Component Layers
+1. **Controller Layer** - WebRTC signaling handlers
+2. **Session Layer** - RTCPeerConnection management
+3. **Channel Layer** - Data channel message protocol
+4. **Use Case Layer** - Docker exec PTY bridge
 
 ---
 
-## Architecture
+## File Structure
 
-### Integration with Existing Codebase
-
-The WebRTC controller should follow existing patterns:
-
-**Controller Layer** (`src/controllers/webrtc_controller/`)
-- Handles WebRTC connection lifecycle (offer, answer, ICE candidates)
-- Receives signaling messages via existing Socket.IO connection
-- Creates and manages RTCPeerConnection instances
-
-**Use Case Layer** (`src/use_cases/terminal_pty/`)
-- Manages PTY sessions on runtime containers via `docker exec`
-- Bridges WebRTC data channel to PTY stdin/stdout
-- Handles terminal resize (SIGWINCH) commands
-
-### Signaling via Socket.IO
-
-Since the orchestrator already maintains a Socket.IO connection to the cloud, signaling can piggyback on this channel:
-
-```python
-# New WebSocket topics needed:
-- "webrtc:offer"       # Cloud → Agent: SDP offer from browser
-- "webrtc:answer"      # Agent → Cloud: SDP answer to browser
-- "webrtc:ice"         # Bidirectional: ICE candidate exchange
-- "webrtc:disconnect"  # Either end: Session termination
+```
+src/
+├── controllers/
+│   ├── __init__.py                      # Integrates WebRTC controller
+│   └── webrtc_controller/
+│       ├── __init__.py                  # WebRTCSessionManager, init/start/stop
+│       ├── signaling/
+│       │   ├── __init__.py              # initialize_signaling()
+│       │   ├── offer_handler.py         # webrtc:offer topic
+│       │   ├── ice_handler.py           # webrtc:ice topic
+│       │   └── disconnect_handler.py    # webrtc:disconnect topic
+│       └── data_channel/
+│           ├── __init__.py              # TerminalChannel export
+│           └── terminal_channel.py      # Terminal I/O protocol
+│
+└── use_cases/
+    └── terminal_pty/
+        ├── __init__.py                  # PTYBridge, create_pty_session exports
+        ├── create_pty_session.py        # Docker exec PTY creation
+        └── pty_bridge.py                # Data channel ↔ PTY bridge
 ```
 
-### Data Channel Protocol
+---
 
-The WebRTC data channel will carry JSON messages for terminal I/O:
+## Signaling Protocol
 
+### Socket.IO Topics
+
+| Topic | Direction | Description |
+|-------|-----------|-------------|
+| `webrtc:offer` | Cloud → Agent | Browser's SDP offer |
+| `webrtc:answer` | Agent → Cloud | Agent's SDP answer (return value) |
+| `webrtc:ice` | Bidirectional | ICE candidate exchange |
+| `webrtc:disconnect` | Cloud → Agent | Session termination |
+
+### Offer Message
 ```json
-// Terminal input (browser → agent)
+{
+  "correlation_id": 123,
+  "session_id": "unique-session-id",
+  "device_id": "runtime-container-name",
+  "sdp": "v=0\r\no=- ...",
+  "sdp_type": "offer"
+}
+```
+
+### Answer Response
+```json
+{
+  "action": "webrtc:offer",
+  "correlation_id": 123,
+  "status": "success",
+  "session_id": "unique-session-id",
+  "sdp": "v=0\r\no=- ...",
+  "sdp_type": "answer"
+}
+```
+
+### ICE Candidate Message
+```json
+{
+  "session_id": "unique-session-id",
+  "candidate": "candidate:1 1 UDP 2122252543 ...",
+  "sdp_mid": "0",
+  "sdp_mline_index": 0
+}
+```
+
+---
+
+## Data Channel Protocol
+
+The browser creates a data channel named `terminal`. Messages are JSON-encoded.
+
+### Input Messages (Browser → Agent)
+
+**Terminal Input**
+```json
 {"type": "input", "data": "ls -la\n"}
+```
 
-// Terminal output (agent → browser)
-{"type": "output", "data": "total 42\ndrwxr-xr-x ..."}
-
-// Terminal resize (browser → agent)
+**Terminal Resize**
+```json
 {"type": "resize", "cols": 120, "rows": 40}
+```
 
-// Session control
+**Ping (Keepalive)**
+```json
 {"type": "ping"}
-{"type": "pong"}
+```
+
+**Close Request**
+```json
 {"type": "close"}
 ```
 
+**Manual PTY Connect**
+```json
+{"type": "connect_pty", "container": "runtime-001", "cols": 80, "rows": 24}
+```
+
+### Output Messages (Agent → Browser)
+
+**Terminal Output**
+```json
+{"type": "output", "data": "total 42\ndrwxr-xr-x ..."}
+```
+
+**Ready (Channel Open)**
+```json
+{"type": "ready"}
+```
+
+**Pong (Keepalive Response)**
+```json
+{"type": "pong"}
+```
+
+**PTY Connected**
+```json
+{"type": "pty_connected", "container": "runtime-001"}
+```
+
+**PTY Disconnected**
+```json
+{"type": "pty_disconnected"}
+```
+
+**Error**
+```json
+{"type": "error", "message": "Error description"}
+```
+
 ---
 
-## Python WebRTC Libraries Comparison
+## Usage
 
-### 1. aiortc (Recommended)
+### Initialization
 
-**Repository**: https://github.com/aiortc/aiortc
-**PyPI**: https://pypi.org/project/aiortc/
-**License**: BSD-3-Clause
+The WebRTC controller is automatically initialized when the agent connects to the cloud:
 
-#### Pros
-- **Pure Python**: No C++ compilation required, simple `pip install aiortc`
-- **Asyncio Native**: Built on asyncio, perfect for this codebase's async architecture
-- **JavaScript-like API**: Familiar RTCPeerConnection, RTCDataChannel interfaces
-- **Complete Implementation**: Includes ICE, DTLS, SCTP for data channels
-- **Active Maintenance**: Regular updates, good documentation
-- **Lightweight**: Minimal dependencies compared to alternatives
-- **IoT Friendly**: Designed for server-side and embedded use cases
+```python
+# In controllers/__init__.py
+from .webrtc_controller import init, start, stop
 
-#### Cons
-- **Performance Ceiling**: ~5 Mbps data channel throughput (sufficient for terminal)
-- **Message Rate Limit**: Issues above ~10 messages/second with large payloads
-- **Single Maintainer**: Primarily maintained by one developer (Jérémy Lainé)
-- **Media Focus**: Some features optimized for audio/video, not pure data channels
+async def main_websocket_task(server_url):
+    client = await get_websocket_client()
 
-#### Installation
+    # Initialize controllers
+    init_websocket_controller(client)
+    init_webrtc_controller(client)  # Registers signaling handlers
+
+    # Start background tasks
+    await start_webrtc_controller()  # Starts session cleanup task
+
+    try:
+        await client.connect(f"https://{server_url}")
+        await client.wait()
+    finally:
+        await stop_webrtc_controller()  # Cleanup
+```
+
+### Session States
+
+```python
+class SessionState(Enum):
+    CREATED = "created"           # Session created, waiting for offer
+    CONNECTING = "connecting"     # Offer received, establishing connection
+    CONNECTED = "connected"       # Data channel open, PTY connected
+    DISCONNECTED = "disconnected" # Connection lost
+    CLOSED = "closed"             # Session closed
+```
+
+### Session Timeout
+
+Sessions are automatically closed after 5 minutes of inactivity. The cleanup task runs every 60 seconds.
+
+```python
+SESSION_TIMEOUT_SECONDS = 300  # 5 minutes
+CLEANUP_INTERVAL_SECONDS = 60  # 1 minute
+```
+
+---
+
+## Testing
+
+### Run Integration Tests
+
 ```bash
-pip install aiortc
-# System dependencies (Ubuntu):
-# apt install libavdevice-dev libavfilter-dev libopus-dev libvpx-dev libsrtp2-dev
+cd /Users/daniel/src/orchestrator-agent
+python3 -c "
+import sys
+sys.path.insert(0, 'src')
+# ... test code ...
+"
 ```
 
-#### Sample Usage
-```python
-from aiortc import RTCPeerConnection, RTCSessionDescription
+### Test Components
 
-pc = RTCPeerConnection()
-channel = pc.createDataChannel("terminal")
+1. **Session Manager** - Create, state transitions, cleanup
+2. **Offer/Answer Flow** - SDP exchange via aiortc
+3. **Terminal Protocol** - JSON message encoding/decoding
+4. **PTY Bridge** - Docker exec integration
+5. **End-to-End** - Full flow simulation
 
-@channel.on("message")
-async def on_message(message):
-    # Handle terminal input
-    pass
-```
+### Manual Testing
+
+1. Start the orchestrator agent
+2. Create a runtime container
+3. Connect from browser with WebRTC client
+4. Send terminal commands via data channel
 
 ---
 
-### 2. GStreamer WebRTC (via Python bindings)
+## Browser Client Example
 
-**Repository**: https://gitlab.freedesktop.org/gstreamer/gst-plugins-bad
-**Documentation**: https://gstreamer.freedesktop.org/documentation/webrtc/
+```javascript
+// Create peer connection
+const pc = new RTCPeerConnection();
 
-#### Pros
-- **Pipeline Architecture**: Extremely flexible multimedia processing
-- **Extensive Codec Support**: Wide range of audio/video codecs via plugins
-- **High Performance**: Native C implementation, very efficient
-- **Enterprise Grade**: Used in production multimedia applications
-- **Rust/C#/Python bindings**: Multiple language options
+// Create data channel for terminal
+const channel = pc.createDataChannel('terminal');
 
-#### Cons
-- **Heavy Dependency**: Large system library, complex installation
-- **No Built-in Signaling**: Must implement ICE/STUN/TURN separately
-- **Overkill for Data Channels**: Designed for media pipelines, not terminal I/O
-- **Steeper Learning Curve**: Pipeline concepts take time to master
-- **Complex Debugging**: GStreamer pipelines can be opaque
+channel.onopen = () => {
+    console.log('Terminal channel open');
+};
 
-#### Installation
-```bash
-# Ubuntu:
-apt install gstreamer1.0-plugins-bad python3-gst-1.0
-pip install PyGObject
+channel.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.type === 'output') {
+        terminal.write(msg.data);  // xterm.js
+    } else if (msg.type === 'ready') {
+        console.log('Agent ready');
+    }
+};
+
+// Create offer
+const offer = await pc.createOffer();
+await pc.setLocalDescription(offer);
+
+// Send offer via signaling server (Socket.IO)
+socket.emit('webrtc:offer', {
+    session_id: 'unique-id',
+    device_id: 'runtime-001',
+    sdp: pc.localDescription.sdp,
+    sdp_type: 'offer'
+});
+
+// Receive answer
+socket.on('webrtc:offer', (response) => {
+    if (response.status === 'success') {
+        pc.setRemoteDescription({
+            type: response.sdp_type,
+            sdp: response.sdp
+        });
+    }
+});
+
+// Handle ICE candidates
+pc.onicecandidate = (event) => {
+    if (event.candidate) {
+        socket.emit('webrtc:ice', {
+            session_id: 'unique-id',
+            candidate: event.candidate.candidate,
+            sdp_mid: event.candidate.sdpMid,
+            sdp_mline_index: event.candidate.sdpMLineIndex
+        });
+    }
+};
+
+// Send terminal input
+terminal.onData((data) => {
+    channel.send(JSON.stringify({type: 'input', data: data}));
+});
+
+// Send terminal resize
+terminal.onResize((size) => {
+    channel.send(JSON.stringify({
+        type: 'resize',
+        cols: size.cols,
+        rows: size.rows
+    }));
+});
 ```
-
----
-
-### 3. pion/webrtc (Go) + Python Bridge
-
-**Repository**: https://github.com/pion/webrtc
-
-#### Pros
-- **Pure Go**: Excellent performance, no system dependencies
-- **Data Channel Focused**: Strong support for non-media use cases
-- **Very Active Community**: Large contributor base
-
-#### Cons
-- **Not Python Native**: Requires Go subprocess or CFFI bridge
-- **Architecture Mismatch**: Doesn't integrate with Python asyncio
-- **Operational Complexity**: Two runtimes to manage
-
----
-
-### 4. libdatachannel (via Python bindings)
-
-**Repository**: https://github.com/paullouisageneau/libdatachannel
-
-#### Pros
-- **Lightweight C++**: Minimal, data-channel-focused implementation
-- **Python Bindings Available**: Via `pylibdatachannel`
-- **Fast**: Native performance
-
-#### Cons
-- **Less Mature Python Support**: Bindings less documented than aiortc
-- **Compilation Required**: Needs C++ toolchain
-- **Smaller Community**: Fewer examples and resources
-
----
-
-### Recommendation Summary
-
-| Library | Data Channels | Ease of Use | Performance | Async Support | Recommendation |
-|---------|---------------|-------------|-------------|---------------|----------------|
-| **aiortc** | Excellent | High | Good | Native | **Primary Choice** |
-| GStreamer | Good | Low | Excellent | Partial | Overkill |
-| pion (Go) | Excellent | Medium | Excellent | N/A | Wrong language |
-| libdatachannel | Excellent | Medium | Excellent | Partial | Alternative |
-
-**For this project, aiortc is strongly recommended** because:
-1. Native asyncio integration matches existing codebase patterns
-2. Pure Python installation simplifies container builds
-3. Data channel performance (~5 Mbps) far exceeds terminal requirements
-4. JavaScript-like API reduces learning curve
-5. Well-documented with relevant examples
-
----
-
-## Implementation Plan
-
-### Phase 1: Foundation
-
-#### Step 1.1: Add aiortc dependency
-- Add `aiortc` to `requirements.txt`
-- Test installation in Docker container
-- Verify system dependencies are met
-
-#### Step 1.2: Create WebRTC controller structure
-```
-src/controllers/webrtc_controller/
-├── __init__.py              # Main entry point, peer connection manager
-├── signaling/
-│   ├── __init__.py
-│   ├── offer_handler.py     # Handle incoming SDP offers
-│   ├── answer_emitter.py    # Send SDP answers
-│   └── ice_handler.py       # ICE candidate exchange
-└── data_channel/
-    ├── __init__.py
-    └── terminal_channel.py  # Terminal I/O over data channel
-```
-
-#### Step 1.3: Implement signaling handlers
-- Create Socket.IO topic handlers following existing patterns
-- Use `@topic()` and `@validate_message()` decorators
-- Define message contracts for WebRTC signaling
-
-### Phase 2: WebRTC Connection Management
-
-#### Step 2.1: Peer connection lifecycle
-```python
-# Pseudo-code for connection management
-class WebRTCSessionManager:
-    sessions: Dict[str, RTCPeerConnection] = {}
-
-    async def create_session(self, session_id: str, device_id: str) -> RTCPeerConnection:
-        pc = RTCPeerConnection()
-        pc.device_id = device_id
-        self.sessions[session_id] = pc
-        return pc
-
-    async def handle_offer(self, session_id: str, sdp: str):
-        pc = self.sessions[session_id]
-        await pc.setRemoteDescription(RTCSessionDescription(sdp, "offer"))
-        answer = await pc.createAnswer()
-        await pc.setLocalDescription(answer)
-        return pc.localDescription.sdp
-```
-
-#### Step 2.2: ICE candidate handling
-- Implement trickle ICE for faster connection establishment
-- Handle ICE connection state changes
-- Implement reconnection logic for dropped connections
-
-#### Step 2.3: Data channel setup
-- Create data channel named "terminal"
-- Configure for ordered, reliable delivery (TCP-like semantics)
-- Implement message framing protocol
-
-### Phase 3: Terminal Use Case
-
-#### Step 3.1: Create PTY use case structure
-```
-src/use_cases/terminal_pty/
-├── __init__.py
-├── create_pty_session.py    # Create PTY on container
-├── pty_bridge.py            # Bridge data channel ↔ PTY
-└── resize_pty.py            # Handle terminal resize
-```
-
-#### Step 3.2: Docker exec integration
-```python
-# Using Docker SDK to create interactive exec session
-import docker
-
-async def create_pty_session(container_name: str, cols: int, rows: int):
-    container = CLIENT.containers.get(container_name)
-    exec_instance = container.exec_run(
-        cmd="/bin/bash",
-        stdin=True,
-        tty=True,
-        environment={"TERM": "xterm-256color", "COLUMNS": str(cols), "ROWS": str(rows)},
-        socket=True  # Returns socket for bidirectional I/O
-    )
-    return exec_instance
-```
-
-#### Step 3.3: I/O bridging
-- Read from PTY socket, write to data channel
-- Read from data channel, write to PTY socket
-- Handle backpressure and flow control
-- Implement ping/pong keepalive
-
-### Phase 4: Integration & Testing
-
-#### Step 4.1: Controller initialization
-- Integrate WebRTC controller into `src/controllers/__init__.py`
-- Start WebRTC task alongside WebSocket task
-- Handle graceful shutdown
-
-#### Step 4.2: Session cleanup
-- Clean up PTY sessions on data channel close
-- Clean up peer connections on Socket.IO disconnect
-- Implement session timeout for abandoned connections
-
-#### Step 4.3: Manual testing
-- Test with browser-based WebRTC client
-- Verify signaling flow through cloud server
-- Test terminal functionality (vim, htop, etc.)
-
----
-
-## Use Case Design
-
-### Terminal PTY Use Case
-
-**Location**: `src/use_cases/terminal_pty/`
-
-#### create_pty_session.py
-```python
-"""
-Creates an interactive PTY session on a runtime container.
-
-Input:
-    - device_id: Target container identifier
-    - cols: Initial terminal width
-    - rows: Initial terminal height
-
-Output:
-    - session_id: Unique identifier for this PTY session
-    - socket: Bidirectional socket for PTY I/O
-"""
-```
-
-#### pty_bridge.py
-```python
-"""
-Bridges WebRTC data channel to PTY socket.
-
-Responsibilities:
-    - Async read from PTY, send to data channel
-    - Receive from data channel, write to PTY
-    - Handle terminal resize commands
-    - Implement flow control
-"""
-```
-
-### Data Flow Diagram
-
-```
-┌──────────────────┐     Data Channel      ┌──────────────────┐
-│  Browser/xterm.js│◄─────────────────────►│   PTY Bridge     │
-│                  │  {"type":"input",...} │                  │
-└──────────────────┘                       └────────┬─────────┘
-                                                    │
-                                                    │ socket I/O
-                                                    ▼
-                                           ┌──────────────────┐
-                                           │  Docker Exec     │
-                                           │  (PTY Session)   │
-                                           │                  │
-                                           │  /bin/bash       │
-                                           └──────────────────┘
-```
-
----
-
-## Security Considerations
-
-### Authentication & Authorization
-- Verify session requests via existing mTLS identity
-- Validate device_id belongs to requesting user's organization
-- Implement session tokens with expiration
-
-### Network Security
-- WebRTC connections encrypted via DTLS
-- Data channels use SCTP over DTLS
-- Consider TURN server for NAT traversal (relay through cloud)
-
-### Container Isolation
-- PTY sessions run as non-root user in container
-- Consider resource limits on exec sessions (CPU, memory)
-- Implement session timeout to prevent zombie processes
-
-### Audit Logging
-- Log terminal session start/end
-- Consider optional command logging for compliance
-- Track session duration and activity
 
 ---
 
 ## References
 
-### WebRTC Libraries
-- [aiortc GitHub](https://github.com/aiortc/aiortc)
 - [aiortc Documentation](https://aiortc.readthedocs.io/)
-- [aiortc Examples](https://aiortc.readthedocs.io/en/latest/examples.html)
-
-### Terminal Implementations
-- [pyxtermjs](https://github.com/cs01/pyxtermjs) - Flask + WebSocket terminal
-- [xterm.js](https://xtermjs.org/) - Browser terminal emulator
-- [RAWRTC Terminal Demo](https://github.com/rawrtc/rawrtc-terminal-demo) - WebRTC terminal reference
-
-### Docker Integration
 - [Docker SDK for Python](https://docker-py.readthedocs.io/)
-- [Docker Exec API](https://docs.docker.com/engine/api/v1.41/#operation/ContainerExec)
-- [Presidio Terminal Blog](https://www.presidio.com/technical-blog/building-a-browser-based-terminal-using-docker-and-xtermjs/)
-
-### WebRTC Concepts
-- [WebRTC for Developers](https://www.webrtc-developers.com/)
-- [GStreamer vs WebRTC Comparison](https://stackshare.io/stackups/gstreamer-vs-webrtc)
-
-### Known Limitations
-- [aiortc Data Channel Rate Limiting](https://github.com/aiortc/aiortc/issues/462)
-- [aiortc Transfer Rates](https://github.com/aiortc/aiortc/issues/36)
+- [xterm.js](https://xtermjs.org/)
+- [WebRTC API](https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API)
