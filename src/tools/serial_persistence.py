@@ -19,7 +19,6 @@ Schema:
         "name": "modbus_rtu",
         "device_id": "usb-FTDI_FT232R_USB_UART_ABC123-if00-port0",
         "container_path": "/dev/modbus0",
-        "baud_rate": 9600,
         "status": "connected",
         "current_host_path": "/dev/ttyUSB0",
         "major": 188,
@@ -95,7 +94,6 @@ def save_serial_configs(container_name: str, serial_configs: list):
             - name: User-friendly name for the serial port
             - device_id: Stable USB device identifier (from /dev/serial/by-id/)
             - container_path: Path inside container (e.g., "/dev/modbus0")
-            - baud_rate: Baud rate (optional, for documentation)
     """
     with _file_lock:
         try:
@@ -108,7 +106,6 @@ def save_serial_configs(container_name: str, serial_configs: list):
                     "name": config.get("name"),
                     "device_id": config.get("device_id"),
                     "container_path": config.get("container_path"),
-                    "baud_rate": config.get("baud_rate"),
                     # Runtime state - will be populated by DeviceEventListener
                     "status": "disconnected",
                     "current_host_path": None,

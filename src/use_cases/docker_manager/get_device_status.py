@@ -23,7 +23,6 @@ def get_serial_port_status(device_id: str) -> List[Dict[str, Any]]:
         - container_path: Path inside container (e.g., "/dev/modbus0")
         - status: "connected", "disconnected", or "error"
         - current_host_path: Current /dev/ttyUSBx path (if connected)
-        - baud_rate: Configured baud rate (if set)
     """
     try:
         serial_config = load_serial_configs(device_id)
@@ -41,10 +40,6 @@ def get_serial_port_status(device_id: str) -> List[Dict[str, Any]]:
             # Include current host path if connected
             if port.get("current_host_path"):
                 port_status["current_host_path"] = port["current_host_path"]
-
-            # Include baud rate if configured
-            if port.get("baud_rate"):
-                port_status["baud_rate"] = port["baud_rate"]
 
             result.append(port_status)
 
