@@ -1,7 +1,13 @@
 FROM python:3.12-alpine
 
-RUN apk add --no-cache iproute2 busybox-extras util-linux && \
-    pip install --no-cache-dir pyroute2
+# Install system dependencies:
+# - iproute2: network interface management
+# - busybox-extras: udhcpc DHCP client
+# - util-linux: nsenter for container namespace access
+# - eudev: udev implementation for Alpine (required by pyudev for device monitoring)
+# - eudev-libs: shared libraries for eudev
+RUN apk add --no-cache iproute2 busybox-extras util-linux eudev eudev-libs && \
+    pip install --no-cache-dir pyroute2 pyudev
 
 WORKDIR /app
 

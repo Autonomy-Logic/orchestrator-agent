@@ -3,9 +3,56 @@ from tools.operations_state import get_state
 from tools.logger import log_debug, log_info, log_warning, log_error
 from tools.docker_tools import CLIENT
 from tools.vnic_persistence import load_vnic_configs
+from tools.serial_persistence import load_serial_configs
 import docker
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, List
+
+
+def get_serial_port_status(device_id: str) -> List[Dict[str, Any]]:
+    """
+    Get the status of serial ports configured for a runtime container.
+
+    Args:
+        device_id: The name/ID of the container
+
+    Returns:
+        List of serial port status dicts, each containing:
+        - name: User-friendly name (e.g., "modbus_rtu")
+        - device_id: Stable USB device identifier
+        - container_path: Path inside container (e.g., "/dev/modbus0")
+        - status: "connected", "disconnected", or "error"
+        - current_host_path: Current /dev/ttyUSBx path (if connected)
+        - baud_rate: Configured baud rate (if set)
+    """
+    try:
+        serial_config = load_serial_configs(device_id)
+        serial_ports = serial_config.get("serial_ports", [])
+
+        result = []
+        for port in serial_ports:
+            port_status = {
+                "name": port.get("name"),
+                "device_id": port.get("device_id"),
+                "container_path": port.get("container_path"),
+                "status": port.get("status", "unknown"),
+            }
+
+            # Include current host path if connected
+            if port.get("current_host_path"):
+                port_status["current_host_path"] = port["current_host_path"]
+
+            # Include baud rate if configured
+            if port.get("baud_rate"):
+                port_status["baud_rate"] = port["baud_rate"]
+
+            result.append(port_status)
+
+        return result
+
+    except Exception as e:
+        log_warning(f"Error getting serial port status for {device_id}: {e}")
+        return []
 
 
 def get_device_info(device_id: str) -> Dict[str, Any]:
@@ -238,6 +285,12 @@ def get_device_status_data(device_id: str) -> Dict[str, Any]:
         health = container_state.get("Health")
         if health:
             response["health_status"] = health.get("Status")
+
+        # Include serial port status if configured
+        serial_ports = get_serial_port_status(device_id)
+        if serial_ports:
+            response["serial_ports"] = serial_ports
+            log_debug(f"Container {device_id} has {len(serial_ports)} serial port(s) configured")
 
         log_info(f"Retrieved status for container {device_id}: {container_status}")
         return response

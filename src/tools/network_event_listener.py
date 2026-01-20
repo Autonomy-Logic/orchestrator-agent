@@ -2,11 +2,18 @@ import asyncio
 import json
 import os
 import random
+import subprocess
 import time
-from typing import Dict, Optional, Callable
+from typing import Dict, List, Optional, Callable
 import docker
 from tools.logger import *
 from tools.vnic_persistence import load_vnic_configs, save_vnic_configs
+from tools.serial_persistence import (
+    load_serial_configs,
+    update_serial_status,
+    get_serial_port_by_device_id,
+    get_all_configured_serial_ports,
+)
 from tools.interface_cache import INTERFACE_CACHE
 from tools.docker_tools import CLIENT, get_or_create_macvlan_network
 
@@ -32,6 +39,11 @@ class NetworkEventListener:
         self.dhcp_update_callbacks: list[Callable] = []
         # Track pending DHCP resyncs: key -> {next_retry_at, retry_count, mac_enforced}
         self.pending_dhcp_resyncs: Dict[str, Dict] = {}
+        # Serial device cache: by_id -> device_info
+        # Tracks currently available serial devices on the host
+        self.device_cache: Dict[str, Dict] = {}
+        # Callbacks for serial device status changes
+        self.device_update_callbacks: list[Callable] = []
 
     async def start(self):
         """Start the network event listener"""
@@ -87,11 +99,15 @@ class NetworkEventListener:
 
                     # Resync DHCP for existing containers on startup/reconnect
                     await self._resync_dhcp_for_existing_containers()
-                    
+
                     # Start background retry task for failed DHCP resyncs
                     if self.pending_dhcp_resyncs and not self.dhcp_retry_task:
                         self.dhcp_retry_task = asyncio.create_task(self._dhcp_retry_loop())
                         log_info(f"Started DHCP retry task for {len(self.pending_dhcp_resyncs)} pending resyncs")
+
+                    # Resync serial devices for existing containers
+                    # This is handled via device_discovery event from netmon
+                    # which triggers _handle_device_discovery -> _resync_serial_devices
 
                     while self.running:
                         try:
@@ -213,6 +229,14 @@ class NetworkEventListener:
                     if interface in INTERFACE_CACHE:
                         del INTERFACE_CACHE[interface]
                         log_debug(f"Removed {interface} from cache (no addresses)")
+
+            elif event_type == "device_discovery":
+                log_info("Received device discovery event")
+                await self._handle_device_discovery(event_data.get("data", {}))
+
+            elif event_type == "device_change":
+                log_info("Received device change event")
+                await self._handle_device_change(event_data.get("data", {}))
 
         except Exception as e:
             log_error(f"Error handling network event: {e}")
@@ -787,6 +811,448 @@ class NetworkEventListener:
 
         except Exception as e:
             log_error(f"Error reconnecting containers for interface {interface}: {e}")
+
+    # ========== Serial Device Handling ==========
+
+    async def _handle_device_discovery(self, data: dict):
+        """
+        Handle device discovery event from netmon.
+
+        This is called on initial connection to netmon and populates the device cache
+        with all currently available serial devices. Then triggers resync to create
+        device nodes in containers that have matching serial configs.
+        """
+        devices = data.get("devices", [])
+        log_info(f"Discovered {len(devices)} serial devices")
+
+        # Update device cache
+        self.device_cache.clear()
+        for device in devices:
+            by_id = device.get("by_id")
+            if by_id:
+                self.device_cache[by_id] = device
+                log_debug(
+                    f"Cached device: {device.get('path')} -> {by_id} "
+                    f"(major={device.get('major')}, minor={device.get('minor')})"
+                )
+
+        # Resync serial devices for existing containers
+        await self._resync_serial_devices()
+
+    async def _handle_device_change(self, data: dict):
+        """
+        Handle device add/remove event from netmon.
+
+        This is called when a USB serial device is plugged in or unplugged.
+        For add events, creates device nodes in containers that need the device.
+        For remove events, updates status to disconnected.
+        """
+        action = data.get("action")
+        device = data.get("device", {})
+
+        if not action or not device:
+            log_warning("Invalid device change event: missing action or device")
+            return
+
+        device_path = device.get("path")
+        by_id = device.get("by_id")
+
+        log_info(f"Device {action}: {device_path} (by_id: {by_id})")
+
+        if action == "add":
+            # Update cache
+            if by_id:
+                self.device_cache[by_id] = device
+
+            # Find containers that need this device
+            matches = self._match_device_to_configs(device)
+
+            for match in matches:
+                container_name = match["container_name"]
+                serial_config = match["serial_config"]
+                port_name = serial_config.get("name")
+                container_path = serial_config.get("container_path")
+
+                log_info(
+                    f"Creating device node for {container_name}:{port_name} "
+                    f"({device_path} -> {container_path})"
+                )
+
+                success = await self._create_device_node(
+                    container_name,
+                    device_path,
+                    container_path,
+                    device.get("major"),
+                    device.get("minor"),
+                )
+
+                if success:
+                    update_serial_status(
+                        container_name,
+                        port_name,
+                        "connected",
+                        current_host_path=device_path,
+                        major=device.get("major"),
+                        minor=device.get("minor"),
+                    )
+                    log_info(f"Device node created successfully for {container_name}:{port_name}")
+
+                    # Notify callbacks
+                    await self._notify_device_callbacks(
+                        container_name, port_name, "connected", device
+                    )
+                else:
+                    log_error(f"Failed to create device node for {container_name}:{port_name}")
+
+        elif action == "remove":
+            # Find the by_id from cache if not provided (device info may be incomplete on remove)
+            if not by_id:
+                for cached_by_id, cached_device in list(self.device_cache.items()):
+                    if cached_device.get("path") == device_path:
+                        by_id = cached_by_id
+                        device = cached_device
+                        break
+
+            # Remove from cache
+            if by_id and by_id in self.device_cache:
+                del self.device_cache[by_id]
+
+            # Find containers that had this device
+            matches = self._match_device_to_configs(device)
+
+            for match in matches:
+                container_name = match["container_name"]
+                serial_config = match["serial_config"]
+                port_name = serial_config.get("name")
+
+                log_info(f"Device disconnected for {container_name}:{port_name}")
+
+                # Update status to disconnected (device node becomes stale but container keeps running)
+                update_serial_status(container_name, port_name, "disconnected")
+
+                # Notify callbacks
+                await self._notify_device_callbacks(
+                    container_name, port_name, "disconnected", device
+                )
+
+    def _match_device_to_configs(self, device: dict) -> List[dict]:
+        """
+        Find all containers that have a serial port configured for this device.
+
+        Matches by device_id (the stable /dev/serial/by-id/ identifier).
+
+        Args:
+            device: Device info dict with 'by_id' and other fields
+
+        Returns:
+            List of matches, each containing 'container_name' and 'serial_config'
+        """
+        by_id = device.get("by_id")
+        if not by_id:
+            # Try to match by path as fallback, but this is less reliable
+            device_path = device.get("path")
+            if not device_path:
+                return []
+
+            # Extract just the filename part for matching
+            # e.g., /dev/ttyUSB0 -> ttyUSB0
+            device_basename = os.path.basename(device_path)
+
+            # This is a weak match - only use if by_id is not available
+            log_debug(f"No by_id for device {device_path}, falling back to path-based matching")
+            matches = []
+            all_configs = load_serial_configs()
+
+            for container_name, container_config in all_configs.items():
+                for port_config in container_config.get("serial_ports", []):
+                    # Check if device_id contains the basename (weak match)
+                    config_device_id = port_config.get("device_id", "")
+                    if device_basename in config_device_id:
+                        matches.append({
+                            "container_name": container_name,
+                            "serial_config": port_config.copy(),
+                        })
+
+            return matches
+
+        # Use the persistence layer's matching function
+        return get_serial_port_by_device_id(by_id)
+
+    async def _create_device_node(
+        self,
+        container_name: str,
+        host_device_path: str,
+        container_path: str,
+        major: Optional[int] = None,
+        minor: Optional[int] = None,
+    ) -> bool:
+        """
+        Create a device node inside a running container.
+
+        Uses 'docker exec mknod' to create the device node without restarting
+        the container. This requires the container to have MKNOD capability
+        and appropriate device cgroup rules.
+
+        Args:
+            container_name: Name of the container
+            host_device_path: Path to device on host (e.g., /dev/ttyUSB0)
+            container_path: Path inside container (e.g., /dev/modbus0)
+            major: Device major number (optional, will be read from host if not provided)
+            minor: Device minor number (optional, will be read from host if not provided)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Get major:minor numbers if not provided
+            if major is None or minor is None:
+                try:
+                    stat_info = os.stat(host_device_path)
+                    major = os.major(stat_info.st_rdev)
+                    minor = os.minor(stat_info.st_rdev)
+                except (OSError, FileNotFoundError) as e:
+                    log_error(f"Cannot stat host device {host_device_path}: {e}")
+                    return False
+
+            # Verify container exists and is running
+            try:
+                container = CLIENT.containers.get(container_name)
+                if container.status != "running":
+                    log_warning(f"Container {container_name} is not running, cannot create device node")
+                    return False
+            except docker.errors.NotFound:
+                log_error(f"Container {container_name} not found")
+                return False
+
+            # Remove existing node if present (ignore errors)
+            rm_result = await asyncio.to_thread(
+                subprocess.run,
+                ["docker", "exec", "-u", "root", container_name, "rm", "-f", container_path],
+                capture_output=True,
+                timeout=10,
+            )
+            if rm_result.returncode != 0:
+                # Not an error - file may not exist
+                log_debug(f"rm -f {container_path} returned {rm_result.returncode} (may not exist)")
+
+            # Create the device node
+            # mknod <path> c <major> <minor>
+            mknod_result = await asyncio.to_thread(
+                subprocess.run,
+                [
+                    "docker", "exec", "-u", "root", container_name,
+                    "mknod", container_path, "c", str(major), str(minor)
+                ],
+                capture_output=True,
+                timeout=10,
+            )
+
+            if mknod_result.returncode != 0:
+                stderr = mknod_result.stderr.decode("utf-8", errors="replace")
+                log_error(f"mknod failed for {container_name}:{container_path}: {stderr}")
+                return False
+
+            # Set permissions to allow read/write
+            chmod_result = await asyncio.to_thread(
+                subprocess.run,
+                ["docker", "exec", "-u", "root", container_name, "chmod", "666", container_path],
+                capture_output=True,
+                timeout=10,
+            )
+
+            if chmod_result.returncode != 0:
+                stderr = chmod_result.stderr.decode("utf-8", errors="replace")
+                log_warning(f"chmod failed for {container_name}:{container_path}: {stderr}")
+                # Don't fail - device node exists, just may have restricted permissions
+
+            log_debug(
+                f"Created device node {container_path} in {container_name} "
+                f"(major={major}, minor={minor})"
+            )
+            return True
+
+        except subprocess.TimeoutExpired:
+            log_error(f"Timeout creating device node in {container_name}")
+            return False
+        except Exception as e:
+            log_error(f"Error creating device node in {container_name}: {e}")
+            return False
+
+    async def _remove_device_node(self, container_name: str, container_path: str) -> bool:
+        """
+        Remove a device node from inside a container.
+
+        Args:
+            container_name: Name of the container
+            container_path: Path inside container to remove
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Verify container exists and is running
+            try:
+                container = CLIENT.containers.get(container_name)
+                if container.status != "running":
+                    log_debug(f"Container {container_name} is not running, skipping device node removal")
+                    return True  # Consider success - nothing to remove
+            except docker.errors.NotFound:
+                log_debug(f"Container {container_name} not found, skipping device node removal")
+                return True
+
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["docker", "exec", "-u", "root", container_name, "rm", "-f", container_path],
+                capture_output=True,
+                timeout=10,
+            )
+
+            if result.returncode != 0:
+                stderr = result.stderr.decode("utf-8", errors="replace")
+                log_warning(f"Failed to remove device node {container_path} from {container_name}: {stderr}")
+                return False
+
+            log_debug(f"Removed device node {container_path} from {container_name}")
+            return True
+
+        except subprocess.TimeoutExpired:
+            log_error(f"Timeout removing device node from {container_name}")
+            return False
+        except Exception as e:
+            log_error(f"Error removing device node from {container_name}: {e}")
+            return False
+
+    async def _resync_serial_devices(self):
+        """
+        Resync serial device nodes for all configured containers.
+
+        Called after device_discovery to ensure all containers have their
+        configured serial devices available (if the devices are currently connected).
+        This handles host reboot recovery where containers auto-start but device
+        nodes need to be recreated.
+        """
+        try:
+            all_configured = get_all_configured_serial_ports()
+            if not all_configured:
+                log_debug("No serial port configurations found, skipping resync")
+                return
+
+            log_info(f"Resyncing serial devices for {len(all_configured)} configured port(s)...")
+
+            for config_entry in all_configured:
+                container_name = config_entry["container_name"]
+                serial_config = config_entry["serial_config"]
+                port_name = serial_config.get("name")
+                device_id = serial_config.get("device_id")
+                container_path = serial_config.get("container_path")
+
+                if not device_id or not container_path:
+                    log_warning(f"Incomplete serial config for {container_name}:{port_name}, skipping")
+                    continue
+
+                # Find device in cache by device_id
+                matching_device = None
+                for by_id, device in self.device_cache.items():
+                    if device_id in by_id or by_id in device_id:
+                        matching_device = device
+                        break
+
+                if not matching_device:
+                    log_debug(
+                        f"Device {device_id} not currently connected for {container_name}:{port_name}"
+                    )
+                    update_serial_status(container_name, port_name, "disconnected")
+                    continue
+
+                # Device is available - create node in container
+                device_path = matching_device.get("path")
+                major = matching_device.get("major")
+                minor = matching_device.get("minor")
+
+                log_info(
+                    f"Resyncing device for {container_name}:{port_name}: "
+                    f"{device_path} -> {container_path}"
+                )
+
+                success = await self._create_device_node(
+                    container_name,
+                    device_path,
+                    container_path,
+                    major,
+                    minor,
+                )
+
+                if success:
+                    update_serial_status(
+                        container_name,
+                        port_name,
+                        "connected",
+                        current_host_path=device_path,
+                        major=major,
+                        minor=minor,
+                    )
+                    log_info(f"Serial device resynced for {container_name}:{port_name}")
+                else:
+                    update_serial_status(container_name, port_name, "error")
+                    log_error(f"Failed to resync serial device for {container_name}:{port_name}")
+
+            log_info("Serial device resync completed")
+
+        except Exception as e:
+            log_error(f"Error during serial device resync: {e}")
+
+    async def _notify_device_callbacks(
+        self,
+        container_name: str,
+        port_name: str,
+        status: str,
+        device: dict,
+    ):
+        """Notify registered callbacks about device status changes."""
+        for callback in self.device_update_callbacks:
+            try:
+                if asyncio.iscoroutinefunction(callback):
+                    await callback(container_name, port_name, status, device)
+                else:
+                    callback(container_name, port_name, status, device)
+            except Exception as e:
+                log_error(f"Error in device update callback: {e}")
+
+    def register_device_callback(self, callback: Callable):
+        """
+        Register a callback to be called when device status changes.
+
+        The callback will receive:
+        - container_name: str
+        - port_name: str
+        - status: str ("connected" or "disconnected")
+        - device: dict (device info)
+        """
+        self.device_update_callbacks.append(callback)
+
+    def get_available_devices(self) -> List[dict]:
+        """
+        Get list of currently available serial devices.
+
+        Returns:
+            List of device info dicts
+        """
+        return list(self.device_cache.values())
+
+    def get_device_by_id(self, device_id: str) -> Optional[dict]:
+        """
+        Get device info by its stable device_id.
+
+        Args:
+            device_id: The device identifier (by-id path or partial match)
+
+        Returns:
+            Device info dict or None if not found
+        """
+        for by_id, device in self.device_cache.items():
+            if device_id in by_id or by_id in device_id:
+                return device
+        return None
 
 
 network_event_listener = NetworkEventListener()
