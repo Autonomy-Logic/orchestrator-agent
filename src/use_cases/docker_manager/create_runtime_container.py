@@ -221,11 +221,11 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
             # when devices are hot-plugged. Device nodes are created dynamically via mknod.
             # - c 188:* rmw: USB-to-serial adapters (/dev/ttyUSB*)
             # - c 166:* rmw: ACM modems (/dev/ttyACM*)
-            # - c 4:64-255 rmw: Native serial ports (/dev/ttyS*)
+            # - c 4:* rmw: Native serial ports (/dev/ttyS*) - major 4 includes tty devices
             "device_cgroup_rules": [
                 "c 188:* rmw",  # USB-to-serial (ttyUSB*)
                 "c 166:* rmw",  # ACM modems (ttyACM*)
-                "c 4:64-255 rmw",  # Native serial ports (ttyS0-ttyS191)
+                "c 4:* rmw",    # Native serial ports (ttyS*) and tty devices
             ],
         }
 
