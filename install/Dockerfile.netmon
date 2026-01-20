@@ -7,7 +7,9 @@ FROM python:3.12-alpine
 # - eudev: udev implementation for Alpine (required by pyudev for device monitoring)
 # - eudev-libs: shared libraries for eudev
 RUN apk add --no-cache iproute2 busybox-extras util-linux eudev eudev-libs && \
-    pip install --no-cache-dir pyroute2 pyudev
+    pip install --no-cache-dir pyroute2 pyudev && \
+    # Create symlink for pyudev - Alpine musl doesn't support find_library()
+    ln -s /usr/lib/libudev.so.1 /usr/lib/libudev.so
 
 WORKDIR /app
 
