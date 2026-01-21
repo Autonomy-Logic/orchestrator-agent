@@ -444,8 +444,12 @@ class DeviceMonitor:
                 # Device may have been removed
                 return None
 
-            # For ttyS devices, only include minor >= 64 (real serial ports)
-            # Minor 0-63 are typically virtual console devices
+            # For ttyS devices, only include minor >= 64.
+            # On most Linux systems, ttyS devices with minor numbers 0–63 are
+            # reserved for legacy or virtual console/serial devices, while
+            # minors >= 64 correspond to real hardware serial ports. We exclude
+            # minors < 64 here to ignore virtual console devices and only track
+            # actual serial ports.
             if basename.startswith('ttyS') and minor < 64:
                 return None
 

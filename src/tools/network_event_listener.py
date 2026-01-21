@@ -16,6 +16,7 @@ from tools.serial_persistence import (
 )
 from tools.interface_cache import INTERFACE_CACHE
 from tools.docker_tools import CLIENT, get_or_create_macvlan_network
+from tools.utils import matches_device_id
 
 SOCKET_PATH = "/var/orchestrator/netmon.sock"
 DEBOUNCE_SECONDS = 3
@@ -1111,9 +1112,18 @@ class NetworkEventListener:
             log_error(f"Error removing device node from {container_name}: {e}")
             return False
 
+    async def resync_serial_devices(self):
+        """
+        Public method to resync serial device nodes for all configured containers.
+
+        Called after container creation or device hot-plug to ensure all containers
+        have their configured serial devices available.
+        """
+        await self._resync_serial_devices()
+
     async def _resync_serial_devices(self):
         """
-        Resync serial device nodes for all configured containers.
+        Internal implementation of serial device resync.
 
         Called after device_discovery to ensure all containers have their
         configured serial devices available (if the devices are currently connected).
@@ -1156,7 +1166,7 @@ class NetworkEventListener:
                 # Find device in cache by device_id
                 matching_device = None
                 for by_id, device in self.device_cache.items():
-                    if device_id in by_id or by_id in device_id:
+                    if matches_device_id(device_id, by_id):
                         matching_device = device
                         break
 
@@ -1258,7 +1268,7 @@ class NetworkEventListener:
             Device info dict or None if not found
         """
         for by_id, device in self.device_cache.items():
-            if device_id in by_id or by_id in device_id:
+            if matches_device_id(device_id, by_id):
                 return device
         return None
 

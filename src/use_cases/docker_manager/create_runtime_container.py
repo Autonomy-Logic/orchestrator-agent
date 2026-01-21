@@ -371,7 +371,7 @@ async def create_runtime_container(container_name: str, vnic_configs: list, seri
     # Only run if container was created successfully (dhcp_vnics is not None)
     if dhcp_vnics is not None and serial_configs:
         try:
-            await network_event_listener._resync_serial_devices()
+            await network_event_listener.resync_serial_devices()
             log_info(f"Triggered serial device resync for container {container_name}")
         except Exception as e:
             log_warning(f"Failed to resync serial devices for {container_name}: {e}")

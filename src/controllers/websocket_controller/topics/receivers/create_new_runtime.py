@@ -9,8 +9,8 @@ from tools.contract_validation import (
     StringType,
     ListType,
     OptionalType,
-    NumberType,
     BASE_MESSAGE,
+    SERIAL_CONFIG_TYPE,
 )
 from tools.docker_tools import get_existing_mac_addresses_on_interface
 from . import topic, validate_message
@@ -27,16 +27,6 @@ VNIC_CONFIG_TYPE = {
     "gateway": OptionalType(StringType),
     "dns": OptionalType(ListType(StringType)),
     "mac": OptionalType(StringType),
-}
-
-# Serial port configuration for passthrough to containers
-# device_id: Stable USB device identifier from /dev/serial/by-id/
-# container_path: Path inside container where device will appear (e.g., /dev/modbus0)
-SERIAL_CONFIG_TYPE = {
-    "name": StringType,                      # User-friendly name (e.g., "modbus_rtu")
-    "device_id": StringType,                 # Stable device ID (e.g., "usb-FTDI_FT232R_ABC123")
-    "container_path": StringType,            # Path inside container (e.g., "/dev/modbus0")
-    "baud_rate": OptionalType(NumberType),   # Baud rate for documentation (optional)
 }
 
 MESSAGE_TYPE = {

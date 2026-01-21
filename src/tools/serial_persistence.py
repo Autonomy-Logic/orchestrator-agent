@@ -33,6 +33,7 @@ import json
 import os
 import threading
 from tools.logger import log_debug, log_error, log_warning, log_info
+from tools.utils import matches_device_id
 
 SERIAL_CONFIG_FILE = "/var/orchestrator/data/serial_configs.json"
 
@@ -257,9 +258,8 @@ def get_serial_port_by_device_id(device_id: str) -> list:
             for container_name, container_config in all_configs.items():
                 for port_config in container_config.get("serial_ports", []):
                     config_device_id = port_config.get("device_id", "")
-                    # Match if the device_id contains or equals the configured ID
-                    # This handles both full paths and partial IDs
-                    if config_device_id and (config_device_id in device_id or device_id in config_device_id):
+                    # Use shared helper for bidirectional device ID matching
+                    if matches_device_id(config_device_id, device_id):
                         matches.append({
                             "container_name": container_name,
                             "serial_config": port_config.copy()
