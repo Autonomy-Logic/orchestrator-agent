@@ -2,7 +2,6 @@ import asyncio
 import json
 import os
 import random
-import subprocess
 import time
 from typing import Dict, List, Optional, Callable
 import docker
@@ -989,7 +988,7 @@ class NetworkEventListener:
         """
         Create a device node inside a running container.
 
-        Uses 'docker exec mknod' to create the device node without restarting
+        Uses Docker SDK exec_run to create the device node without restarting
         the container. This requires the container to have MKNOD capability
         and appropriate device cgroup rules.
 
@@ -1025,43 +1024,38 @@ class NetworkEventListener:
                 return False
 
             # Remove existing node if present (ignore errors)
+            # Using Docker SDK exec_run instead of subprocess
             rm_result = await asyncio.to_thread(
-                subprocess.run,
-                ["docker", "exec", "-u", "root", container_name, "rm", "-f", container_path],
-                capture_output=True,
-                timeout=10,
+                container.exec_run,
+                ["rm", "-f", container_path],
+                user="root",
             )
-            if rm_result.returncode != 0:
+            if rm_result.exit_code != 0:
                 # Not an error - file may not exist
-                log_debug(f"rm -f {container_path} returned {rm_result.returncode} (may not exist)")
+                log_debug(f"rm -f {container_path} returned {rm_result.exit_code} (may not exist)")
 
             # Create the device node
             # mknod <path> c <major> <minor>
             mknod_result = await asyncio.to_thread(
-                subprocess.run,
-                [
-                    "docker", "exec", "-u", "root", container_name,
-                    "mknod", container_path, "c", str(major), str(minor)
-                ],
-                capture_output=True,
-                timeout=10,
+                container.exec_run,
+                ["mknod", container_path, "c", str(major), str(minor)],
+                user="root",
             )
 
-            if mknod_result.returncode != 0:
-                stderr = mknod_result.stderr.decode("utf-8", errors="replace")
+            if mknod_result.exit_code != 0:
+                stderr = mknod_result.output.decode("utf-8", errors="replace")
                 log_error(f"mknod failed for {container_name}:{container_path}: {stderr}")
                 return False
 
             # Set permissions to allow read/write
             chmod_result = await asyncio.to_thread(
-                subprocess.run,
-                ["docker", "exec", "-u", "root", container_name, "chmod", "666", container_path],
-                capture_output=True,
-                timeout=10,
+                container.exec_run,
+                ["chmod", "666", container_path],
+                user="root",
             )
 
-            if chmod_result.returncode != 0:
-                stderr = chmod_result.stderr.decode("utf-8", errors="replace")
+            if chmod_result.exit_code != 0:
+                stderr = chmod_result.output.decode("utf-8", errors="replace")
                 log_warning(f"chmod failed for {container_name}:{container_path}: {stderr}")
                 # Don't fail - device node exists, just may have restricted permissions
 
@@ -1071,9 +1065,6 @@ class NetworkEventListener:
             )
             return True
 
-        except subprocess.TimeoutExpired:
-            log_error(f"Timeout creating device node in {container_name}")
-            return False
         except Exception as e:
             log_error(f"Error creating device node in {container_name}: {e}")
             return False
@@ -1100,24 +1091,21 @@ class NetworkEventListener:
                 log_debug(f"Container {container_name} not found, skipping device node removal")
                 return True
 
+            # Using Docker SDK exec_run instead of subprocess
             result = await asyncio.to_thread(
-                subprocess.run,
-                ["docker", "exec", "-u", "root", container_name, "rm", "-f", container_path],
-                capture_output=True,
-                timeout=10,
+                container.exec_run,
+                ["rm", "-f", container_path],
+                user="root",
             )
 
-            if result.returncode != 0:
-                stderr = result.stderr.decode("utf-8", errors="replace")
+            if result.exit_code != 0:
+                stderr = result.output.decode("utf-8", errors="replace")
                 log_warning(f"Failed to remove device node {container_path} from {container_name}: {stderr}")
                 return False
 
             log_debug(f"Removed device node {container_path} from {container_name}")
             return True
 
-        except subprocess.TimeoutExpired:
-            log_error(f"Timeout removing device node from {container_name}")
-            return False
         except Exception as e:
             log_error(f"Error removing device node from {container_name}: {e}")
             return False
