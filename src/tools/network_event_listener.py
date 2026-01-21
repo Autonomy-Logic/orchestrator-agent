@@ -12,6 +12,7 @@ from tools.serial_persistence import (
     update_serial_status,
     get_serial_port_by_device_id,
     get_all_configured_serial_ports,
+    delete_serial_configs,
 )
 from tools.interface_cache import INTERFACE_CACHE
 from tools.docker_tools import CLIENT, get_or_create_macvlan_network
@@ -1127,6 +1128,9 @@ class NetworkEventListener:
 
             log_info(f"Resyncing serial devices for {len(all_configured)} configured port(s)...")
 
+            # Track containers that no longer exist for cleanup
+            stale_containers = set()
+
             for config_entry in all_configured:
                 container_name = config_entry["container_name"]
                 serial_config = config_entry["serial_config"]
@@ -1136,6 +1140,17 @@ class NetworkEventListener:
 
                 if not device_id or not container_path:
                     log_warning(f"Incomplete serial config for {container_name}:{port_name}, skipping")
+                    continue
+
+                # Check if container exists before attempting to create device node
+                try:
+                    container = CLIENT.containers.get(container_name)
+                    if container.status != "running":
+                        log_debug(f"Container {container_name} is not running, skipping serial resync")
+                        continue
+                except docker.errors.NotFound:
+                    log_debug(f"Container {container_name} no longer exists, marking for cleanup")
+                    stale_containers.add(container_name)
                     continue
 
                 # Find device in cache by device_id
@@ -1183,6 +1198,11 @@ class NetworkEventListener:
                 else:
                     update_serial_status(container_name, port_name, "error")
                     log_error(f"Failed to resync serial device for {container_name}:{port_name}")
+
+            # Clean up stale serial configs for deleted containers
+            for stale_container in stale_containers:
+                log_info(f"Cleaning up stale serial config for deleted container {stale_container}")
+                delete_serial_configs(stale_container)
 
             log_info("Serial device resync completed")
 
