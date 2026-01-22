@@ -2,6 +2,7 @@ from . import CLIENTS, remove_client, get_self_container
 from tools.operations_state import set_step, set_error, clear_state
 from tools.logger import *
 from tools.vnic_persistence import delete_vnic_configs
+from tools.serial_persistence import delete_serial_configs
 from tools.docker_tools import CLIENT
 from tools.devices_usage_buffer import get_devices_usage_buffer
 import docker
@@ -68,6 +69,12 @@ def _delete_runtime_container_sync(container_name: str):
             log_debug(f"Deleted vNIC configurations for {container_name}")
         except Exception as e:
             log_warning(f"Error deleting vNIC configurations for {container_name}: {e}")
+
+        try:
+            delete_serial_configs(container_name)
+            log_debug(f"Deleted serial configurations for {container_name}")
+        except Exception as e:
+            log_warning(f"Error deleting serial configurations for {container_name}: {e}")
 
         set_step(container_name, "removing_networks")
         internal_network_name = f"{container_name}_internal"

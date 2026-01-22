@@ -2,6 +2,27 @@ from .logger import log_error
 import time
 
 
+def matches_device_id(device_id: str, by_id: str) -> bool:
+    """
+    Check if a configured device_id matches a discovered by_id path.
+
+    Uses bidirectional substring matching to handle cases where:
+    - device_id is the full path: /dev/serial/by-id/usb-FTDI_...
+    - device_id is just the device part: usb-FTDI_...
+    - by_id is the full path from netmon
+
+    Args:
+        device_id: The configured device ID (from serial config)
+        by_id: The discovered by-id path (from netmon)
+
+    Returns:
+        True if they match, False otherwise
+    """
+    if not device_id or not by_id:
+        return False
+    return device_id in by_id or by_id in device_id
+
+
 def parse_period(period_str: str) -> tuple:
     """
     Parse a period string and return start and end timestamps.

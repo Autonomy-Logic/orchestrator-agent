@@ -1,7 +1,17 @@
-FROM python:3.12-alpine
+FROM python:3.12-slim
 
-RUN apk add --no-cache iproute2 busybox-extras util-linux && \
-    pip install --no-cache-dir pyroute2
+# Install system dependencies:
+# - iproute2: network interface management (ip command)
+# - udhcpc: lightweight DHCP client for container vNICs
+# - procps: process utilities (for debugging)
+# Note: Debian slim already includes libudev for pyudev support
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        iproute2 \
+        udhcpc \
+        procps \
+    && rm -rf /var/lib/apt/lists/* && \
+    pip install --no-cache-dir pyroute2 pyudev
 
 WORKDIR /app
 

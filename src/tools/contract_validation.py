@@ -84,6 +84,15 @@ BASE_MESSAGE = {
 
 BASE_DEVICE = {**BASE_MESSAGE, "device_id": StringType}
 
+# Serial port configuration schema for vPLC containers
+# Used in create_new_runtime and attach_serial_device topics
+SERIAL_CONFIG_TYPE = {
+    "name": StringType,                      # User-friendly name (e.g., "modbus_rtu")
+    "device_id": StringType,                 # Stable USB device ID from /dev/serial/by-id/
+    "container_path": StringType,            # Path inside container (e.g., "/dev/modbus0")
+    "baud_rate": OptionalType(NumberType),   # Baud rate for documentation (optional)
+}
+
 
 def validate_contract(contract, data):
     for key, value in contract.items():

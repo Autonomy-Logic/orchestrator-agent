@@ -2,6 +2,7 @@ from . import CLIENTS, add_client, get_self_container
 from tools.operations_state import set_step, set_error, clear_state
 from tools.logger import *
 from tools.vnic_persistence import save_vnic_configs
+from tools.serial_persistence import save_serial_configs
 from tools.docker_tools import (
     CLIENT,
     get_or_create_macvlan_network,
@@ -80,7 +81,7 @@ def _validate_vnic_configs(vnic_configs: list) -> tuple[bool, str]:
     return True, ""
 
 
-def _create_runtime_container_sync(container_name: str, vnic_configs: list):
+def _create_runtime_container_sync(container_name: str, vnic_configs: list, serial_configs: list = None):
     """
     Synchronous implementation of runtime container creation.
     This function contains all blocking Docker operations and runs in a background thread.
@@ -96,7 +97,14 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
             - gateway: Gateway address (optional, for static mode)
             - dns: List of DNS servers (optional)
             - mac_address: MAC address (optional, auto-generated if not provided)
+        serial_configs: List of serial port configurations (optional), each containing:
+            - name: User-friendly name for the serial port (e.g., "modbus_rtu")
+            - device_id: Stable USB device identifier from /dev/serial/by-id/
+            - container_path: Path inside container (e.g., "/dev/modbus0")
+            - baud_rate: Baud rate for documentation purposes (optional)
     """
+    if serial_configs is None:
+        serial_configs = []
 
     log_debug(f'Attempting to create runtime container "{container_name}"')
 
@@ -199,13 +207,25 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
             "networking_config": networking_config,
             # Real-time scheduling capabilities for PLC deterministic execution
             # SYS_NICE: Required for sched_setscheduler(SCHED_FIFO) in the PLC core
-            "cap_add": ["SYS_NICE"],
+            # MKNOD: Required for dynamic serial port passthrough (creating device nodes at runtime)
+            "cap_add": ["SYS_NICE", "MKNOD"],
             # ulimits for real-time scheduling:
             # - rtprio: Maximum real-time priority (99 is highest)
             # - memlock: Unlimited memory locking for future mlockall() support
             "ulimits": [
                 docker.types.Ulimit(name="rtprio", soft=99, hard=99),
                 docker.types.Ulimit(name="memlock", soft=-1, hard=-1),
+            ],
+            # Device cgroup rules for serial port passthrough
+            # These grant permission to access device classes without requiring container restart
+            # when devices are hot-plugged. Device nodes are created dynamically via mknod.
+            # - c 188:* rmw: USB-to-serial adapters (/dev/ttyUSB*)
+            # - c 166:* rmw: ACM modems (/dev/ttyACM*)
+            # - c 4:* rmw: Native serial ports (/dev/ttyS*) - major 4 includes tty devices
+            "device_cgroup_rules": [
+                "c 188:* rmw",  # USB-to-serial (ttyUSB*)
+                "c 166:* rmw",  # ACM modems (ttyACM*)
+                "c 4:* rmw",    # Native serial ports (ttyS*) and tty devices
             ],
         }
 
@@ -274,6 +294,12 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
 
         save_vnic_configs(container_name, vnic_configs)
 
+        if serial_configs:
+            save_serial_configs(container_name, serial_configs)
+            log_info(
+                f"Saved {len(serial_configs)} serial port configuration(s) for container {container_name}"
+            )
+
         log_info(
             f"Runtime container {container_name} created successfully with {len(vnic_configs)} virtual NICs"
         )
@@ -312,7 +338,7 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list):
         return None
 
 
-async def create_runtime_container(container_name: str, vnic_configs: list):
+async def create_runtime_container(container_name: str, vnic_configs: list, serial_configs: list = None):
     """
     Create a runtime container with MACVLAN networking for physical network bridging
     and an internal network for orchestrator communication.
@@ -323,9 +349,10 @@ async def create_runtime_container(container_name: str, vnic_configs: list):
     Args:
         container_name: Name for the runtime container
         vnic_configs: List of virtual NIC configurations
+        serial_configs: List of serial port configurations (optional)
     """
     dhcp_vnics = await asyncio.to_thread(
-        _create_runtime_container_sync, container_name, vnic_configs
+        _create_runtime_container_sync, container_name, vnic_configs, serial_configs
     )
 
     if dhcp_vnics:
@@ -338,3 +365,13 @@ async def create_runtime_container(container_name: str, vnic_configs: list):
                 log_info(f"Requested DHCP for vNIC {vnic_name}")
             except Exception as e:
                 log_warning(f"Failed to request DHCP for vNIC {vnic_name}: {e}")
+
+    # Trigger serial device sync for the newly created container
+    # This creates device nodes for any serial devices that are already connected
+    # Only run if container was created successfully (dhcp_vnics is not None)
+    if dhcp_vnics is not None and serial_configs:
+        try:
+            await network_event_listener.resync_serial_devices()
+            log_info(f"Triggered serial device resync for container {container_name}")
+        except Exception as e:
+            log_warning(f"Failed to resync serial devices for {container_name}: {e}")
