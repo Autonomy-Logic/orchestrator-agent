@@ -27,6 +27,14 @@ except ImportError:
     print("ERROR: pyroute2 is not installed. Install it with: pip3 install pyroute2")
     sys.exit(1)
 
+try:
+    import pyudev
+    PYUDEV_AVAILABLE = True
+except ImportError:
+    print("WARNING: pyudev is not installed. Serial device monitoring will be disabled.")
+    print("Install it with: pip3 install pyudev")
+    PYUDEV_AVAILABLE = False
+
 SOCKET_PATH = "/var/orchestrator/netmon.sock"
 LOG_FILE = "/var/log/autonomy-netmon.log"
 DHCP_LEASE_DIR = "/var/orchestrator/dhcp"
@@ -296,6 +304,344 @@ class DHCPManager:
         return status
 
 
+class DeviceMonitor:
+    """
+    Monitor USB serial devices using pyudev for hot-plug detection.
+
+    This class detects USB-to-serial adapters and native serial ports,
+    providing device discovery on startup and real-time hotplug notifications.
+    Events are sent to the orchestrator-agent which creates/removes device
+    nodes inside vPLC containers dynamically (without container restart).
+
+    Supported device types:
+    - USB-to-serial adapters (ttyUSB*): FTDI, CH340, PL2303, CP210x, etc.
+    - ACM modems (ttyACM*): Arduino, USB CDC devices
+    - Native serial ports (ttyS*): Onboard UART ports
+    """
+
+    # Device major numbers for serial port types
+    SERIAL_MAJORS = {
+        188: "ttyUSB",  # USB-to-serial adapters
+        166: "ttyACM",  # ACM modems (Arduino, etc.)
+        4: "ttyS",      # Native serial ports (minor 64-255)
+    }
+
+    def __init__(self, send_event_callback):
+        """
+        Initialize the device monitor.
+
+        Args:
+            send_event_callback: Function to call with device events.
+                                 Events are dicts with 'type' and 'data' keys.
+        """
+        self.send_event = send_event_callback
+        self.context = None
+        self.monitor = None
+        self.monitor_thread = None
+        self.running = False
+        self.device_cache: Dict[str, Dict] = {}  # by_id -> device_info
+
+    def start(self):
+        """Start monitoring for device events."""
+        if not PYUDEV_AVAILABLE:
+            logger.warning("pyudev not available, serial device monitoring disabled")
+            return
+
+        try:
+            self.context = pyudev.Context()
+            self.monitor = pyudev.Monitor.from_netlink(self.context)
+            # Monitor tty subsystem for serial devices
+            self.monitor.filter_by(subsystem='tty')
+
+            self.running = True
+            self.monitor_thread = threading.Thread(
+                target=self._monitor_loop, daemon=True
+            )
+            self.monitor_thread.start()
+
+            logger.info("Serial device monitor started")
+
+        except Exception as e:
+            logger.error(f"Failed to start device monitor: {e}")
+            self.running = False
+
+    def stop(self):
+        """Stop the device monitor."""
+        self.running = False
+        if self.monitor_thread:
+            self.monitor_thread.join(timeout=2)
+        logger.info("Serial device monitor stopped")
+
+    def get_current_devices(self) -> List[Dict]:
+        """
+        Enumerate all currently connected serial devices.
+
+        Returns:
+            List of device info dicts, each containing:
+            - path: Device node path (e.g., /dev/ttyUSB0)
+            - by_id: Stable identifier path (e.g., /dev/serial/by-id/usb-FTDI_...)
+            - major: Device major number
+            - minor: Device minor number
+            - vendor_id: USB vendor ID (if available)
+            - product_id: USB product ID (if available)
+            - serial: USB serial number (if available)
+            - subsystem: Always 'tty'
+            - manufacturer: Device manufacturer (if available)
+            - product: Product name (if available)
+        """
+        if not PYUDEV_AVAILABLE:
+            return []
+
+        devices = []
+        try:
+            context = self.context or pyudev.Context()
+
+            for device in context.list_devices(subsystem='tty'):
+                device_info = self._build_device_info(device)
+                if device_info:
+                    devices.append(device_info)
+                    # Update cache
+                    by_id = device_info.get("by_id")
+                    if by_id:
+                        self.device_cache[by_id] = device_info
+
+        except Exception as e:
+            logger.error(f"Failed to enumerate serial devices: {e}")
+
+        return devices
+
+    def _build_device_info(self, device) -> Optional[Dict]:
+        """
+        Extract device information from a pyudev device object.
+
+        Filters to only include actual serial port devices (ttyUSB*, ttyACM*, ttyS*),
+        excluding pseudo-terminals and other non-serial tty devices.
+
+        Args:
+            device: pyudev Device object
+
+        Returns:
+            Device info dict or None if device should be filtered out.
+        """
+        try:
+            device_node = device.device_node
+            if not device_node:
+                return None
+
+            # Filter to only serial port devices
+            basename = os.path.basename(device_node)
+            if not (basename.startswith('ttyUSB') or
+                    basename.startswith('ttyACM') or
+                    basename.startswith('ttyS')):
+                return None
+
+            # Get device numbers
+            try:
+                stat_info = os.stat(device_node)
+                major = os.major(stat_info.st_rdev)
+                minor = os.minor(stat_info.st_rdev)
+            except (OSError, FileNotFoundError):
+                # Device may have been removed
+                return None
+
+            # For ttyS devices, only include minor >= 64.
+            # On most Linux systems, ttyS devices with minor numbers 0–63 are
+            # reserved for legacy or virtual console/serial devices, while
+            # minors >= 64 correspond to real hardware serial ports. We exclude
+            # minors < 64 here to ignore virtual console devices and only track
+            # actual serial ports.
+            if basename.startswith('ttyS') and minor < 64:
+                return None
+
+            # Get stable by-id path
+            by_id_path = self._get_by_id_path(device)
+
+            # Get USB device properties (may not be available for native serial ports)
+            vendor_id = device.get('ID_VENDOR_ID')
+            product_id = device.get('ID_MODEL_ID')
+            serial = device.get('ID_SERIAL_SHORT')
+            manufacturer = device.get('ID_VENDOR') or device.get('ID_VENDOR_FROM_DATABASE')
+            product = device.get('ID_MODEL') or device.get('ID_MODEL_FROM_DATABASE')
+
+            device_info = {
+                "path": device_node,
+                "by_id": by_id_path,
+                "major": major,
+                "minor": minor,
+                "vendor_id": vendor_id,
+                "product_id": product_id,
+                "serial": serial,
+                "subsystem": "tty",
+                "manufacturer": manufacturer,
+                "product": product,
+            }
+
+            return device_info
+
+        except Exception as e:
+            logger.debug(f"Error building device info: {e}")
+            return None
+
+    def _get_by_id_path(self, device) -> Optional[str]:
+        """
+        Get the stable /dev/serial/by-id/ path for a device.
+
+        This path contains the USB serial number and remains constant
+        regardless of which USB port the device is plugged into.
+
+        Args:
+            device: pyudev Device object
+
+        Returns:
+            The by-id symlink path, or None if not available.
+        """
+        try:
+            device_node = device.device_node
+            if not device_node:
+                return None
+
+            # Check /dev/serial/by-id/ for symlinks pointing to this device
+            by_id_dir = "/dev/serial/by-id"
+            if os.path.isdir(by_id_dir):
+                for entry in os.listdir(by_id_dir):
+                    entry_path = os.path.join(by_id_dir, entry)
+                    if os.path.islink(entry_path):
+                        target = os.path.realpath(entry_path)
+                        if target == os.path.realpath(device_node):
+                            return entry_path
+
+            # Fallback: use ID_SERIAL property to construct expected path
+            id_serial = device.get('ID_SERIAL')
+            if id_serial:
+                # Construct expected by-id path format
+                expected_path = f"/dev/serial/by-id/{id_serial}"
+                if os.path.exists(expected_path):
+                    return expected_path
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"Error getting by-id path: {e}")
+            return None
+
+    def _monitor_loop(self):
+        """Background thread loop for monitoring device events."""
+        logger.info("Device monitor thread started")
+
+        try:
+            # Use poll() for non-blocking monitoring
+            self.monitor.start()
+
+            while self.running:
+                try:
+                    # Poll with timeout to allow checking self.running
+                    device = self.monitor.poll(timeout=1.0)
+                    if device:
+                        self._handle_device_event(device)
+                except Exception as e:
+                    if self.running:
+                        logger.error(f"Error polling device events: {e}")
+
+        except Exception as e:
+            logger.error(f"Device monitor loop error: {e}")
+
+        logger.info("Device monitor thread stopped")
+
+    def _handle_device_event(self, device):
+        """
+        Handle a device add/remove event from udev.
+
+        Args:
+            device: pyudev Device object with action attribute
+        """
+        try:
+            action = device.action
+
+            if action not in ('add', 'remove'):
+                return
+
+            device_info = self._build_device_info(device)
+
+            if action == 'add':
+                if not device_info:
+                    return
+
+                by_id = device_info.get("by_id")
+                logger.info(f"Serial device added: {device_info.get('path')} (by_id: {by_id})")
+
+                # Update cache
+                if by_id:
+                    self.device_cache[by_id] = device_info
+
+                # Send event
+                event = {
+                    "type": "device_change",
+                    "data": {
+                        "action": "add",
+                        "device": device_info,
+                    }
+                }
+                self.send_event(event)
+
+            elif action == 'remove':
+                device_node = device.device_node
+                if not device_node:
+                    return
+
+                # For remove events, device_info may be incomplete
+                # Try to find cached info by path
+                removed_info = None
+                removed_by_id = None
+
+                for by_id, cached_info in list(self.device_cache.items()):
+                    if cached_info.get("path") == device_node:
+                        removed_info = cached_info
+                        removed_by_id = by_id
+                        break
+
+                if removed_info:
+                    logger.info(f"Serial device removed: {device_node} (by_id: {removed_by_id})")
+                    del self.device_cache[removed_by_id]
+                else:
+                    # Build minimal info for devices not in cache
+                    basename = os.path.basename(device_node)
+                    if not (basename.startswith('ttyUSB') or
+                            basename.startswith('ttyACM') or
+                            basename.startswith('ttyS')):
+                        return
+
+                    logger.info(f"Serial device removed: {device_node}")
+                    removed_info = {
+                        "path": device_node,
+                        "by_id": None,
+                        "major": None,
+                        "minor": None,
+                        "subsystem": "tty",
+                    }
+
+                # Send event
+                event = {
+                    "type": "device_change",
+                    "data": {
+                        "action": "remove",
+                        "device": removed_info,
+                    }
+                }
+                self.send_event(event)
+
+        except Exception as e:
+            logger.error(f"Error handling device event: {e}")
+
+    def get_status(self) -> Dict[str, Any]:
+        """Get status of the device monitor."""
+        return {
+            "running": self.running,
+            "pyudev_available": PYUDEV_AVAILABLE,
+            "cached_devices": len(self.device_cache),
+            "devices": list(self.device_cache.values()),
+        }
+
+
 class NetworkMonitor:
     def __init__(self):
         self.ipr = IPRoute()
@@ -307,6 +653,7 @@ class NetworkMonitor:
         self.last_event_time = 0
         self.pending_changes = set()
         self.dhcp_manager = DHCPManager(self.send_event)
+        self.device_monitor = DeviceMonitor(self.send_event)
 
     def setup_socket(self):
         """Create Unix domain socket for communication with orchestrator-agent"""
@@ -544,6 +891,14 @@ class NetworkMonitor:
         elif cmd_type == "get_dhcp_status":
             return {"success": True, "status": self.dhcp_manager.get_status()}
 
+        elif cmd_type == "get_device_status":
+            return {"success": True, "status": self.device_monitor.get_status()}
+
+        elif cmd_type == "discover_devices":
+            # Force re-enumeration of serial devices
+            devices = self.device_monitor.get_current_devices()
+            return {"success": True, "devices": devices}
+
         else:
             return {"success": False, "error": f"Unknown command: {cmd_type}"}
 
@@ -603,10 +958,29 @@ class NetworkMonitor:
                 event_json = json.dumps(discovery_event) + "\n"
                 client.sendall(event_json.encode("utf-8"))
                 logger.info(
-                    f"Sent discovery data with {len(interfaces)} interfaces to new client"
+                    f"Sent network discovery with {len(interfaces)} interfaces to new client"
                 )
             except Exception as e:
-                logger.error(f"Failed to send discovery data: {e}")
+                logger.error(f"Failed to send network discovery data: {e}")
+
+            # Send device discovery (serial devices)
+            devices = self.device_monitor.get_current_devices()
+            device_discovery_event = {
+                "type": "device_discovery",
+                "data": {
+                    "devices": devices,
+                    "timestamp": datetime.now().isoformat(),
+                },
+            }
+
+            try:
+                event_json = json.dumps(device_discovery_event) + "\n"
+                client.sendall(event_json.encode("utf-8"))
+                logger.info(
+                    f"Sent device discovery with {len(devices)} serial devices to new client"
+                )
+            except Exception as e:
+                logger.error(f"Failed to send device discovery data: {e}")
 
         except socket.timeout:
             pass
@@ -622,8 +996,9 @@ class NetworkMonitor:
         self.ipr.bind()
 
         self.dhcp_manager.start()
+        self.device_monitor.start()
 
-        logger.info("Monitoring network changes...")
+        logger.info("Monitoring network and device changes...")
 
         while self.running:
             try:
@@ -673,6 +1048,7 @@ class NetworkMonitor:
         logger.info("Shutting down...")
 
         self.dhcp_manager.stop()
+        self.device_monitor.stop()
 
         for client in self.clients:
             try:

@@ -5,7 +5,13 @@ from tools.operations_state import (
     clear_state,
 )
 from tools.logger import *
-from tools.contract_validation import StringType, ListType, OptionalType, BASE_MESSAGE
+from tools.contract_validation import (
+    StringType,
+    ListType,
+    OptionalType,
+    BASE_MESSAGE,
+    SERIAL_CONFIG_TYPE,
+)
 from tools.docker_tools import get_existing_mac_addresses_on_interface
 from . import topic, validate_message
 import asyncio
@@ -27,6 +33,7 @@ MESSAGE_TYPE = {
     **BASE_MESSAGE,
     "container_name": StringType,
     "vnic_configs": ListType(VNIC_CONFIG_TYPE),
+    "serial_configs": OptionalType(ListType(SERIAL_CONFIG_TYPE)),
 }
 
 
@@ -46,6 +53,7 @@ def init(client):
         correlation_id = message.get("correlation_id")
         container_name = message.get("container_name")
         vnic_configs = message.get("vnic_configs", [])
+        serial_configs = message.get("serial_configs", [])
 
         if (
             not container_name
@@ -125,8 +133,12 @@ def init(client):
                     }
 
         log_info(f"Creating runtime container: {container_name}")
+        if serial_configs:
+            log_info(f"Container {container_name} will have {len(serial_configs)} serial port(s) configured")
 
-        asyncio.create_task(create_runtime_container(container_name, vnic_configs))
+        asyncio.create_task(
+            create_runtime_container(container_name, vnic_configs, serial_configs)
+        )
 
         return {
             "action": NAME,
@@ -134,4 +146,5 @@ def init(client):
             "status": "creating",
             "container_id": container_name,
             "message": f"Container creation started for {container_name}",
+            "serial_configs_count": len(serial_configs) if serial_configs else 0,
         }

@@ -184,6 +184,8 @@ docker run -d \
   --cap-add=SYS_PTRACE \
   --restart unless-stopped \
   -v "$SHARED_VOLUME:/var/orchestrator" \
+  -v /dev:/dev \
+  -v /run/udev:/run/udev:ro \
   "$NETMON_IMAGE_NAME"
 
 echo "[SUCCESS] Network monitor sidecar started"
