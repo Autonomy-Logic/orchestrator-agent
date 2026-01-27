@@ -7,22 +7,21 @@ via Unix domain socket. Provides network discovery, real-time change notificatio
 and DHCP client management for runtime containers.
 """
 
+import errno
 import json
-import socket
-import time
-import sys
-import os
-import signal
 import logging
-import subprocess
-import threading
+import os
+import queue
 import select
+import signal
+import socket
+import subprocess
+import sys
+import threading
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 import ipaddress
-
-import queue
-import errno
 
 try:
     from pyroute2 import IPRoute, NetlinkError
@@ -39,6 +38,8 @@ RELEVANT_NETLINK_EVENTS = frozenset([
     "RTM_DELADDR",
     "RTM_NEWROUTE",
     "RTM_DELROUTE",
+    "RTM_NEWLINK",
+    "RTM_DELLINK",
 ])
 
 try:
@@ -721,6 +722,13 @@ class NetlinkReader:
                     temp_sock.setsockopt(sock_module.SOL_SOCKET, sock_module.SO_RCVBUF, NETLINK_RCVBUF_SIZE)
                     new_size = temp_sock.getsockopt(sock_module.SOL_SOCKET, sock_module.SO_RCVBUF)
                     logger.info(f"Netlink socket receive buffer: {old_size} -> {new_size} bytes")
+                    # Note: kernel often doubles the requested value, so we compare against
+                    # the requested size. If different, it may be limited by rmem_max.
+                    if new_size != NETLINK_RCVBUF_SIZE and new_size != NETLINK_RCVBUF_SIZE * 2:
+                        logger.info(
+                            f"Buffer size {new_size} differs from requested {NETLINK_RCVBUF_SIZE} "
+                            f"(may be limited by net.core.rmem_max)"
+                        )
                     buffer_set = True
                 finally:
                     # Don't close temp_sock as it shares the fd with ipr
@@ -970,6 +978,7 @@ class NetworkMonitor:
         self.running = True
         self.last_event_time = 0
         self.pending_changes = set()
+        self._last_degraded_log_time = 0
         self.dhcp_manager = DHCPManager(self.send_event)
         self.device_monitor = DeviceMonitor(self.send_event)
 
@@ -1109,16 +1118,65 @@ class NetworkMonitor:
             self.clients.remove(client)
 
     def handle_netlink_event(self, msg):
-        """Handle netlink events for address and route changes"""
+        """Handle netlink events for address, route, and link changes"""
         try:
             event_type = msg["event"]
 
-            if event_type in [
-                "RTM_NEWADDR",
-                "RTM_DELADDR",
-                "RTM_NEWROUTE",
-                "RTM_DELROUTE",
-            ]:
+            # Handle interface deletion - extract name from message since interface is gone
+            if event_type == "RTM_DELLINK":
+                ifname = msg.get_attr("IFLA_IFNAME")
+                if ifname and not ifname.startswith("veth") and ifname not in ["lo", "docker0"]:
+                    logger.info(f"Interface deleted: {ifname}")
+                    # Send immediate removal event (empty ipv4_addresses triggers cache removal)
+                    event = {
+                        "type": "network_change",
+                        "data": {
+                            "interface": ifname,
+                            "ipv4_addresses": [],
+                            "status": "removed",
+                        }
+                    }
+                    self.send_event(event)
+                return
+
+            # Handle link state changes
+            if event_type == "RTM_NEWLINK":
+                idx = msg.get("index")
+                if idx:
+                    try:
+                        links = self.ipr.get_links(idx)
+                        if links:
+                            link = links[0]
+                            ifname = link.get_attr("IFLA_IFNAME")
+                            operstate = link.get_attr("IFLA_OPERSTATE")
+
+                            if ifname and not ifname.startswith("veth") and ifname not in ["lo", "docker0"]:
+                                if operstate != "UP":
+                                    # Interface is down - send immediate removal event
+                                    logger.info(f"Interface down: {ifname} (state: {operstate})")
+                                    event = {
+                                        "type": "network_change",
+                                        "data": {
+                                            "interface": ifname,
+                                            "ipv4_addresses": [],
+                                            "status": "down",
+                                        }
+                                    }
+                                    self.send_event(event)
+                                else:
+                                    # Interface is up - use debounced processing
+                                    self.pending_changes.add(ifname)
+                                    self.last_event_time = time.time()
+                                    logger.debug(f"Interface up: {ifname}")
+                    except NetlinkError as e:
+                        if e.code == 19:
+                            logger.debug(f"Interface no longer exists (ENODEV): {e}")
+                        else:
+                            logger.error(f"Netlink error handling RTM_NEWLINK: {e}")
+                return
+
+            # Handle address and route changes (existing logic)
+            if event_type in ["RTM_NEWADDR", "RTM_DELADDR", "RTM_NEWROUTE", "RTM_DELROUTE"]:
                 idx = msg.get("index")
                 if idx:
                     try:
@@ -1376,9 +1434,11 @@ class NetworkMonitor:
 
                 # Log if netlink reader is in degraded state (periodic check)
                 if self.netlink_reader.is_degraded():
-                    # Only log occasionally to avoid spam
-                    if int(time.time()) % 30 == 0:
+                    # Only log every 30 seconds to avoid spam
+                    now = time.time()
+                    if now - self._last_degraded_log_time >= 30:
                         logger.warning("Netlink reader is in degraded state")
+                        self._last_degraded_log_time = now
 
                 time.sleep(0.1)
 
