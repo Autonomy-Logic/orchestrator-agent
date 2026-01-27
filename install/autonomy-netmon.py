@@ -671,6 +671,13 @@ class NetlinkReader:
     blocking netlink reads.
     """
 
+    # Recovery configuration
+    MAX_CONSECUTIVE_ERRORS = 10
+    ERROR_RESET_INTERVAL = 60  # Reset error count after 60s of no errors
+    MAX_DRAIN_ITERATIONS = 1000  # Limit buffer drain iterations to prevent infinite loop
+    BACKOFF_BASE = 0.1  # Base delay for exponential backoff (seconds)
+    BACKOFF_MAX = 5.0  # Maximum backoff delay (seconds)
+
     def __init__(self, event_queue: queue.Queue):
         """
         Initialize the netlink reader.
@@ -686,9 +693,7 @@ class NetlinkReader:
 
         # Recovery state
         self._consecutive_errors = 0
-        self._max_consecutive_errors = 10
         self._last_error_time = 0
-        self._error_reset_interval = 60  # Reset error count after 60s of no errors
         self._degraded = False
 
     def _create_iproute(self) -> IPRoute:
@@ -714,16 +719,16 @@ class NetlinkReader:
             if sock_fd is not None:
                 # Create a socket object from the file descriptor to set options
                 # Use SOCK_DGRAM as netlink sockets behave like datagrams
-                import socket as sock_module
-                # Get current buffer size for logging
-                temp_sock = sock_module.fromfd(sock_fd, sock_module.AF_NETLINK, sock_module.SOCK_DGRAM)
+                # Note: fromfd() duplicates the fd, so we must detach() to avoid closing it
+                temp_sock = socket.fromfd(sock_fd, socket.AF_NETLINK, socket.SOCK_DGRAM)
                 try:
-                    old_size = temp_sock.getsockopt(sock_module.SOL_SOCKET, sock_module.SO_RCVBUF)
-                    temp_sock.setsockopt(sock_module.SOL_SOCKET, sock_module.SO_RCVBUF, NETLINK_RCVBUF_SIZE)
-                    new_size = temp_sock.getsockopt(sock_module.SOL_SOCKET, sock_module.SO_RCVBUF)
+                    old_size = temp_sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+                    temp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, NETLINK_RCVBUF_SIZE)
+                    new_size = temp_sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
                     logger.info(f"Netlink socket receive buffer: {old_size} -> {new_size} bytes")
-                    # Note: kernel often doubles the requested value, so we compare against
-                    # the requested size. If different, it may be limited by rmem_max.
+                    # Kernel typically doubles SO_RCVBUF to account for sk_buff overhead.
+                    # If actual size differs from requested or 2x requested, it may be
+                    # limited by net.core.rmem_max sysctl.
                     if new_size != NETLINK_RCVBUF_SIZE and new_size != NETLINK_RCVBUF_SIZE * 2:
                         logger.info(
                             f"Buffer size {new_size} differs from requested {NETLINK_RCVBUF_SIZE} "
@@ -786,7 +791,7 @@ class NetlinkReader:
             try:
                 # Check if we should reset error count
                 if self._consecutive_errors > 0:
-                    if time.time() - self._last_error_time > self._error_reset_interval:
+                    if time.time() - self._last_error_time > self.ERROR_RESET_INTERVAL:
                         self._consecutive_errors = 0
                         if self._degraded:
                             self._degraded = False
@@ -854,7 +859,7 @@ class NetlinkReader:
             self._degraded = True
             logger.warning("Netlink buffer overflow detected, entering recovery mode")
 
-        if self._consecutive_errors >= self._max_consecutive_errors:
+        if self._consecutive_errors >= self.MAX_CONSECUTIVE_ERRORS:
             # Too many consecutive errors - recreate the socket
             logger.warning(
                 f"Persistent ENOBUFS after {self._consecutive_errors} attempts, "
@@ -869,13 +874,12 @@ class NetlinkReader:
     def _drain_buffer(self):
         """Attempt to drain the netlink buffer with rapid non-blocking reads."""
         drained = 0
-        max_drain = 1000  # Limit iterations to prevent infinite loop
 
         with self._lock:
             if not self.ipr:
                 return
 
-            for _ in range(max_drain):
+            for _ in range(self.MAX_DRAIN_ITERATIONS):
                 try:
                     # Non-blocking read attempt
                     msgs = self.ipr.get()
@@ -935,11 +939,11 @@ class NetlinkReader:
             logger.error(f"Suppressing repeated netlink errors (count: {self._consecutive_errors})")
 
         # Exponential backoff with cap
-        backoff = min(2 ** self._consecutive_errors * 0.1, 5.0)
+        backoff = min(2 ** self._consecutive_errors * self.BACKOFF_BASE, self.BACKOFF_MAX)
         time.sleep(backoff)
 
         # If too many errors, try recreating socket
-        if self._consecutive_errors >= self._max_consecutive_errors:
+        if self._consecutive_errors >= self.MAX_CONSECUTIVE_ERRORS:
             logger.warning("Too many netlink errors, attempting socket recreation")
             self._recreate_socket()
             self._consecutive_errors = 0
@@ -961,6 +965,8 @@ class NetlinkReader:
 class NetworkMonitor:
     # Maximum events to process per main loop iteration
     MAX_EVENTS_PER_ITERATION = 100
+    # Size of the netlink event queue (from reader thread to main loop)
+    NETLINK_QUEUE_SIZE = 1000
 
     def __init__(self):
         # IPRoute instance for queries (interface info, discovery, etc.)
@@ -968,7 +974,7 @@ class NetworkMonitor:
         self.ipr = IPRoute()
 
         # Event queue for netlink events (from dedicated reader thread)
-        self.netlink_queue: queue.Queue = queue.Queue(maxsize=1000)
+        self.netlink_queue: queue.Queue = queue.Queue(maxsize=self.NETLINK_QUEUE_SIZE)
         self.netlink_reader = NetlinkReader(self.netlink_queue)
 
         self.socket_path = SOCKET_PATH
@@ -1169,7 +1175,7 @@ class NetworkMonitor:
                                     self.last_event_time = time.time()
                                     logger.debug(f"Interface up: {ifname}")
                     except NetlinkError as e:
-                        if e.code == 19:
+                        if e.code == errno.ENODEV:
                             logger.debug(f"Interface no longer exists (ENODEV): {e}")
                         else:
                             logger.error(f"Netlink error handling RTM_NEWLINK: {e}")
@@ -1192,7 +1198,7 @@ class NetworkMonitor:
                                 self.last_event_time = time.time()
                                 logger.debug(f"Network event on {ifname}: {event_type}")
                     except NetlinkError as e:
-                        if e.code == 19:
+                        if e.code == errno.ENODEV:
                             logger.debug(f"Interface no longer exists (ENODEV): {e}")
                         else:
                             logger.error(f"Netlink error handling event: {e}")
