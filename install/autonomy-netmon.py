@@ -21,11 +21,25 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 import ipaddress
 
+import queue
+import errno
+
 try:
     from pyroute2 import IPRoute, NetlinkError
 except ImportError:
     print("ERROR: pyroute2 is not installed. Install it with: pip3 install pyroute2")
     sys.exit(1)
+
+# Netlink socket buffer size (2MB) - larger buffer helps during event bursts
+NETLINK_RCVBUF_SIZE = 2 * 1024 * 1024
+
+# Events we care about for network monitoring
+RELEVANT_NETLINK_EVENTS = frozenset([
+    "RTM_NEWADDR",
+    "RTM_DELADDR",
+    "RTM_NEWROUTE",
+    "RTM_DELROUTE",
+])
 
 try:
     import pyudev
@@ -642,9 +656,313 @@ class DeviceMonitor:
         }
 
 
+class NetlinkReader:
+    """
+    Dedicated thread for reading netlink events from the kernel.
+
+    This class solves the buffer overflow (ENOBUFS) problem by:
+    1. Running in a dedicated thread that only reads netlink events
+    2. Increasing the kernel socket receive buffer size
+    3. Filtering events early to only queue relevant ones
+    4. Implementing recovery strategies for errors
+
+    The main loop can then consume events from the queue without
+    blocking netlink reads.
+    """
+
+    def __init__(self, event_queue: queue.Queue):
+        """
+        Initialize the netlink reader.
+
+        Args:
+            event_queue: Thread-safe queue to put filtered events into
+        """
+        self.event_queue = event_queue
+        self.ipr: Optional[IPRoute] = None
+        self.running = False
+        self.thread: Optional[threading.Thread] = None
+        self._lock = threading.Lock()
+
+        # Recovery state
+        self._consecutive_errors = 0
+        self._max_consecutive_errors = 10
+        self._last_error_time = 0
+        self._error_reset_interval = 60  # Reset error count after 60s of no errors
+        self._degraded = False
+
+    def _create_iproute(self) -> IPRoute:
+        """Create and configure an IPRoute instance with larger buffer."""
+        ipr = IPRoute()
+
+        # Increase the netlink socket receive buffer
+        # This gives more headroom during event bursts
+        # Try multiple approaches for different pyroute2 versions
+        buffer_set = False
+        try:
+            # Try to get the underlying socket file descriptor
+            # pyroute2 stores the socket in different attributes depending on version
+            sock_fd = None
+
+            # Method 1: Direct fileno access (pyroute2 >= 0.5)
+            if hasattr(ipr, 'fileno'):
+                sock_fd = ipr.fileno()
+            # Method 2: Through nlm_request (older versions)
+            elif hasattr(ipr, 'nlm_request') and hasattr(ipr.nlm_request, 'fileno'):
+                sock_fd = ipr.nlm_request.fileno()
+
+            if sock_fd is not None:
+                # Create a socket object from the file descriptor to set options
+                # Use SOCK_DGRAM as netlink sockets behave like datagrams
+                import socket as sock_module
+                # Get current buffer size for logging
+                temp_sock = sock_module.fromfd(sock_fd, sock_module.AF_NETLINK, sock_module.SOCK_DGRAM)
+                try:
+                    old_size = temp_sock.getsockopt(sock_module.SOL_SOCKET, sock_module.SO_RCVBUF)
+                    temp_sock.setsockopt(sock_module.SOL_SOCKET, sock_module.SO_RCVBUF, NETLINK_RCVBUF_SIZE)
+                    new_size = temp_sock.getsockopt(sock_module.SOL_SOCKET, sock_module.SO_RCVBUF)
+                    logger.info(f"Netlink socket receive buffer: {old_size} -> {new_size} bytes")
+                    buffer_set = True
+                finally:
+                    # Don't close temp_sock as it shares the fd with ipr
+                    temp_sock.detach()
+
+        except Exception as e:
+            # If we can't set buffer size, log but continue
+            # The kernel may limit it based on rmem_max
+            logger.warning(f"Could not set netlink buffer size: {e}")
+
+        if not buffer_set:
+            logger.info("Using default netlink socket buffer size")
+
+        return ipr
+
+    def start(self):
+        """Start the netlink reader thread."""
+        if self.running:
+            return
+
+        self.running = True
+        self._degraded = False
+        self._consecutive_errors = 0
+
+        self.thread = threading.Thread(target=self._reader_loop, daemon=True)
+        self.thread.start()
+        logger.info("Netlink reader thread started")
+
+    def stop(self):
+        """Stop the netlink reader thread."""
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=3)
+
+        with self._lock:
+            if self.ipr:
+                try:
+                    self.ipr.close()
+                except Exception:
+                    pass
+                self.ipr = None
+
+        logger.info("Netlink reader thread stopped")
+
+    def _reader_loop(self):
+        """Main loop for reading netlink events."""
+        logger.info("Netlink reader loop starting")
+
+        # Create initial IPRoute instance
+        with self._lock:
+            self.ipr = self._create_iproute()
+            self.ipr.bind()
+
+        while self.running:
+            try:
+                # Check if we should reset error count
+                if self._consecutive_errors > 0:
+                    if time.time() - self._last_error_time > self._error_reset_interval:
+                        self._consecutive_errors = 0
+                        if self._degraded:
+                            self._degraded = False
+                            logger.info("Netlink reader recovered from degraded state")
+
+                # Use select() to wait for data with timeout
+                # This is efficient (blocks when no events) and allows graceful shutdown
+                with self._lock:
+                    if not self.ipr:
+                        break
+                    ipr = self.ipr
+
+                # Get the file descriptor for select()
+                try:
+                    if hasattr(ipr, 'fileno'):
+                        fd = ipr.fileno()
+                    else:
+                        # Fallback: try to read with a short timeout approach
+                        fd = None
+                except Exception:
+                    fd = None
+
+                if fd is not None:
+                    # Wait for data with 1 second timeout
+                    # This allows checking self.running periodically for graceful shutdown
+                    readable, _, _ = select.select([fd], [], [], 1.0)
+                    if not readable:
+                        # Timeout - no data, loop back to check self.running
+                        continue
+
+                # Read messages from netlink (non-blocking now since select said data is ready)
+                with self._lock:
+                    if not self.ipr:
+                        break
+                    msgs = self.ipr.get()
+
+                # Filter and queue relevant events
+                for msg in msgs:
+                    event_type = msg.get("event")
+                    if event_type in RELEVANT_NETLINK_EVENTS:
+                        # Don't block if queue is full - drop oldest events
+                        try:
+                            self.event_queue.put_nowait(msg)
+                        except queue.Full:
+                            # Queue is full, drop this event
+                            # This shouldn't happen with a reasonably sized queue
+                            logger.warning("Event queue full, dropping netlink event")
+
+            except OSError as e:
+                if e.errno == errno.ENOBUFS:
+                    self._handle_enobufs()
+                else:
+                    self._handle_error(e)
+            except Exception as e:
+                self._handle_error(e)
+
+        logger.info("Netlink reader loop stopped")
+
+    def _handle_enobufs(self):
+        """Handle ENOBUFS (buffer overflow) error with recovery strategy."""
+        self._consecutive_errors += 1
+        self._last_error_time = time.time()
+
+        if not self._degraded:
+            self._degraded = True
+            logger.warning("Netlink buffer overflow detected, entering recovery mode")
+
+        if self._consecutive_errors >= self._max_consecutive_errors:
+            # Too many consecutive errors - recreate the socket
+            logger.warning(
+                f"Persistent ENOBUFS after {self._consecutive_errors} attempts, "
+                "recreating netlink socket"
+            )
+            self._recreate_socket()
+            self._consecutive_errors = 0
+        else:
+            # Try to drain the buffer by reading rapidly
+            self._drain_buffer()
+
+    def _drain_buffer(self):
+        """Attempt to drain the netlink buffer with rapid non-blocking reads."""
+        drained = 0
+        max_drain = 1000  # Limit iterations to prevent infinite loop
+
+        with self._lock:
+            if not self.ipr:
+                return
+
+            for _ in range(max_drain):
+                try:
+                    # Non-blocking read attempt
+                    msgs = self.ipr.get()
+                    if not msgs:
+                        break
+                    drained += len(msgs)
+
+                    # Still filter and queue relevant events during drain
+                    for msg in msgs:
+                        event_type = msg.get("event")
+                        if event_type in RELEVANT_NETLINK_EVENTS:
+                            try:
+                                self.event_queue.put_nowait(msg)
+                            except queue.Full:
+                                pass  # Drop during drain
+
+                except OSError as e:
+                    if e.errno == errno.ENOBUFS:
+                        # Still overflowing, continue draining
+                        continue
+                    break
+                except Exception:
+                    break
+
+        if drained > 0:
+            logger.info(f"Drained {drained} messages from netlink buffer")
+
+    def _recreate_socket(self):
+        """Recreate the IPRoute socket as a last resort recovery."""
+        with self._lock:
+            # Close old socket
+            if self.ipr:
+                try:
+                    self.ipr.close()
+                except Exception:
+                    pass
+
+            # Create new socket
+            try:
+                self.ipr = self._create_iproute()
+                self.ipr.bind()
+                logger.info("Netlink socket recreated successfully")
+            except Exception as e:
+                logger.error(f"Failed to recreate netlink socket: {e}")
+                # Will retry on next loop iteration
+                self.ipr = None
+                time.sleep(1)
+
+    def _handle_error(self, error: Exception):
+        """Handle generic errors in the reader loop."""
+        self._consecutive_errors += 1
+        self._last_error_time = time.time()
+
+        if self._consecutive_errors <= 3:
+            logger.error(f"Error reading netlink events: {error}")
+        elif self._consecutive_errors == 4:
+            logger.error(f"Suppressing repeated netlink errors (count: {self._consecutive_errors})")
+
+        # Exponential backoff with cap
+        backoff = min(2 ** self._consecutive_errors * 0.1, 5.0)
+        time.sleep(backoff)
+
+        # If too many errors, try recreating socket
+        if self._consecutive_errors >= self._max_consecutive_errors:
+            logger.warning("Too many netlink errors, attempting socket recreation")
+            self._recreate_socket()
+            self._consecutive_errors = 0
+
+    def is_degraded(self) -> bool:
+        """Check if the reader is in degraded state."""
+        return self._degraded
+
+    def get_status(self) -> Dict[str, Any]:
+        """Get status of the netlink reader."""
+        return {
+            "running": self.running,
+            "degraded": self._degraded,
+            "consecutive_errors": self._consecutive_errors,
+            "socket_active": self.ipr is not None,
+        }
+
+
 class NetworkMonitor:
+    # Maximum events to process per main loop iteration
+    MAX_EVENTS_PER_ITERATION = 100
+
     def __init__(self):
+        # IPRoute instance for queries (interface info, discovery, etc.)
+        # This is separate from the netlink reader's socket
         self.ipr = IPRoute()
+
+        # Event queue for netlink events (from dedicated reader thread)
+        self.netlink_queue: queue.Queue = queue.Queue(maxsize=1000)
+        self.netlink_reader = NetlinkReader(self.netlink_queue)
+
         self.socket_path = SOCKET_PATH
         self.server_socket = None
         self.clients = []
@@ -899,6 +1217,22 @@ class NetworkMonitor:
             devices = self.device_monitor.get_current_devices()
             return {"success": True, "devices": devices}
 
+        elif cmd_type == "get_netlink_status":
+            return {"success": True, "status": self.netlink_reader.get_status()}
+
+        elif cmd_type == "get_status":
+            # Combined status of all components
+            return {
+                "success": True,
+                "status": {
+                    "netlink": self.netlink_reader.get_status(),
+                    "dhcp": self.dhcp_manager.get_status(),
+                    "devices": self.device_monitor.get_status(),
+                    "clients_connected": len(self.clients),
+                    "pending_changes": list(self.pending_changes),
+                }
+            }
+
         else:
             return {"success": False, "error": f"Unknown command: {cmd_type}"}
 
@@ -993,7 +1327,8 @@ class NetworkMonitor:
 
         self.setup_socket()
 
-        self.ipr.bind()
+        # Start the dedicated netlink reader thread
+        self.netlink_reader.start()
 
         self.dhcp_manager.start()
         self.device_monitor.start()
@@ -1026,11 +1361,24 @@ class NetworkMonitor:
                     if client in self.client_buffers:
                         del self.client_buffers[client]
 
-                msgs = self.ipr.get()
-                for msg in msgs:
-                    self.handle_netlink_event(msg)
+                # Process netlink events from the queue (non-blocking)
+                # The dedicated reader thread has already filtered relevant events
+                events_processed = 0
+                while events_processed < self.MAX_EVENTS_PER_ITERATION:
+                    try:
+                        msg = self.netlink_queue.get_nowait()
+                        self.handle_netlink_event(msg)
+                        events_processed += 1
+                    except queue.Empty:
+                        break
 
                 self.process_pending_changes()
+
+                # Log if netlink reader is in degraded state (periodic check)
+                if self.netlink_reader.is_degraded():
+                    # Only log occasionally to avoid spam
+                    if int(time.time()) % 30 == 0:
+                        logger.warning("Netlink reader is in degraded state")
 
                 time.sleep(0.1)
 
@@ -1046,6 +1394,9 @@ class NetworkMonitor:
     def cleanup(self):
         """Cleanup resources"""
         logger.info("Shutting down...")
+
+        # Stop the netlink reader thread first
+        self.netlink_reader.stop()
 
         self.dhcp_manager.stop()
         self.device_monitor.stop()
@@ -1068,6 +1419,7 @@ class NetworkMonitor:
             except Exception:
                 pass
 
+        # Close the query IPRoute instance
         try:
             self.ipr.close()
         except Exception:
