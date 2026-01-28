@@ -120,6 +120,30 @@ def get_macvlan_network_key(
     return f"macvlan_{parent_interface}_{resolved_subnet.replace('/', '_')}"
 
 
+def _validate_network_exists(network) -> bool:
+    """
+    Validate that a Docker network object refers to an existing network.
+
+    Docker's networks.get() can return stale objects where the name lookup
+    succeeds but the underlying network (by ID) no longer exists. This causes
+    failures when trying to connect containers to the network.
+
+    Args:
+        network: Docker network object to validate
+
+    Returns:
+        True if network exists and is usable, False if stale/invalid
+    """
+    try:
+        network.reload()
+        return True
+    except docker.errors.NotFound:
+        return False
+    except Exception as e:
+        log_warning(f"Unexpected error validating network {network.name}: {e}")
+        return False
+
+
 def get_or_create_macvlan_network(
     parent_interface: str,
     parent_subnet: str = None,
@@ -154,68 +178,84 @@ def get_or_create_macvlan_network(
 
     try:
         network = CLIENT.networks.get(network_name)
-        log_debug(f"MACVLAN network {network_name} already exists, reusing it")
-        return network
-    except docker.errors.NotFound:
 
-        log_info(
-            f"Creating new MACVLAN network {network_name} for parent interface {parent_interface} "
-            f"with subnet {parent_subnet} and gateway {parent_gateway}"
-        )
-        try:
-            ipam_pool_config = {"subnet": parent_subnet}
-            if parent_gateway:
-                ipam_pool_config["gateway"] = parent_gateway
-
-            ipam_pool = docker.types.IPAMPool(**ipam_pool_config)
-            ipam_config = docker.types.IPAMConfig(pool_configs=[ipam_pool])
-            network = CLIENT.networks.create(
-                name=network_name,
-                driver="macvlan",
-                options={"parent": parent_interface},
-                ipam=ipam_config,
-            )
-            log_info(f"MACVLAN network {network_name} created successfully")
+        # Validate the network actually exists (not a stale reference)
+        if _validate_network_exists(network):
+            log_debug(f"MACVLAN network {network_name} already exists, reusing it")
             return network
-        except docker.errors.APIError as e:
-            if "overlaps" in str(e).lower():
-                log_warning(
-                    f"Network overlap detected for subnet {parent_subnet}. "
-                    f"Searching for existing MACVLAN network to reuse..."
+        else:
+            # Network lookup succeeded but it's stale - try to remove it
+            log_warning(
+                f"MACVLAN network {network_name} exists but is stale (underlying network not found). "
+                f"Removing stale reference and recreating..."
+            )
+            try:
+                network.remove()
+            except Exception as remove_err:
+                log_debug(f"Could not remove stale network {network_name}: {remove_err}")
+            # Fall through to create a new network
+
+    except docker.errors.NotFound:
+        pass  # Network doesn't exist, will create below
+
+    log_info(
+        f"Creating new MACVLAN network {network_name} for parent interface {parent_interface} "
+        f"with subnet {parent_subnet} and gateway {parent_gateway}"
+    )
+    try:
+        ipam_pool_config = {"subnet": parent_subnet}
+        if parent_gateway:
+            ipam_pool_config["gateway"] = parent_gateway
+
+        ipam_pool = docker.types.IPAMPool(**ipam_pool_config)
+        ipam_config = docker.types.IPAMConfig(pool_configs=[ipam_pool])
+        network = CLIENT.networks.create(
+            name=network_name,
+            driver="macvlan",
+            options={"parent": parent_interface},
+            ipam=ipam_config,
+        )
+        log_info(f"MACVLAN network {network_name} created successfully")
+        return network
+    except docker.errors.APIError as e:
+        if "overlaps" in str(e).lower():
+            log_warning(
+                f"Network overlap detected for subnet {parent_subnet}. "
+                f"Searching for existing MACVLAN network to reuse..."
+            )
+
+            try:
+                all_networks = CLIENT.networks.list()
+                for net in all_networks:
+                    if net.attrs.get("Driver") == "macvlan":
+                        net_options = net.attrs.get("Options", {})
+                        net_parent = net_options.get("parent")
+
+                        ipam = net.attrs.get("IPAM", {})
+                        if ipam and ipam.get("Config"):
+                            for config in ipam["Config"]:
+                                net_subnet = config.get("Subnet")
+                                if (
+                                    net_subnet == parent_subnet
+                                    and net_parent == parent_interface
+                                ):
+                                    log_info(
+                                        f"Found existing MACVLAN network {net.name} with matching "
+                                        f"subnet {parent_subnet} and parent {parent_interface}. Reusing it."
+                                    )
+                                    return net
+
+                log_error(
+                    f"Network overlap error but could not find existing MACVLAN network "
+                    f"for subnet {parent_subnet} and parent {parent_interface}"
                 )
-
-                try:
-                    all_networks = CLIENT.networks.list()
-                    for net in all_networks:
-                        if net.attrs.get("Driver") == "macvlan":
-                            net_options = net.attrs.get("Options", {})
-                            net_parent = net_options.get("parent")
-
-                            ipam = net.attrs.get("IPAM", {})
-                            if ipam and ipam.get("Config"):
-                                for config in ipam["Config"]:
-                                    net_subnet = config.get("Subnet")
-                                    if (
-                                        net_subnet == parent_subnet
-                                        and net_parent == parent_interface
-                                    ):
-                                        log_info(
-                                            f"Found existing MACVLAN network {net.name} with matching "
-                                            f"subnet {parent_subnet} and parent {parent_interface}. Reusing it."
-                                        )
-                                        return net
-
-                    log_error(
-                        f"Network overlap error but could not find existing MACVLAN network "
-                        f"for subnet {parent_subnet} and parent {parent_interface}"
-                    )
-                    raise
-                except Exception as search_error:
-                    log_error(f"Error searching for existing networks: {search_error}")
-                    raise
-            else:
-                log_error(f"Failed to create MACVLAN network {network_name}: {e}")
                 raise
+            except Exception as search_error:
+                log_error(f"Error searching for existing networks: {search_error}")
+                raise
+        else:
+            log_error(f"Failed to create MACVLAN network {network_name}: {e}")
+            raise
 
 
 def get_existing_mac_addresses_on_interface(parent_interface: str) -> dict[str, str]:
