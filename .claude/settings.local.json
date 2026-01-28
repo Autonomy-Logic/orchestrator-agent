@@ -1,7 +1,29 @@
 {
   "permissions": {
     "allow": [
-      "WebSearch"
+      "WebSearch",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(wc:*)",
+      "Bash(xargs cat:*)",
+      "Bash(export PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\")",
+      "Bash(source:*)",
+      "Bash(git fetch:*)",
+      "Bash(git push:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh auth status:*)",
+      "Bash(gh auth login:*)",
+      "Bash(gh pr list:*)",
+      "Bash(git rebase:*)",
+      "Bash(gh pr review:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh run view:*)",
+      "Bash(git merge:*)",
+      "Bash(git add:*)",
+      "Bash(brew install:*)",
+      "Bash(export PATH=\"/opt/homebrew/bin:/usr/bin:/bin:$PATH\")",
+      "Bash(tree:*)",
+      "Bash(python3 -m py_compile:*)"
     ]
   }
 }

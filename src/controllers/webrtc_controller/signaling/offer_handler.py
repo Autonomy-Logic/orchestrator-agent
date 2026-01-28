@@ -131,9 +131,9 @@ def init(client, session_manager):
                 session_manager.set_data_channel(session_id, channel)
 
                 # Import here to avoid circular imports
-                from ..data_channel import TerminalChannel
-                terminal = TerminalChannel(channel, session_id, session_manager)
-                session_manager.set_terminal_channel(session_id, terminal)
+                from ..data_channel import KeepaliveChannel
+                keepalive = KeepaliveChannel(channel, session_id, session_manager)
+                session_manager.set_keepalive_channel(session_id, keepalive)
 
             # Set remote description (the offer from browser)
             offer = RTCSessionDescription(sdp=sdp, type=sdp_type)

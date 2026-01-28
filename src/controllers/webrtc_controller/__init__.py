@@ -1,7 +1,7 @@
 """
 WebRTC Controller
 
-Manages WebRTC peer connections for remote terminal access to runtime containers.
+Manages WebRTC peer connections for real-time communication with runtime containers.
 Signaling is handled via the existing Socket.IO connection to the cloud.
 """
 
@@ -17,7 +17,7 @@ class SessionState(Enum):
     """WebRTC session states."""
     CREATED = "created"           # Session created, waiting for offer
     CONNECTING = "connecting"     # Offer received, establishing connection
-    CONNECTED = "connected"       # Data channel open, ready for terminal I/O
+    CONNECTED = "connected"       # Data channel open, ready for communication
     DISCONNECTED = "disconnected" # Connection lost
     CLOSED = "closed"             # Session closed
 
@@ -32,7 +32,7 @@ class WebRTCSessionManager:
     """
     Manages WebRTC peer connection sessions.
 
-    Each session represents a terminal connection to a specific runtime container.
+    Each session represents a WebRTC connection to a specific runtime container.
     Sessions are identified by a unique session_id provided by the signaling server.
     """
 
@@ -109,7 +109,7 @@ class WebRTCSessionManager:
                 "pc": pc,
                 "device_id": device_id,
                 "data_channel": None,
-                "terminal_channel": None,
+                "keepalive_channel": None,
                 "state": SessionState.CREATED,
                 "created_at": now,
                 "last_activity": now,
@@ -176,13 +176,13 @@ class WebRTCSessionManager:
         session["state"] = SessionState.CLOSED
         pc = session["pc"]
 
-        # Close terminal channel if exists
-        terminal_channel = session.get("terminal_channel")
-        if terminal_channel:
+        # Close keepalive channel if exists
+        keepalive_channel = session.get("keepalive_channel")
+        if keepalive_channel:
             try:
-                terminal_channel.close()
+                keepalive_channel.close()
             except Exception as e:
-                log_debug(f"Error closing terminal channel: {e}")
+                log_debug(f"Error closing keepalive channel: {e}")
 
         # Close peer connection
         try:
@@ -250,19 +250,19 @@ class WebRTCSessionManager:
             return True
         return False
 
-    def set_terminal_channel(self, session_id: str, terminal_channel) -> bool:
-        """Associate a terminal channel with a session."""
+    def set_keepalive_channel(self, session_id: str, keepalive_channel) -> bool:
+        """Associate a keepalive channel with a session."""
         session = self._sessions.get(session_id)
         if session:
-            session["terminal_channel"] = terminal_channel
+            session["keepalive_channel"] = keepalive_channel
             session["last_activity"] = datetime.now()
             return True
         return False
 
-    def get_terminal_channel(self, session_id: str):
-        """Get the terminal channel for a session."""
+    def get_keepalive_channel(self, session_id: str):
+        """Get the keepalive channel for a session."""
         session = self._sessions.get(session_id)
-        return session.get("terminal_channel") if session else None
+        return session.get("keepalive_channel") if session else None
 
     def on_session_closed(self, callback: Callable):
         """Register a callback for when sessions are closed."""

@@ -22,7 +22,7 @@ async def main_websocket_task(server_url):
     # Initialize WebSocket controller (existing topics)
     init_websocket_controller(client)
 
-    # Initialize WebRTC controller (terminal topics)
+    # Initialize WebRTC controller (signaling topics)
     init_webrtc_controller(client)
 
     # Start network event listener

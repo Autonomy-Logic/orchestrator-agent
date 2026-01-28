@@ -2,7 +2,7 @@
 WebRTC Disconnect Handler
 
 Handles session disconnection requests from browser or cloud.
-Cleans up peer connections and PTY sessions.
+Cleans up peer connections and data channels.
 """
 
 from tools.logger import log_info, log_debug, log_error, log_warning

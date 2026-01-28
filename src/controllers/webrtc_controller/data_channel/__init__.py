@@ -1,9 +1,9 @@
 """
 WebRTC Data Channel Module
 
-Handles WebRTC data channels for terminal I/O.
+Handles WebRTC data channels for connection keep-alive.
 """
 
-from .terminal_channel import TerminalChannel
+from .keepalive_channel import KeepaliveChannel
 
-__all__ = ["TerminalChannel"]
+__all__ = ["KeepaliveChannel"]
