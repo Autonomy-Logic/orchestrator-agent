@@ -55,29 +55,38 @@ class KeepaliveChannel:
 
     def _setup_handlers(self):
         """Set up data channel event handlers."""
+        log_info(f"Setting up data channel handlers for session {self.session_id}")
+        log_info(f"Initial channel state: {self.channel.readyState}")
 
         @self.channel.on("open")
         def on_open():
-            log_info(f"Data channel opened for session {self.session_id}")
+            log_info(f"========== Data Channel OPEN ==========")
+            log_info(f"Session: {self.session_id}")
+            log_info(f"Channel state: {self.channel.readyState}")
             self._ready = True
             # Notify browser that we're ready
+            log_info(f"Sending 'ready' message to browser")
             self._send_message({"type": "ready"})
             # Update session state if manager available
             if self.session_manager:
                 from .. import SessionState
                 self.session_manager.update_session_state(self.session_id, SessionState.CONNECTED)
             # Start periodic ping task
+            log_info(f"Starting ping loop")
             self._ping_task = asyncio.create_task(self._ping_loop())
 
         @self.channel.on("close")
         def on_close():
-            log_info(f"Data channel closed for session {self.session_id}")
+            log_info(f"========== Data Channel CLOSED ==========")
+            log_info(f"Session: {self.session_id}")
             self._ready = False
             self.close()
 
         @self.channel.on("error")
         def on_error(error):
-            log_error(f"Data channel error for session {self.session_id}: {error}")
+            log_error(f"========== Data Channel ERROR ==========")
+            log_error(f"Session: {self.session_id}")
+            log_error(f"Error: {error}")
 
         @self.channel.on("message")
         def on_message(message):

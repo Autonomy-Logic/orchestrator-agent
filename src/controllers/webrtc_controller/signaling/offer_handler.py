@@ -70,7 +70,12 @@ def init(client, session_manager):
         sdp = message["sdp"]
         sdp_type = message.get("sdp_type", "offer")
 
-        log_info(f"Received WebRTC offer for session {session_id}, device {device_id}")
+        log_info(f"========== WebRTC Offer Received ==========")
+        log_info(f"Session ID: {session_id}")
+        log_info(f"Device ID: {device_id}")
+        log_info(f"SDP type: {sdp_type}")
+        log_info(f"SDP length: {len(sdp)} chars")
+        log_debug(f"Available devices: {list(CLIENTS.keys())}")
 
         # Verify device exists
         if device_id not in CLIENTS:
@@ -85,7 +90,9 @@ def init(client, session_manager):
 
         try:
             # Create peer connection for this session
+            log_info(f"Creating peer connection for session {session_id}")
             pc = await session_manager.create_session(session_id, device_id)
+            log_info(f"Peer connection created successfully")
             session_manager.update_session_state(session_id, SessionState.CONNECTING)
 
             # Set up ICE candidate handler - emit local candidates to browser
@@ -127,25 +134,37 @@ def init(client, session_manager):
             # Set up data channel handler (browser creates the channel)
             @pc.on("datachannel")
             def on_datachannel(channel):
-                log_info(f"Data channel '{channel.label}' received for session {session_id}")
+                log_info(f"========== Data Channel Received ==========")
+                log_info(f"Session: {session_id}")
+                log_info(f"Channel label: {channel.label}")
+                log_info(f"Channel state: {channel.readyState}")
                 session_manager.set_data_channel(session_id, channel)
 
                 # Import here to avoid circular imports
                 from ..data_channel import KeepaliveChannel
+                log_info(f"Creating KeepaliveChannel for session {session_id}")
                 keepalive = KeepaliveChannel(channel, session_id, session_manager)
                 session_manager.set_keepalive_channel(session_id, keepalive)
+                log_info(f"KeepaliveChannel created successfully")
 
             # Set remote description (the offer from browser)
+            log_info(f"Setting remote description (browser's offer)")
             offer = RTCSessionDescription(sdp=sdp, type=sdp_type)
             await pc.setRemoteDescription(offer)
-            log_debug(f"Set remote description for session {session_id}")
+            log_info(f"Remote description set successfully")
+            log_debug(f"Signaling state after setRemoteDescription: {pc.signalingState}")
 
             # Create answer
+            log_info(f"Creating SDP answer")
             answer = await pc.createAnswer()
+            log_info(f"Answer created, setting local description")
             await pc.setLocalDescription(answer)
-            log_debug(f"Created answer for session {session_id}")
+            log_info(f"Local description set")
+            log_debug(f"Signaling state after setLocalDescription: {pc.signalingState}")
+            log_debug(f"Answer SDP length: {len(pc.localDescription.sdp)} chars")
 
-            log_info(f"WebRTC session {session_id} established, sending answer")
+            log_info(f"========== WebRTC Session Ready ==========")
+            log_info(f"Session {session_id} established, sending answer to browser")
 
             return {
                 "action": NAME,
