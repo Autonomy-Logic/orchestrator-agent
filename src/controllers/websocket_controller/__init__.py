@@ -37,15 +37,32 @@ def init(client):
     log_info("Websocket Controller initialized successfully.")
 
 
-async def get_client():
+async def get_client(dns_ttl: int = 30):
+    """
+    Create a new Socket.IO AsyncClient with fresh HTTP session.
+
+    This should be called for each new connection attempt to ensure
+    fresh DNS resolution after network changes.
+
+    Args:
+        dns_ttl: DNS cache TTL in seconds for the underlying aiohttp session.
+                Lower values help recover from network changes faster.
+
+    Returns:
+        Configured AsyncClient ready to connect
+    """
     _configure_socketio_logging()
+
+    # Create fresh HTTP session with short DNS TTL
+    # This helps recover from network changes by not caching stale DNS
+    http_session = get_ssl_session(ttl_dns_cache=dns_ttl)
 
     client = socketio.AsyncClient(
         reconnection=True,
         reconnection_attempts=0,
         reconnection_delay=1,
         reconnection_delay_max=5,
-        http_session=get_ssl_session(),
+        http_session=http_session,
         logger=True,
         engineio_logger=True,
     )
