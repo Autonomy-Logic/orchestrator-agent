@@ -31,7 +31,6 @@ CLEANUP_INTERVAL_SECONDS = 60  # 1 minute
 ICE_SERVERS = RTCConfiguration([
     RTCIceServer(urls=['stun:stun.l.google.com:19302']),
     RTCIceServer(urls=['stun:stun1.l.google.com:19302']),
-    RTCIceServer(urls=['stun:stun.cloudflare.com:3478']),
 ])
 
 
