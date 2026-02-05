@@ -55,6 +55,53 @@ LOG_FILE = "/var/log/autonomy-netmon.log"
 DHCP_LEASE_DIR = "/var/orchestrator/dhcp"
 DEBOUNCE_SECONDS = 3
 
+
+def get_interface_type(ifname: str) -> str:
+    """
+    Detect if a network interface is WiFi or Ethernet.
+
+    This information is used by the orchestrator-agent to select the appropriate
+    Docker network driver:
+    - WiFi interfaces use IPvlan (shares parent MAC, required for AP authentication)
+    - Ethernet interfaces use MACVLAN (unique MAC per container)
+
+    Detection methods (in order of priority):
+    1. Check /sys/class/net/{ifname}/wireless directory (most reliable)
+    2. Check /sys/class/net/{ifname}/phy80211 symlink (alternative indicator)
+    3. Check interface name patterns (wlan*, wlp*, wlx*) as fallback
+
+    Args:
+        ifname: Network interface name (e.g., "eth0", "wlan0", "enp0s3", "wlp2s0")
+
+    Returns:
+        "wifi" for wireless interfaces, "ethernet" for wired interfaces
+    """
+    # Method 1: Check for wireless sysfs directory
+    # This directory exists for all wireless interfaces managed by cfg80211
+    wireless_path = f"/sys/class/net/{ifname}/wireless"
+    if os.path.exists(wireless_path):
+        logger.debug(f"Interface {ifname} detected as WiFi (wireless sysfs exists)")
+        return "wifi"
+
+    # Method 2: Check for phy80211 symlink
+    # This symlink points to the wireless PHY device
+    phy_path = f"/sys/class/net/{ifname}/phy80211"
+    if os.path.exists(phy_path):
+        logger.debug(f"Interface {ifname} detected as WiFi (phy80211 exists)")
+        return "wifi"
+
+    # Method 3: Check interface name patterns (fallback)
+    # Common WiFi interface naming conventions:
+    # - wlan*: Traditional naming (wlan0, wlan1)
+    # - wlp*: Predictable naming by PCI path (wlp2s0, wlp3s0)
+    # - wlx*: Predictable naming by MAC address (wlx001122334455)
+    if ifname.startswith(("wlan", "wlp", "wlx")):
+        logger.debug(f"Interface {ifname} detected as WiFi (name pattern)")
+        return "wifi"
+
+    logger.debug(f"Interface {ifname} detected as Ethernet (default)")
+    return "ethernet"
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -1047,11 +1094,13 @@ class NetworkMonitor:
                 return None
 
             gateway = self.get_default_gateway(ifname)
+            iface_type = get_interface_type(ifname)
 
             return {
                 "interface": ifname,
                 "index": idx,
                 "operstate": operstate,
+                "type": iface_type,
                 "ipv4_addresses": ipv4_addresses,
                 "gateway": gateway,
                 "timestamp": datetime.now().isoformat(),

@@ -161,6 +161,7 @@ class NetworkEventListener:
                     interface_name = iface.get("interface")
                     ipv4_addresses = iface.get("ipv4_addresses", [])
                     gateway = iface.get("gateway")
+                    iface_type = iface.get("type", "ethernet")
 
                     if not interface_name:
                         continue
@@ -171,12 +172,13 @@ class NetworkEventListener:
                         INTERFACE_CACHE[interface_name] = {
                             "subnet": subnet,
                             "gateway": gateway,
+                            "type": iface_type,
                             "addresses": ipv4_addresses,
                         }
 
                         log_debug(
                             f"Cached interface {interface_name}: "
-                            f"subnet={subnet}, gateway={gateway}, "
+                            f"subnet={subnet}, gateway={gateway}, type={iface_type}, "
                             f"{len(ipv4_addresses)} IPv4 address(es)"
                         )
                     else:
@@ -199,6 +201,9 @@ class NetworkEventListener:
                 interface = iface_data.get("interface")
                 ipv4_addresses = iface_data.get("ipv4_addresses", [])
                 gateway = iface_data.get("gateway")
+                # Get type from event, or preserve existing type from cache
+                existing_type = INTERFACE_CACHE.get(interface, {}).get("type", "ethernet")
+                iface_type = iface_data.get("type", existing_type)
 
                 if not interface:
                     return
@@ -213,10 +218,11 @@ class NetworkEventListener:
                     INTERFACE_CACHE[interface] = {
                         "subnet": subnet,
                         "gateway": gateway,
+                        "type": iface_type,
                         "addresses": ipv4_addresses,
                     }
                     log_debug(
-                        f"Updated cache for interface {interface}: subnet={subnet}, gateway={gateway}"
+                        f"Updated cache for interface {interface}: subnet={subnet}, gateway={gateway}, type={iface_type}"
                     )
 
                     self.pending_changes[interface] = iface_data
