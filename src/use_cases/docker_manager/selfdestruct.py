@@ -22,6 +22,10 @@ INTERNAL_NETWORK_PATTERN = re.compile(
 # Format: macvlan_{interface}_{subnet}_{mask}
 MACVLAN_NETWORK_PATTERN = re.compile(r"^macvlan_[a-zA-Z0-9]+_\d+\.\d+\.\d+\.\d+_\d+$")
 
+# Pattern to match IPvlan networks created by orchestrator (for WiFi interfaces)
+# Format: ipvlan_{interface}_{subnet}_{mask}
+IPVLAN_NETWORK_PATTERN = re.compile(r"^ipvlan_[a-zA-Z0-9]+_\d+\.\d+\.\d+\.\d+_\d+$")
+
 
 def _delete_runtime_container_for_selfdestruct(container_name: str):
     """
@@ -108,6 +112,7 @@ def _cleanup_orchestrator_networks():
     This removes:
     - Internal bridge networks matching UUID_internal pattern
     - MACVLAN networks matching macvlan_{interface}_{subnet}_{mask} pattern
+    - IPvlan networks matching ipvlan_{interface}_{subnet}_{mask} pattern
 
     Networks with connected containers are skipped to avoid disrupting other applications.
     This is a best-effort cleanup that does NOT raise on failure.
@@ -128,8 +133,9 @@ def _cleanup_orchestrator_networks():
 
         is_internal = INTERNAL_NETWORK_PATTERN.match(network_name)
         is_macvlan = MACVLAN_NETWORK_PATTERN.match(network_name)
+        is_ipvlan = IPVLAN_NETWORK_PATTERN.match(network_name)
 
-        if not is_internal and not is_macvlan:
+        if not is_internal and not is_macvlan and not is_ipvlan:
             continue
 
         try:

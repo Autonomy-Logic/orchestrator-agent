@@ -6,9 +6,12 @@ from tools.serial_persistence import save_serial_configs
 from tools.docker_tools import (
     CLIENT,
     get_or_create_macvlan_network,
+    get_or_create_ipvlan_network,
     create_internal_network,
     get_macvlan_network_key,
+    get_ipvlan_network_key,
 )
+from tools.interface_cache import get_interface_type
 from tools.devices_usage_buffer import get_devices_usage_buffer
 from tools.network_event_listener import network_event_listener
 import docker
@@ -42,10 +45,11 @@ def _validate_vnic_configs(vnic_configs: list) -> tuple[bool, str]:
     Validate vNIC configurations to detect duplicate networks.
 
     Docker only allows one endpoint per (container, network) pair. When multiple vNICs
-    resolve to the same MACVLAN network (same parent interface and subnet), the second
+    resolve to the same network (same parent interface and subnet), the second
     network.connect() call will fail with "endpoint already exists" error.
 
     This function detects such conflicts early and returns a clear error message.
+    It handles both MACVLAN (Ethernet) and IPvlan (WiFi) network types.
 
     Args:
         vnic_configs: List of vNIC configurations
@@ -61,15 +65,24 @@ def _validate_vnic_configs(vnic_configs: list) -> tuple[bool, str]:
         parent_subnet = vnic_config.get("subnet")
         parent_gateway = vnic_config.get("gateway")
 
-        network_key = get_macvlan_network_key(
-            parent_interface, parent_subnet, parent_gateway
-        )
+        # Determine network type based on interface type
+        interface_type = get_interface_type(parent_interface)
+        if interface_type == "wifi":
+            network_key = get_ipvlan_network_key(
+                parent_interface, parent_subnet, parent_gateway
+            )
+            network_type = "IPvlan"
+        else:
+            network_key = get_macvlan_network_key(
+                parent_interface, parent_subnet, parent_gateway
+            )
+            network_type = "MACVLAN"
 
         if network_key in seen_networks:
             conflicting_vnic = seen_networks[network_key]
             error_msg = (
                 f"Invalid vNIC configuration: vNICs '{conflicting_vnic}' and '{vnic_name}' "
-                f"would connect to the same MACVLAN network ({network_key}). "
+                f"would connect to the same {network_type} network ({network_key}). "
                 f"Docker only allows one endpoint per container per network. "
                 f"To use multiple IPs on the same physical network, consider using "
                 f"different subnets or a single vNIC with additional IP configuration."
@@ -146,7 +159,9 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
         set_step(container_name, "creating_networks")
         internal_network = create_internal_network(container_name)
 
-        macvlan_networks = []
+        # List of (network, vnic_config) tuples - renamed from macvlan_networks for clarity
+        # since it can now contain both MACVLAN and IPvlan networks
+        container_networks = []
         dns_servers = []
 
         for vnic_config in vnic_configs:
@@ -155,14 +170,31 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
             parent_subnet = vnic_config.get("subnet")
             parent_gateway = vnic_config.get("gateway")
 
+            # Detect interface type and choose appropriate network driver
+            interface_type = get_interface_type(parent_interface)
+            is_ipvlan = interface_type == "wifi"
+
+            # Store for later use in DHCP configuration
+            vnic_config["_interface_type"] = interface_type
+            vnic_config["_is_ipvlan"] = is_ipvlan
+
             log_debug(
-                f"Processing vNIC {vnic_name} for parent interface {parent_interface}"
+                f"Processing vNIC {vnic_name} for {interface_type} interface {parent_interface}"
             )
 
-            macvlan_network = get_or_create_macvlan_network(
-                parent_interface, parent_subnet, parent_gateway
-            )
-            macvlan_networks.append((macvlan_network, vnic_config))
+            if is_ipvlan:
+                # WiFi interface - use IPvlan L2 (shares parent MAC for AP authentication)
+                log_info(f"Using IPvlan L2 for WiFi interface {parent_interface}")
+                network = get_or_create_ipvlan_network(
+                    parent_interface, parent_subnet, parent_gateway
+                )
+            else:
+                # Ethernet interface - use MACVLAN (unique MAC per container)
+                network = get_or_create_macvlan_network(
+                    parent_interface, parent_subnet, parent_gateway
+                )
+
+            container_networks.append((network, vnic_config))
 
             vnic_dns = vnic_config.get("dns")
             if vnic_dns and isinstance(vnic_dns, list):
@@ -174,9 +206,10 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
         networking_config = {}
         api_version = CLIENT.api.api_version
 
-        for macvlan_network, vnic_config in macvlan_networks:
+        for network, vnic_config in container_networks:
             vnic_name = vnic_config.get("name")
             network_mode = vnic_config.get("network_mode", "dhcp")
+            is_ipvlan = vnic_config.get("_is_ipvlan", False)
 
             endpoint_kwargs = {}
 
@@ -187,22 +220,28 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
                     endpoint_kwargs["ipv4_address"] = ip_address
                     log_debug(f"Configured manual IP {ip_address} for vNIC {vnic_name}")
 
-            mac_address = vnic_config.get("mac")
-            if not mac_address:
-                mac_address = _generate_mac_address()
-                vnic_config["mac_address"] = mac_address
-                log_info(f"Generated MAC address {mac_address} for vNIC {vnic_name}")
+            # For MACVLAN: generate/use unique MAC address per container
+            # For IPvlan: don't set MAC (container inherits parent's MAC)
+            if not is_ipvlan:
+                mac_address = vnic_config.get("mac")
+                if not mac_address:
+                    mac_address = _generate_mac_address()
+                    vnic_config["mac_address"] = mac_address
+                    log_info(f"Generated MAC address {mac_address} for vNIC {vnic_name}")
+                else:
+                    log_debug(
+                        f"Using user-provided MAC address {mac_address} for vNIC {vnic_name}"
+                    )
+                endpoint_kwargs["mac_address"] = mac_address
             else:
-                log_debug(
-                    f"Using user-provided MAC address {mac_address} for vNIC {vnic_name}"
-                )
-            endpoint_kwargs["mac_address"] = mac_address
+                log_debug(f"IPvlan vNIC {vnic_name} will inherit parent interface MAC")
 
-            networking_config[macvlan_network.name] = docker.types.EndpointConfig(
+            network_type = "IPvlan" if is_ipvlan else "MACVLAN"
+            networking_config[network.name] = docker.types.EndpointConfig(
                 version=api_version, **endpoint_kwargs
             )
             log_debug(
-                f"Prepared EndpointConfig for MACVLAN network {macvlan_network.name}"
+                f"Prepared EndpointConfig for {network_type} network {network.name}"
             )
 
         ## Needed to avoid docker SDK setting 'None' networking_config
@@ -290,18 +329,20 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
                 f"Could not retrieve internal IP for container {container_name}"
             )
 
-        for macvlan_network, vnic_config in macvlan_networks:
+        for network, vnic_config in container_networks:
             vnic_name = vnic_config.get("name")
             parent_interface = vnic_config.get("parent_interface")
+            is_ipvlan = vnic_config.get("_is_ipvlan", False)
+            network_type = "IPvlan" if is_ipvlan else "MACVLAN"
 
-            if macvlan_network.name in network_settings:
-                vnic_ip = network_settings[macvlan_network.name]["IPAddress"]
-                vnic_mac = network_settings[macvlan_network.name]["MacAddress"]
+            if network.name in network_settings:
+                vnic_ip = network_settings[network.name]["IPAddress"]
+                vnic_mac = network_settings[network.name]["MacAddress"]
                 # Store MAC address and network name in vnic_config for DHCP IP mapping
                 vnic_config["mac_address"] = vnic_mac
-                vnic_config["docker_network_name"] = macvlan_network.name
+                vnic_config["docker_network_name"] = network.name
                 log_info(
-                    f"vNIC {vnic_name} on {parent_interface}: IP={vnic_ip}, MAC={vnic_mac}"
+                    f"vNIC {vnic_name} on {parent_interface} ({network_type}): IP={vnic_ip}, MAC={vnic_mac}"
                 )
 
         save_vnic_configs(container_name, vnic_configs)
@@ -324,17 +365,21 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
         log_debug(f"Container {container_name} has PID {container_pid}")
 
         dhcp_vnics = []
-        for macvlan_network, vnic_config in macvlan_networks:
+        for network, vnic_config in container_networks:
             network_mode = vnic_config.get("network_mode", "dhcp")
             if network_mode == "dhcp":
                 vnic_name = vnic_config.get("name")
-                mac_address = network_settings.get(macvlan_network.name, {}).get(
+                is_ipvlan = vnic_config.get("_is_ipvlan", False)
+                mac_address = network_settings.get(network.name, {}).get(
                     "MacAddress"
                 )
-                if mac_address and container_pid > 0:
-                    dhcp_vnics.append((vnic_name, mac_address, container_pid))
+                if container_pid > 0:
+                    # For IPvlan: use_client_id=True (DHCP client-id for identification)
+                    # For MACVLAN: use_client_id=False (MAC address for identification)
+                    dhcp_vnics.append((vnic_name, mac_address, container_pid, is_ipvlan))
+                    mode_str = "client-id" if is_ipvlan else f"MAC: {mac_address}"
                     log_debug(
-                        f"Will request DHCP for vNIC {vnic_name} (MAC: {mac_address}, PID: {container_pid})"
+                        f"Will request DHCP for vNIC {vnic_name} ({mode_str}, PID: {container_pid})"
                     )
 
         clear_state(container_name)
@@ -352,8 +397,12 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
 
 async def create_runtime_container(container_name: str, vnic_configs: list, serial_configs: list = None, runtime_version: str = None):
     """
-    Create a runtime container with MACVLAN networking for physical network bridging
+    Create a runtime container with MACVLAN or IPvlan networking for physical network bridging
     and an internal network for orchestrator communication.
+
+    Network driver selection:
+    - Ethernet interfaces: MACVLAN (unique MAC per container)
+    - WiFi interfaces: IPvlan L2 (shares parent MAC for AP authentication)
 
     This async wrapper offloads all blocking Docker operations to a background thread
     to prevent blocking the asyncio event loop and causing websocket disconnections.
@@ -370,12 +419,13 @@ async def create_runtime_container(container_name: str, vnic_configs: list, seri
 
     if dhcp_vnics:
         set_step(container_name, "starting_dhcp")
-        for vnic_name, mac_address, container_pid in dhcp_vnics:
+        for vnic_name, mac_address, container_pid, use_client_id in dhcp_vnics:
             try:
                 await network_event_listener.start_dhcp(
-                    container_name, vnic_name, mac_address, container_pid
+                    container_name, vnic_name, mac_address, container_pid, use_client_id
                 )
-                log_info(f"Requested DHCP for vNIC {vnic_name}")
+                mode_str = "IPvlan/client-id" if use_client_id else "MACVLAN/MAC"
+                log_info(f"Requested DHCP for vNIC {vnic_name} ({mode_str})")
             except Exception as e:
                 log_warning(f"Failed to request DHCP for vNIC {vnic_name}: {e}")
 
