@@ -79,15 +79,20 @@ class WebRTCSessionManager:
 
     async def _cleanup_stale_sessions(self):
         """Close sessions that have been inactive for too long."""
-        now = datetime.now()
-        timeout = timedelta(seconds=SESSION_TIMEOUT_SECONDS)
         stale_sessions = []
 
-        for session_id, session in self._sessions.items():
-            last_activity = session.get("last_activity", session["created_at"])
-            if now - last_activity > timeout:
-                stale_sessions.append(session_id)
+        # Take a snapshot of stale sessions while holding the lock to avoid
+        # concurrent modification of self._sessions during iteration
+        async with self._lock:
+            now = datetime.now()
+            timeout = timedelta(seconds=SESSION_TIMEOUT_SECONDS)
 
+            for session_id, session in self._sessions.items():
+                last_activity = session.get("last_activity", session["created_at"])
+                if now - last_activity > timeout:
+                    stale_sessions.append(session_id)
+
+        # Close the identified stale sessions outside the lock
         for session_id in stale_sessions:
             log_warning(f"Closing stale WebRTC session {session_id} (inactive > {SESSION_TIMEOUT_SECONDS}s)")
             await self.close_session(session_id, reason="timeout")
@@ -239,6 +244,7 @@ class WebRTCSessionManager:
                 "state": session["state"].value,
                 "connection_state": session["connection_state"],
                 "created_at": session["created_at"].isoformat(),
+                "last_activity": session.get("last_activity", session["created_at"]).isoformat(),
             }
             for sid, session in self._sessions.items()
         }

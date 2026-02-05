@@ -5,7 +5,7 @@ Handles incoming SDP offers from the browser client via the signaling server.
 Creates peer connections and generates SDP answers.
 """
 
-from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
+from aiortc import RTCPeerConnection, RTCSessionDescription
 from tools.logger import log_info, log_debug, log_error, log_warning
 from tools.contract_validation import (
     StringType,

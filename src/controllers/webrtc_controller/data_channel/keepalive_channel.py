@@ -188,8 +188,8 @@ class KeepaliveChannel:
                 "files": message.get("files"),
             }
 
-            # Execute the HTTP request
-            http_response = run_command.execute(instance, command)
+            # Execute the HTTP request in a thread to avoid blocking the event loop
+            http_response = await asyncio.to_thread(run_command.execute, instance, command)
             log_info(f"WebRTC command completed with status {http_response.get('status_code')}")
 
             # Return response with correlation_id
