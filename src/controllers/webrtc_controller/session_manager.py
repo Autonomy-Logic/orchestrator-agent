@@ -93,11 +93,30 @@ class WebRTCSessionManager:
         Returns:
             RTCPeerConnection instance for this session
         """
+        # Check for existing session and remove it under the lock,
+        # but close the peer connection outside to avoid blocking other operations.
+        existing_session = None
         async with self._lock:
             if session_id in self._sessions:
                 log_warning(f"Session {session_id} already exists, closing existing")
-                await self._close_session_unlocked(session_id, reason="replaced")
+                existing_session = self._sessions.pop(session_id, None)
 
+        # Close existing session's peer connection outside the lock
+        if existing_session:
+            existing_session["state"] = SessionState.CLOSED
+            channel_handler = existing_session.get("channel_handler")
+            if channel_handler:
+                try:
+                    channel_handler.close()
+                except Exception as e:
+                    log_debug(f"Error closing channel handler: {e}")
+            try:
+                await existing_session["pc"].close()
+                log_info(f"Closed replaced session {session_id}")
+            except Exception as e:
+                log_error(f"Error closing replaced session {session_id}: {e}")
+
+        async with self._lock:
             pc = RTCPeerConnection(configuration=ICE_SERVERS)
             now = datetime.now()
 
@@ -215,10 +234,13 @@ class WebRTCSessionManager:
 
     async def close_all_sessions(self):
         """Close all active sessions."""
+        # Snapshot session IDs under lock, then close each outside to avoid
+        # holding the lock across awaited pc.close() calls.
         async with self._lock:
             session_ids = list(self._sessions.keys())
-            for session_id in session_ids:
-                await self._close_session_unlocked(session_id, reason="shutdown")
+
+        for session_id in session_ids:
+            await self.close_session(session_id, reason="shutdown")
         log_info("All WebRTC sessions closed")
 
     def list_sessions(self) -> Dict[str, dict]:

@@ -18,7 +18,6 @@ from ..data_channel import DataChannelHandler
 
 
 NAME = "webrtc:offer"
-ANSWER_TOPIC = "webrtc:answer"
 ICE_TOPIC = "webrtc:ice"
 
 MESSAGE_CONTRACT = {

@@ -57,7 +57,7 @@ def init(client, session_manager):
         log_info(f"WebRTC disconnect request for session {session_id}: {reason}")
 
         # Close the session
-        closed = await session_manager.close_session(session_id)
+        closed = await session_manager.close_session(session_id, reason=reason)
 
         if closed:
             return {

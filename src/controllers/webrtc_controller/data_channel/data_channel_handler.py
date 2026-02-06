@@ -99,6 +99,7 @@ class DataChannelHandler:
         try:
             while not self._closed:
                 await asyncio.sleep(PING_INTERVAL)
+                self._chunk_reassembler.cleanup_stale()
                 if not self._closed and self._ready:
                     self._send_message({"type": "ping"})
                     log_debug(f"Sent ping for session {self.session_id}")

@@ -27,6 +27,10 @@ CHUNK_PAYLOAD_SIZE = 14_000
 # Stale transfer timeout (seconds)
 STALE_TRANSFER_TIMEOUT = 60
 
+# Safety limits to prevent memory exhaustion from malformed/buggy messages
+MAX_TOTAL_CHUNKS = 10_000
+MAX_TOTAL_SIZE = 100_000_000  # 100 MB
+
 _transfer_counter = 0
 
 
@@ -119,18 +123,26 @@ class ChunkReassembler:
         transfer_id = message.get("transfer_id")
 
         if msg_type == "chunk_start":
-            total_chunks = message["total_chunks"]
+            total_chunks = message.get("total_chunks", 0)
+            total_size = message.get("total_size", 0)
+
+            if (
+                not isinstance(total_chunks, int) or total_chunks <= 0 or total_chunks > MAX_TOTAL_CHUNKS
+                or not isinstance(total_size, int) or total_size <= 0 or total_size > MAX_TOTAL_SIZE
+            ):
+                log_warning(
+                    f"Rejecting chunk transfer {transfer_id}: "
+                    f"invalid bounds (chunks={total_chunks}, size={total_size})"
+                )
+                return None
+
             self._transfers[transfer_id] = {
                 "chunks": [None] * total_chunks,
                 "received": 0,
                 "total_chunks": total_chunks,
-                "total_size": message["total_size"],
+                "total_size": total_size,
                 "started_at": time.time(),
             }
-            log_info(
-                f"Chunk transfer started: {transfer_id} "
-                f"({total_chunks} chunks, {message['total_size']} bytes)"
-            )
             return None
 
         if msg_type == "chunk_data":
@@ -138,8 +150,16 @@ class ChunkReassembler:
             if not transfer:
                 log_warning(f"Received chunk_data for unknown transfer: {transfer_id}")
                 return None
-            transfer["chunks"][message["sequence"]] = message["data"]
-            transfer["received"] += 1
+            sequence = message.get("sequence")
+            if not isinstance(sequence, int) or sequence < 0 or sequence >= transfer["total_chunks"]:
+                log_warning(
+                    f"Out-of-range sequence {sequence} for transfer {transfer_id} "
+                    f"(total_chunks={transfer['total_chunks']})"
+                )
+                return None
+            if transfer["chunks"][sequence] is None:
+                transfer["received"] += 1
+            transfer["chunks"][sequence] = message["data"]
             return None
 
         if msg_type == "chunk_end":
@@ -147,12 +167,15 @@ class ChunkReassembler:
             if not transfer:
                 log_warning(f"Received chunk_end for unknown transfer: {transfer_id}")
                 return None
+
+            if transfer["received"] != transfer["total_chunks"]:
+                log_warning(
+                    f"Incomplete chunk transfer {transfer_id}: "
+                    f"expected {transfer['total_chunks']} chunks, received {transfer['received']}"
+                )
+                return None
+
             assembled = "".join(transfer["chunks"])
-            elapsed = time.time() - transfer["started_at"]
-            log_info(
-                f"Chunk transfer complete: {transfer_id} "
-                f"({len(assembled)} bytes in {elapsed:.1f}s)"
-            )
             return assembled
 
         return None
