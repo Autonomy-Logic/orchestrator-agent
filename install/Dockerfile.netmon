@@ -2,12 +2,14 @@ FROM python:3.12-slim
 
 # Install system dependencies:
 # - iproute2: network interface management (ip command)
+# - iptables: firewall rules (needed to allow forwarding past Docker's DROP policy)
 # - udhcpc: lightweight DHCP client for container vNICs
 # - procps: process utilities (for debugging)
 # Note: Debian slim already includes libudev for pyudev support
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         iproute2 \
+        iptables \
         udhcpc \
         procps \
     && rm -rf /var/lib/apt/lists/* && \

@@ -238,6 +238,19 @@ def setup_proxy_arp_bridge(
             check=True, capture_output=True,
         )
 
+        # 9. Add iptables FORWARD rules
+        # Docker sets FORWARD policy to DROP and only allows its own bridge traffic.
+        # We need explicit rules to allow forwarding between the veth and WiFi interface.
+        logger.debug(f"Adding iptables FORWARD rules for {veth_host} <-> {parent_interface}")
+        subprocess.run(
+            ["iptables", "-I", "FORWARD", "-i", veth_host, "-o", parent_interface, "-j", "ACCEPT"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["iptables", "-I", "FORWARD", "-i", parent_interface, "-o", veth_host, "-j", "ACCEPT"],
+            check=True, capture_output=True,
+        )
+
         logger.info(f"Proxy ARP bridge setup complete for {container_name}")
 
         return {
@@ -281,6 +294,21 @@ def cleanup_proxy_arp_bridge(
             logger.debug(f"Removed proxy ARP entry for {ip_address}")
         except Exception as e:
             logger.debug(f"Could not remove proxy ARP entry: {e}")
+
+    # Remove iptables FORWARD rules (best-effort, may already be gone)
+    if veth_host and parent_interface:
+        try:
+            subprocess.run(
+                ["iptables", "-D", "FORWARD", "-i", veth_host, "-o", parent_interface, "-j", "ACCEPT"],
+                check=False, capture_output=True,
+            )
+            subprocess.run(
+                ["iptables", "-D", "FORWARD", "-i", parent_interface, "-o", veth_host, "-j", "ACCEPT"],
+                check=False, capture_output=True,
+            )
+            logger.debug(f"Removed iptables FORWARD rules for {veth_host}")
+        except Exception as e:
+            logger.debug(f"Could not remove iptables rules: {e}")
 
     if ip_address and veth_host:
         try:
