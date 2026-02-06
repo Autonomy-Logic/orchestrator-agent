@@ -133,9 +133,29 @@ def _write_sysctl(key: str, value: str):
         logger.warning(f"Could not set sysctl {key}={value}: {e}")
 
 
-def netmask_to_cidr(netmask: str) -> int:
-    """Convert a netmask (e.g., 255.255.255.0) to CIDR prefix length (e.g., 24)."""
-    return sum(bin(int(octet)).count("1") for octet in netmask.split("."))
+def subnet_to_prefix_len(subnet: str) -> int:
+    """
+    Convert a subnet specification to CIDR prefix length.
+
+    Accepts multiple formats:
+    - Dotted netmask: "255.255.255.0" -> 24
+    - CIDR network: "192.168.1.0/24" -> 24
+    - Bare prefix: "24" -> 24
+
+    Args:
+        subnet: Subnet in any of the formats above
+
+    Returns:
+        Integer prefix length (e.g., 24)
+    """
+    if "/" in subnet:
+        # CIDR format: "192.168.1.0/24" -> 24
+        return int(subnet.split("/")[1])
+    if "." in subnet:
+        # Dotted netmask: "255.255.255.0" -> 24
+        return sum(bin(int(octet)).count("1") for octet in subnet.split("."))
+    # Bare prefix: "24" -> 24
+    return int(subnet)
 
 
 def setup_proxy_arp_bridge(
@@ -188,7 +208,7 @@ def setup_proxy_arp_bridge(
         )
 
         # 3. Configure container's interface with IP
-        prefix_len = netmask_to_cidr(subnet_mask)
+        prefix_len = subnet_to_prefix_len(subnet_mask)
 
         subprocess.run(
             ["nsenter", "-t", str(container_pid), "-n",
@@ -202,11 +222,13 @@ def setup_proxy_arp_bridge(
             check=True, capture_output=True,
         )
 
-        # Add default route in container pointing to gateway
+        # Add (or replace) default route in container pointing to gateway
+        # Using "replace" instead of "add" because Docker may have already installed
+        # a default route via the internal bridge network
         logger.debug(f"Adding default route via {gateway} in container")
         subprocess.run(
             ["nsenter", "-t", str(container_pid), "-n",
-             "ip", "route", "add", "default", "via", gateway, "dev", veth_container],
+             "ip", "route", "replace", "default", "via", gateway, "dev", veth_container],
             check=True, capture_output=True,
         )
 

@@ -122,24 +122,22 @@ def _cleanup_proxy_arp_veths():
     log_info("Requesting Proxy ARP cleanup from netmon...")
 
     try:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(10)
-        sock.connect(NETMON_SOCKET_PATH)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(10)
+            sock.connect(NETMON_SOCKET_PATH)
 
-        command = json.dumps({"command": "cleanup_all_proxy_arp"}) + "\n"
-        sock.sendall(command.encode("utf-8"))
+            command = json.dumps({"command": "cleanup_all_proxy_arp"}) + "\n"
+            sock.sendall(command.encode("utf-8"))
 
-        # Read response
-        response_data = b""
-        while True:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            response_data += chunk
-            if b"\n" in response_data:
-                break
-
-        sock.close()
+            # Read response
+            response_data = b""
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                response_data += chunk
+                if b"\n" in response_data:
+                    break
 
         if response_data:
             response = json.loads(response_data.decode("utf-8").strip())

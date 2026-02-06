@@ -1048,7 +1048,12 @@ class NetworkEventListener:
                         "gateway": new_gateway,
                         "parent_interface": interface,
                     }
-                    save_vnic_configs(container_name, [vnic_config])
+                    all_configs = load_vnic_configs(container_name)
+                    for idx, cfg in enumerate(all_configs):
+                        if cfg.get("name") == vnic_name and cfg.get("parent_interface") == interface:
+                            all_configs[idx] = vnic_config
+                            break
+                    save_vnic_configs(container_name, all_configs)
                     log_info(f"WiFi vNIC {vnic_name} reconfigured with gateway {new_gateway}")
                 except Exception as e:
                     log_error(f"Failed to reconfigure static Proxy ARP: {e}")
