@@ -2,6 +2,12 @@ from .websocket_controller import (
     init as init_websocket_controller,
     get_client as get_websocket_client,
 )
+from .webrtc_controller import (
+    init as init_webrtc_controller,
+    start as start_webrtc_controller,
+    stop as stop_webrtc_controller,
+    get_session_manager as get_webrtc_session_manager,
+)
 from tools.logger import *
 from tools.network_event_listener import network_event_listener
 from tools.dns_utils import (
@@ -15,6 +21,7 @@ from time import sleep
 async def main_websocket_task(server_url: str, dns_ttl: int = 30):
     """
     Main function to connect the WebSocket client to the server.
+    Initializes both WebSocket and WebRTC controllers.
 
     Creates a fresh Socket.IO client and HTTP session for each connection
     attempt. This ensures DNS is re-resolved after network changes.
@@ -28,10 +35,20 @@ async def main_websocket_task(server_url: str, dns_ttl: int = 30):
     try:
         # Create fresh client with new HTTP session for DNS refresh
         client = await get_websocket_client(dns_ttl=dns_ttl)
+
+        # Initialize WebSocket controller (existing topics)
         init_websocket_controller(client)
 
+        # Initialize WebRTC controller (signaling topics)
+        init_webrtc_controller(client)
+
+        # Start network event listener
         await network_event_listener.start()
         log_info("Network event listener started")
+
+        # Start WebRTC session manager background tasks
+        await start_webrtc_controller()
+        log_info("WebRTC controller started")
 
         await client.connect(
             f"https://{server_url}",
@@ -39,6 +56,11 @@ async def main_websocket_task(server_url: str, dns_ttl: int = 30):
         log_info(f"Connected to WebSocket server at {server_url}")
         await client.wait()
     finally:
+        # Cleanup WebRTC controller on disconnect
+        log_info("Cleaning up controllers...")
+        await stop_webrtc_controller()
+        log_info("WebRTC controller stopped")
+
         # Cleanup: close HTTP session to release resources
         if client is not None:
             try:
@@ -99,4 +121,16 @@ def run_websocket_with_reconnection(server_url: str, run_task):
 
 
 async def main_webrtc_task(*args, **kwargs):
-    raise NotImplementedError("WebRTC task is not implemented yet.")
+    """
+    Placeholder for standalone WebRTC task.
+    Currently WebRTC is integrated into main_websocket_task.
+    """
+    raise NotImplementedError(
+        "WebRTC is integrated into main_websocket_task. "
+        "Use main_websocket_task instead."
+    )
+
+
+def get_session_manager():
+    """Get the WebRTC session manager instance."""
+    return get_webrtc_session_manager()
