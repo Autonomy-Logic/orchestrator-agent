@@ -1,5 +1,5 @@
 from use_cases.runtime_commands import run_command
-from use_cases.docker_manager import CLIENTS
+from bootstrap import get_context
 from . import topic, validate_message
 from tools.logger import *
 from tools.contract_validation import (
@@ -75,7 +75,7 @@ def init(client):
         log_info(f"Received run_command for device {device_id}: {method} {api}")
 
         # Validate device exists
-        instance = CLIENTS.get(device_id)
+        instance = get_context().client_registry.get_client(device_id)
         if not instance:
             log_error(f"Device not found: {device_id}")
             return {

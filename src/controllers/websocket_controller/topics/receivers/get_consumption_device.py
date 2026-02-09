@@ -5,7 +5,7 @@ from tools.contract_validation import (
 )
 from tools.devices_usage_buffer import get_devices_usage_buffer
 from tools.utils import parse_period
-from use_cases.docker_manager import CLIENTS
+from bootstrap import get_context
 from use_cases.docker_manager.get_device_status import get_device_info
 from . import topic, validate_message
 
@@ -34,8 +34,8 @@ def init(client):
         cpu_period = message.get("cpuPeriod", "1h")
         memory_period = message.get("memoryPeriod", "1h")
 
-        if device_id not in CLIENTS:
-            log_warning(f"Device {device_id} not found in CLIENTS registry")
+        if not get_context().client_registry.contains(device_id):
+            log_warning(f"Device {device_id} not found in client registry")
             return {
                 "action": NAME,
                 "correlation_id": corr_id,

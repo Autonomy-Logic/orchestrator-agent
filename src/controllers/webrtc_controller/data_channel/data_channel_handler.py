@@ -178,7 +178,7 @@ class DataChannelHandler:
             message: Command message with device_id, method, api, etc.
         """
         from use_cases.runtime_commands import run_command
-        from use_cases.docker_manager import CLIENTS
+        from bootstrap import get_context
 
         correlation_id = message.get("correlation_id")
         device_id = message.get("device_id")
@@ -188,7 +188,7 @@ class DataChannelHandler:
         log_info(f"WebRTC run_command for device {device_id}: {method} {api}")
 
         # Validate device exists
-        instance = CLIENTS.get(device_id)
+        instance = get_context().client_registry.get_client(device_id)
         if not instance:
             log_error(f"Device not found: {device_id}")
             self._send_message({
