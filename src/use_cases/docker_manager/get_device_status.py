@@ -1,5 +1,6 @@
 from tools.operations_state import get_state
 from tools.logger import log_debug, log_info, log_warning, log_error
+from bootstrap import get_context
 from datetime import datetime
 from typing import Dict, Any, List
 
@@ -21,7 +22,7 @@ def get_serial_port_status(device_id: str, *, serial_repo=None) -> List[Dict[str
         - current_host_path: Current /dev/ttyUSBx path (if connected)
     """
     if serial_repo is None:
-        from bootstrap import get_context
+
         serial_repo = get_context().serial_repo
 
     try:
@@ -64,7 +65,7 @@ def get_device_info(device_id: str, *, container_runtime=None) -> Dict[str, Any]
         - memory_limit: Memory limit in MB (or "N/A")
     """
     if container_runtime is None:
-        from bootstrap import get_context
+
         container_runtime = get_context().container_runtime
 
     try:
@@ -139,7 +140,7 @@ def get_device_status_data(
         - For errors: status="error" with error message
     """
     if any(dep is None for dep in [container_runtime, client_registry, vnic_repo, serial_repo]):
-        from bootstrap import get_context
+
         ctx = get_context()
         if container_runtime is None:
             container_runtime = ctx.container_runtime

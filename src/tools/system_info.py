@@ -7,7 +7,7 @@ import psutil
 import platform
 from typing import List, Dict
 
-from tools.interface_cache import INTERFACE_CACHE
+from bootstrap import get_context
 
 # Virtual interface prefixes to filter out (Docker bridges, VPNs, etc.)
 VIRTUAL_INTERFACE_PREFIXES = [
@@ -57,7 +57,7 @@ def get_ip_addresses() -> List[Dict[str, str]]:
     ip_addresses = []
 
     # Take a snapshot for thread safety (cache may be updated by netmon events)
-    cache_snapshot = dict(INTERFACE_CACHE)
+    cache_snapshot = get_context().network_interface_cache.get_all_interfaces()
 
     for interface_name, cache_data in cache_snapshot.items():
         if not _is_physical_interface(interface_name):

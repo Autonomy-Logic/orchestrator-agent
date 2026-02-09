@@ -2,6 +2,7 @@ from typing import Optional
 from tools.logger import log_info, log_debug, log_warning, log_error
 from tools.interface_cache import get_interface_type
 from tools.docker_tools import get_or_create_macvlan_network
+from bootstrap import get_context
 
 
 class NetworkReconnectionManager:
@@ -22,12 +23,13 @@ class NetworkReconnectionManager:
         For Ethernet (MACVLAN): Reconnect container to new MACVLAN network
         For WiFi (Proxy ARP): Update Proxy ARP bridge configuration with new IP/gateway
         """
-        from tools.vnic_persistence import load_vnic_configs, save_vnic_configs
-        from bootstrap import get_context
-        container_runtime = get_context().container_runtime
+
+        ctx = get_context()
+        container_runtime = ctx.container_runtime
+        vnic_repo = ctx.vnic_repo
 
         try:
-            all_vnic_configs = load_vnic_configs()
+            all_vnic_configs = vnic_repo.load_configs()
 
             if not all_vnic_configs:
                 log_debug("No runtime containers with vNIC configurations found")
@@ -177,7 +179,8 @@ class NetworkReconnectionManager:
         For DHCP: Send cleanup to netmon, then request new DHCP
                   (bridge setup happens automatically in netmon when IP arrives)
         """
-        from tools.vnic_persistence import load_vnic_configs, save_vnic_configs
+
+        vnic_repo = get_context().vnic_repo
 
         vnic_name = vnic_config.get("name")
         network_mode = vnic_config.get("network_mode", "dhcp")
@@ -217,12 +220,12 @@ class NetworkReconnectionManager:
                         "gateway": new_gateway,
                         "parent_interface": interface,
                     }
-                    all_configs = load_vnic_configs(container_name)
+                    all_configs = vnic_repo.load_configs(container_name)
                     for idx, cfg in enumerate(all_configs):
                         if cfg.get("name") == vnic_name and cfg.get("parent_interface") == interface:
                             all_configs[idx] = vnic_config
                             break
-                    save_vnic_configs(container_name, all_configs)
+                    vnic_repo.save_configs(container_name, all_configs)
                     log_info(f"WiFi vNIC {vnic_name} reconfigured with gateway {new_gateway}")
                 except Exception as e:
                     log_error(f"Failed to reconfigure static Proxy ARP: {e}")

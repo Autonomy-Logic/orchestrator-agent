@@ -3,6 +3,7 @@ from tools.operations_state import set_step, set_error, clear_state
 from tools.logger import *
 from tools.devices_usage_buffer import get_devices_usage_buffer
 from tools.network_event_listener import network_event_listener
+from bootstrap import get_context
 import asyncio
 
 
@@ -35,7 +36,7 @@ def _delete_runtime_container_sync(
         serial_repo: Optional SerialRepo adapter (defaults to singleton)
     """
     if any(dep is None for dep in [container_runtime, client_registry, vnic_repo, serial_repo]):
-        from bootstrap import get_context
+
         ctx = get_context()
         if container_runtime is None:
             container_runtime = ctx.container_runtime
@@ -171,7 +172,7 @@ async def delete_runtime_container(
         network_commander: Optional NetworkCommanderRepo adapter (defaults to singleton)
     """
     if vnic_repo is None:
-        from bootstrap import get_context
+
         vnic_repo = get_context().vnic_repo
     if network_commander is None:
         network_commander = network_event_listener

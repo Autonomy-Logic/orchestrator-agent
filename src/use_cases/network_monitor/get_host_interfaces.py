@@ -1,4 +1,5 @@
 from tools.logger import log_debug, log_info, log_warning, log_error
+from bootstrap import get_context
 from typing import Dict, Any, List
 
 VIRTUAL_INTERFACE_PREFIXES = [
@@ -105,7 +106,7 @@ def get_host_interfaces_data(
         - error: Error message (on error)
     """
     if interface_cache is None:
-        from bootstrap import get_context
+
         interface_cache = get_context().network_interface_cache
 
     log_debug(

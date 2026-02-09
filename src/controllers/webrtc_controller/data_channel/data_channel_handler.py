@@ -8,6 +8,8 @@ to execute HTTP commands on runtime containers.
 
 from tools.logger import log_info, log_debug, log_error
 from tools.chunking import ChunkReassembler, split_into_chunks
+from bootstrap import get_context
+from use_cases.runtime_commands import run_command
 from ..types import SessionState
 import json
 import asyncio
@@ -177,9 +179,6 @@ class DataChannelHandler:
         Args:
             message: Command message with device_id, method, api, etc.
         """
-        from use_cases.runtime_commands import run_command
-        from bootstrap import get_context
-
         correlation_id = message.get("correlation_id")
         device_id = message.get("device_id")
         method = message.get("method")

@@ -2,6 +2,7 @@ from . import get_self_container
 from tools.logger import log_info, log_warning, log_error
 from tools.devices_usage_buffer import get_devices_usage_buffer
 from tools.operations_state import set_deleting, set_step, set_error
+from bootstrap import get_context
 import json
 import re
 import socket
@@ -257,14 +258,17 @@ def _delete_shared_volume(container_runtime):
         )
 
 
-def _delete_orchestrator_container():
+def _delete_orchestrator_container(container_runtime):
     """
     Delete the orchestrator-agent container itself.
     This should be called last as it will terminate the process.
+
+    Args:
+        container_runtime: ContainerRuntimeRepo adapter
     """
     log_info("Deleting orchestrator-agent container (self)...")
 
-    self_container = get_self_container()
+    self_container = get_self_container(container_runtime=container_runtime)
     if not self_container:
         log_error("Could not detect orchestrator-agent container")
         raise RuntimeError("Could not detect orchestrator-agent container for self-destruct")
@@ -275,7 +279,7 @@ def _delete_orchestrator_container():
     try:
         self_container.remove(force=True)
         log_info(f"Container '{container_name}' removed successfully.")
-    except docker.errors.NotFound:
+    except container_runtime.NotFoundError:
         log_error(f"Container '{container_name}' not found.")
         raise
     except Exception as e:
@@ -324,7 +328,7 @@ def self_destruct(*, container_runtime=None, client_registry=None, vnic_repo=Non
         vnic_repo: Optional VNICRepo adapter (defaults to singleton)
     """
     if any(dep is None for dep in [container_runtime, client_registry, vnic_repo]):
-        from bootstrap import get_context
+
         ctx = get_context()
         if container_runtime is None:
             container_runtime = ctx.container_runtime
@@ -352,7 +356,7 @@ def self_destruct(*, container_runtime=None, client_registry=None, vnic_repo=Non
         _delete_shared_volume(container_runtime)
 
         set_step(ORCHESTRATOR_STATUS_ID, "removing_self")
-        _delete_orchestrator_container()
+        _delete_orchestrator_container(container_runtime)
 
     except Exception as e:
         log_error(f"Self-destruct failed: {e}")

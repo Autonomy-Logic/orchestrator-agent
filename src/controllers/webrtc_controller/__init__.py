@@ -7,6 +7,7 @@ Signaling is handled via the existing Socket.IO connection to the cloud.
 
 from tools.logger import log_info
 
+from .signaling import initialize_signaling
 from .session_manager import (
     WebRTCSessionManager,
     get_session_manager,
@@ -22,8 +23,6 @@ def init(client, session_manager: WebRTCSessionManager = None):
         session_manager: Optional WebRTCSessionManager instance for dependency injection.
                         If not provided, uses the global singleton.
     """
-    from .signaling import initialize_signaling
-
     if session_manager is None:
         session_manager = get_session_manager()
 

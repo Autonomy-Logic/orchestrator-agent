@@ -3,7 +3,7 @@ from tools.system_metrics import get_all_metrics
 from tools.ssl import get_agent_id
 from tools.usage_buffer import get_usage_buffer
 from tools.devices_usage_buffer import get_devices_usage_buffer
-from tools.docker_tools import CLIENT
+from bootstrap import get_context
 import asyncio
 from datetime import datetime
 
@@ -19,7 +19,8 @@ def _collect_device_stats(device_id: str) -> tuple:
         tuple: (cpu_percent, memory_mb) or (None, None) if stats cannot be collected
     """
     try:
-        container = CLIENT.containers.get(device_id)
+        container_runtime = get_context().container_runtime
+        container = container_runtime.get_container(device_id)
         if container.status != "running":
             return None, None
 

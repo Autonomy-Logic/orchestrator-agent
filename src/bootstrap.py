@@ -23,14 +23,9 @@ class AppContext:
         self.container_runtime = DockerContainerRuntime()
         self.vnic_repo = FileVnicRepository()
         self.serial_repo = FileSerialRepository()
+        self.client_registry = FileClientRegistry()
         self.http_client = RequestsHttpClient()
         self.network_interface_cache = DictNetworkInterfaceCache()
-
-        # FileClientRegistry needs references to the live CLIENTS dict
-        # Import here to avoid circular imports at module level
-        from use_cases.docker_manager import CLIENTS, write_clients_to_file
-
-        self.client_registry = FileClientRegistry(CLIENTS, write_clients_to_file)
 
 
 _context = None

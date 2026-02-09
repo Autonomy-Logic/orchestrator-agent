@@ -1,5 +1,6 @@
 import base64
 from . import make_request
+from bootstrap import get_context
 
 
 def execute(instance, command, *, http_client=None):
@@ -21,7 +22,7 @@ def execute(instance, command, *, http_client=None):
         Dictionary with status_code, headers, body, ok, and content_type
     """
     if http_client is None:
-        from bootstrap import get_context
+
         http_client = get_context().http_client
     method = command.get("method")
     api = command.get("api")

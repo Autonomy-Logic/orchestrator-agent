@@ -9,6 +9,7 @@ from tools.docker_tools import (
 from tools.interface_cache import get_interface_type
 from tools.devices_usage_buffer import get_devices_usage_buffer
 from tools.network_event_listener import network_event_listener
+from bootstrap import get_context
 import asyncio
 import random
 
@@ -23,7 +24,7 @@ def _resolve_deps(
 ):
     """Resolve optional dependencies, falling back to bootstrap singletons."""
     if any(dep is None for dep in [container_runtime, vnic_repo, serial_repo, client_registry, interface_cache]):
-        from bootstrap import get_context
+
         ctx = get_context()
         if container_runtime is None:
             container_runtime = ctx.container_runtime

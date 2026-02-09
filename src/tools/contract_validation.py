@@ -1,4 +1,5 @@
 from datetime import datetime
+from tools.logger import log_error
 
 
 class BaseType:
@@ -128,8 +129,6 @@ def validate_contract_with_error_response(contract, data):
             - If valid: (True, None)
             - If invalid: (False, error_response_dict with status and error fields)
     """
-    from tools.logger import log_error
-
     try:
         validate_contract(contract, data)
         return (True, None)
