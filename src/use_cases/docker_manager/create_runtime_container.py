@@ -9,6 +9,7 @@ from tools.docker_tools import (
     create_internal_network,
     get_macvlan_network_key,
 )
+from tools.interface_cache import get_interface_type
 from tools.devices_usage_buffer import get_devices_usage_buffer
 from tools.network_event_listener import network_event_listener
 import docker
@@ -41,11 +42,13 @@ def _validate_vnic_configs(vnic_configs: list) -> tuple[bool, str]:
     """
     Validate vNIC configurations to detect duplicate networks.
 
-    Docker only allows one endpoint per (container, network) pair. When multiple vNICs
-    resolve to the same MACVLAN network (same parent interface and subnet), the second
-    network.connect() call will fail with "endpoint already exists" error.
+    For Ethernet (MACVLAN): Docker only allows one endpoint per (container, network) pair.
+    When multiple vNICs resolve to the same MACVLAN network, the second network.connect()
+    call will fail with "endpoint already exists" error.
 
-    This function detects such conflicts early and returns a clear error message.
+    For WiFi (Proxy ARP Bridge): Each vNIC gets its own veth pair and IP, so multiple
+    WiFi vNICs on the same interface are theoretically possible but may cause routing
+    conflicts. We still validate to warn about potential issues.
 
     Args:
         vnic_configs: List of vNIC configurations
@@ -53,7 +56,8 @@ def _validate_vnic_configs(vnic_configs: list) -> tuple[bool, str]:
     Returns:
         Tuple of (is_valid, error_message). If valid, error_message is empty.
     """
-    seen_networks = {}
+    seen_macvlan_networks = {}
+    seen_wifi_interfaces = {}
 
     for idx, vnic_config in enumerate(vnic_configs):
         vnic_name = vnic_config.get("name") or f"unnamed_vnic_{idx}"
@@ -61,27 +65,42 @@ def _validate_vnic_configs(vnic_configs: list) -> tuple[bool, str]:
         parent_subnet = vnic_config.get("subnet")
         parent_gateway = vnic_config.get("gateway")
 
-        network_key = get_macvlan_network_key(
-            parent_interface, parent_subnet, parent_gateway
-        )
+        # Determine network type based on interface type
+        interface_type = get_interface_type(parent_interface)
 
-        if network_key in seen_networks:
-            conflicting_vnic = seen_networks[network_key]
-            error_msg = (
-                f"Invalid vNIC configuration: vNICs '{conflicting_vnic}' and '{vnic_name}' "
-                f"would connect to the same MACVLAN network ({network_key}). "
-                f"Docker only allows one endpoint per container per network. "
-                f"To use multiple IPs on the same physical network, consider using "
-                f"different subnets or a single vNIC with additional IP configuration."
+        if interface_type == "wifi":
+            # WiFi uses Proxy ARP Bridge - check for duplicate interfaces
+            # (multiple vNICs on same WiFi interface may cause routing issues)
+            if parent_interface in seen_wifi_interfaces:
+                conflicting_vnic = seen_wifi_interfaces[parent_interface]
+                log_warning(
+                    f"vNICs '{conflicting_vnic}' and '{vnic_name}' both use WiFi interface "
+                    f"'{parent_interface}'. This may cause routing conflicts."
+                )
+            seen_wifi_interfaces[parent_interface] = vnic_name
+        else:
+            # Ethernet uses MACVLAN - strict validation for network conflicts
+            network_key = get_macvlan_network_key(
+                parent_interface, parent_subnet, parent_gateway
             )
-            return False, error_msg
 
-        seen_networks[network_key] = vnic_name
+            if network_key in seen_macvlan_networks:
+                conflicting_vnic = seen_macvlan_networks[network_key]
+                error_msg = (
+                    f"Invalid vNIC configuration: vNICs '{conflicting_vnic}' and '{vnic_name}' "
+                    f"would connect to the same MACVLAN network ({network_key}). "
+                    f"Docker only allows one endpoint per container per network. "
+                    f"To use multiple IPs on the same physical network, consider using "
+                    f"different subnets or a single vNIC with additional IP configuration."
+                )
+                return False, error_msg
+
+            seen_macvlan_networks[network_key] = vnic_name
 
     return True, ""
 
 
-def _create_runtime_container_sync(container_name: str, vnic_configs: list, serial_configs: list = None):
+def _create_runtime_container_sync(container_name: str, vnic_configs: list, serial_configs: list = None, runtime_version: str = None):
     """
     Synchronous implementation of runtime container creation.
     This function contains all blocking Docker operations and runs in a background thread.
@@ -102,6 +121,7 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
             - device_id: Stable USB device identifier from /dev/serial/by-id/
             - container_path: Path inside container (e.g., "/dev/modbus0")
             - baud_rate: Baud rate for documentation purposes (optional)
+        runtime_version: Version tag for the runtime image (optional, defaults to "latest")
     """
     if serial_configs is None:
         serial_configs = []
@@ -121,20 +141,34 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
         return None
 
     try:
-        image_name = "ghcr.io/autonomy-logic/openplc-runtime:latest"
+        version_tag = runtime_version if runtime_version else "latest"
+        image_name = f"ghcr.io/autonomy-logic/openplc-runtime:{version_tag}"
 
         set_step(container_name, "pulling_image")
         log_info(f"Pulling image {image_name}")
         try:
             CLIENT.images.pull(image_name)
             log_info(f"Image {image_name} pulled successfully")
+        except docker.errors.NotFound:
+            # Image doesn't exist in registry, check if available locally
+            try:
+                CLIENT.images.get(image_name)
+                log_warning(f"Image {image_name} not found in registry, using local image")
+            except docker.errors.ImageNotFound:
+                error_msg = f"Runtime version '{version_tag}' not found. The image {image_name} does not exist in the registry or locally."
+                log_error(error_msg)
+                set_error(container_name, error_msg, "create")
+                return None
         except Exception as e:
             log_warning(f"Failed to pull image, will try to use local image: {e}")
 
         set_step(container_name, "creating_networks")
         internal_network = create_internal_network(container_name)
 
+        # List of (network, vnic_config) tuples for MACVLAN (Ethernet) only
+        # WiFi vNICs use Proxy ARP Bridge which is set up after container starts
         macvlan_networks = []
+        wifi_vnics = []  # WiFi vNICs to configure with Proxy ARP after container starts
         dns_servers = []
 
         for vnic_config in vnic_configs:
@@ -143,14 +177,31 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
             parent_subnet = vnic_config.get("subnet")
             parent_gateway = vnic_config.get("gateway")
 
+            # Detect interface type and choose appropriate network method
+            interface_type = get_interface_type(parent_interface)
+            is_wifi = interface_type == "wifi"
+
+            # Store for later use
+            vnic_config["_interface_type"] = interface_type
+            vnic_config["_is_wifi"] = is_wifi
+
             log_debug(
-                f"Processing vNIC {vnic_name} for parent interface {parent_interface}"
+                f"Processing vNIC {vnic_name} for {interface_type} interface {parent_interface}"
             )
 
-            macvlan_network = get_or_create_macvlan_network(
-                parent_interface, parent_subnet, parent_gateway
-            )
-            macvlan_networks.append((macvlan_network, vnic_config))
+            if is_wifi:
+                # WiFi interface - use Proxy ARP Bridge (configured after container starts)
+                log_info(f"Using Proxy ARP Bridge for WiFi interface {parent_interface}")
+                vnic_config["_network_method"] = "proxy_arp"
+                wifi_vnics.append(vnic_config)
+            else:
+                # Ethernet interface - use MACVLAN (unique MAC per container)
+                log_info(f"Using MACVLAN for Ethernet interface {parent_interface}")
+                network = get_or_create_macvlan_network(
+                    parent_interface, parent_subnet, parent_gateway
+                )
+                vnic_config["_network_method"] = "macvlan"
+                macvlan_networks.append((network, vnic_config))
 
             vnic_dns = vnic_config.get("dns")
             if vnic_dns and isinstance(vnic_dns, list):
@@ -162,7 +213,9 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
         networking_config = {}
         api_version = CLIENT.api.api_version
 
-        for macvlan_network, vnic_config in macvlan_networks:
+        # Only MACVLAN networks are added to container at creation time
+        # WiFi vNICs use Proxy ARP Bridge which is configured after container starts
+        for network, vnic_config in macvlan_networks:
             vnic_name = vnic_config.get("name")
             network_mode = vnic_config.get("network_mode", "dhcp")
 
@@ -175,6 +228,7 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
                     endpoint_kwargs["ipv4_address"] = ip_address
                     log_debug(f"Configured manual IP {ip_address} for vNIC {vnic_name}")
 
+            # MACVLAN: generate/use unique MAC address per container
             mac_address = vnic_config.get("mac")
             if not mac_address:
                 mac_address = _generate_mac_address()
@@ -186,11 +240,11 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
                 )
             endpoint_kwargs["mac_address"] = mac_address
 
-            networking_config[macvlan_network.name] = docker.types.EndpointConfig(
+            networking_config[network.name] = docker.types.EndpointConfig(
                 version=api_version, **endpoint_kwargs
             )
             log_debug(
-                f"Prepared EndpointConfig for MACVLAN network {macvlan_network.name}"
+                f"Prepared EndpointConfig for MACVLAN network {network.name}"
             )
 
         ## Needed to avoid docker SDK setting 'None' networking_config
@@ -268,6 +322,7 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
 
         container.reload()
         network_settings = container.attrs["NetworkSettings"]["Networks"]
+        container_pid = container.attrs.get("State", {}).get("Pid", 0)
 
         if internal_network.name in network_settings:
             ip_addr = network_settings[internal_network.name]["IPAddress"]
@@ -278,19 +333,34 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
                 f"Could not retrieve internal IP for container {container_name}"
             )
 
-        for macvlan_network, vnic_config in macvlan_networks:
+        # Log MACVLAN network details
+        for network, vnic_config in macvlan_networks:
             vnic_name = vnic_config.get("name")
             parent_interface = vnic_config.get("parent_interface")
 
-            if macvlan_network.name in network_settings:
-                vnic_ip = network_settings[macvlan_network.name]["IPAddress"]
-                vnic_mac = network_settings[macvlan_network.name]["MacAddress"]
+            if network.name in network_settings:
+                vnic_ip = network_settings[network.name]["IPAddress"]
+                vnic_mac = network_settings[network.name]["MacAddress"]
                 # Store MAC address and network name in vnic_config for DHCP IP mapping
                 vnic_config["mac_address"] = vnic_mac
-                vnic_config["docker_network_name"] = macvlan_network.name
+                vnic_config["docker_network_name"] = network.name
                 log_info(
-                    f"vNIC {vnic_name} on {parent_interface}: IP={vnic_ip}, MAC={vnic_mac}"
+                    f"vNIC {vnic_name} on {parent_interface} (MACVLAN): IP={vnic_ip}, MAC={vnic_mac}"
                 )
+
+        # Collect WiFi vNICs info for Proxy ARP setup (done in async wrapper via netmon)
+        # Both static and DHCP WiFi vNICs are handled asynchronously since
+        # proxy ARP operations must go through netmon (which has host network access)
+        wifi_vnics_to_configure = []
+        for vnic_config in wifi_vnics:
+            vnic_name = vnic_config.get("name")
+            parent_interface = vnic_config.get("parent_interface")
+            wifi_vnics_to_configure.append({
+                "vnic_name": vnic_name,
+                "parent_interface": parent_interface,
+                "container_pid": container_pid,
+                "vnic_config": vnic_config,
+            })
 
         save_vnic_configs(container_name, vnic_configs)
 
@@ -308,18 +378,18 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
         devices_buffer.add_device(container_name)
         log_debug(f"Registered device {container_name} for usage data collection")
 
-        container_pid = container.attrs.get("State", {}).get("Pid", 0)
         log_debug(f"Container {container_name} has PID {container_pid}")
 
+        # Collect MACVLAN vNICs that need DHCP
         dhcp_vnics = []
-        for macvlan_network, vnic_config in macvlan_networks:
+        for network, vnic_config in macvlan_networks:
             network_mode = vnic_config.get("network_mode", "dhcp")
             if network_mode == "dhcp":
                 vnic_name = vnic_config.get("name")
-                mac_address = network_settings.get(macvlan_network.name, {}).get(
+                mac_address = network_settings.get(network.name, {}).get(
                     "MacAddress"
                 )
-                if mac_address and container_pid > 0:
+                if container_pid > 0:
                     dhcp_vnics.append((vnic_name, mac_address, container_pid))
                     log_debug(
                         f"Will request DHCP for vNIC {vnic_name} (MAC: {mac_address}, PID: {container_pid})"
@@ -327,7 +397,12 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
 
         clear_state(container_name)
 
-        return dhcp_vnics
+        # Return both MACVLAN DHCP info and WiFi vNICs needing configuration
+        return {
+            "dhcp_vnics": dhcp_vnics,
+            "wifi_vnics_to_configure": wifi_vnics_to_configure,
+            "vnic_configs": vnic_configs,  # For saving after WiFi setup
+        }
 
     except Exception as e:
         log_error(f"Failed to create runtime container {container_name}. Error: {e}")
@@ -338,10 +413,14 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
         return None
 
 
-async def create_runtime_container(container_name: str, vnic_configs: list, serial_configs: list = None):
+async def create_runtime_container(container_name: str, vnic_configs: list, serial_configs: list = None, runtime_version: str = None):
     """
-    Create a runtime container with MACVLAN networking for physical network bridging
-    and an internal network for orchestrator communication.
+    Create a runtime container with MACVLAN or Proxy ARP Bridge networking for
+    physical network bridging and an internal network for orchestrator communication.
+
+    Network method selection:
+    - Ethernet interfaces: MACVLAN (unique MAC per container)
+    - WiFi interfaces: Proxy ARP Bridge (traffic routes through host's WiFi MAC)
 
     This async wrapper offloads all blocking Docker operations to a background thread
     to prevent blocking the asyncio event loop and causing websocket disconnections.
@@ -350,11 +429,21 @@ async def create_runtime_container(container_name: str, vnic_configs: list, seri
         container_name: Name for the runtime container
         vnic_configs: List of virtual NIC configurations
         serial_configs: List of serial port configurations (optional)
+        runtime_version: Version tag for the runtime image (optional, defaults to "latest")
     """
-    dhcp_vnics = await asyncio.to_thread(
-        _create_runtime_container_sync, container_name, vnic_configs, serial_configs
+    result = await asyncio.to_thread(
+        _create_runtime_container_sync, container_name, vnic_configs, serial_configs, runtime_version
     )
 
+    if result is None:
+        # Container creation failed
+        return
+
+    dhcp_vnics = result.get("dhcp_vnics", [])
+    wifi_vnics_to_configure = result.get("wifi_vnics_to_configure", [])
+    updated_vnic_configs = result.get("vnic_configs", vnic_configs)
+
+    # Start DHCP for MACVLAN vNICs (Ethernet)
     if dhcp_vnics:
         set_step(container_name, "starting_dhcp")
         for vnic_name, mac_address, container_pid in dhcp_vnics:
@@ -362,14 +451,67 @@ async def create_runtime_container(container_name: str, vnic_configs: list, seri
                 await network_event_listener.start_dhcp(
                     container_name, vnic_name, mac_address, container_pid
                 )
-                log_info(f"Requested DHCP for vNIC {vnic_name}")
+                log_info(f"Requested DHCP for MACVLAN vNIC {vnic_name} (MAC: {mac_address})")
             except Exception as e:
                 log_warning(f"Failed to request DHCP for vNIC {vnic_name}: {e}")
 
+    # Configure WiFi vNICs with Proxy ARP Bridge via netmon
+    # All proxy ARP operations go through netmon (which has host network + PID access)
+    if wifi_vnics_to_configure:
+        set_step(container_name, "configuring_wifi_vnics")
+        for wifi_info in wifi_vnics_to_configure:
+            vnic_name = wifi_info["vnic_name"]
+            parent_interface = wifi_info["parent_interface"]
+            container_pid = wifi_info["container_pid"]
+            vnic_config = wifi_info["vnic_config"]
+            network_mode = vnic_config.get("network_mode", "dhcp")
+
+            try:
+                if network_mode == "static":
+                    # Static IP - send setup command to netmon
+                    ip_address = vnic_config.get("ip")
+                    gateway = vnic_config.get("gateway")
+                    subnet = vnic_config.get("subnet", "255.255.255.0")
+
+                    if ip_address and gateway:
+                        ip_address = ip_address.split("/")[0]
+                        log_info(f"Setting up Proxy ARP Bridge for WiFi vNIC {vnic_name} (static IP) via netmon")
+                        await network_event_listener.setup_proxy_arp_bridge(
+                            container_name, container_pid, parent_interface,
+                            ip_address, gateway, subnet,
+                        )
+                        # Build proxy_arp_config locally (send_command is fire-and-forget,
+                        # so the response from netmon is not received here).
+                        # The naming convention is deterministic: veth-{name[:8]}
+                        vnic_config["_proxy_arp_config"] = {
+                            "veth_host": f"veth-{container_name[:8]}",
+                            "veth_container": "eth1",
+                            "ip_address": ip_address,
+                            "gateway": gateway,
+                            "parent_interface": parent_interface,
+                        }
+                        log_info(f"vNIC {vnic_name} on {parent_interface} (Proxy ARP/Static): IP={ip_address}")
+                    else:
+                        log_error(f"Static IP mode requires ip and gateway for WiFi vNIC {vnic_name}")
+                else:
+                    # DHCP mode - just request DHCP, netmon handles bridge setup
+                    # when the lease arrives via its lease monitor
+                    log_info(f"Requesting DHCP for WiFi vNIC {vnic_name} via Proxy ARP")
+                    result = await network_event_listener.request_wifi_dhcp(
+                        container_name, vnic_name, parent_interface, container_pid
+                    )
+                    if not result.get("success"):
+                        log_warning(f"WiFi DHCP request failed for {vnic_name}: {result.get('error')}")
+                    # Proxy ARP config will be saved via _handle_dhcp_update when IP arrives
+            except Exception as e:
+                log_warning(f"Failed to configure WiFi vNIC {vnic_name}: {e}")
+
+        # Save updated vnic_configs (static WiFi vNICs have proxy_arp_config now)
+        save_vnic_configs(container_name, updated_vnic_configs)
+
     # Trigger serial device sync for the newly created container
     # This creates device nodes for any serial devices that are already connected
-    # Only run if container was created successfully (dhcp_vnics is not None)
-    if dhcp_vnics is not None and serial_configs:
+    if serial_configs:
         try:
             await network_event_listener.resync_serial_devices()
             log_info(f"Triggered serial device resync for container {container_name}")

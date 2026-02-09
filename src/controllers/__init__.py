@@ -2,26 +2,135 @@ from .websocket_controller import (
     init as init_websocket_controller,
     get_client as get_websocket_client,
 )
+from .webrtc_controller import (
+    init as init_webrtc_controller,
+    start as start_webrtc_controller,
+    stop as stop_webrtc_controller,
+    get_session_manager as get_webrtc_session_manager,
+)
 from tools.logger import *
 from tools.network_event_listener import network_event_listener
+from tools.dns_utils import (
+    perform_dns_health_check,
+    calculate_backoff,
+    is_dns_error,
+)
+from time import sleep
 
 
-async def main_websocket_task(server_url):
+async def main_websocket_task(server_url: str, dns_ttl: int = 30):
     """
     Main function to connect the WebSocket client to the server.
+    Initializes both WebSocket and WebRTC controllers.
+
+    Creates a fresh Socket.IO client and HTTP session for each connection
+    attempt. This ensures DNS is re-resolved after network changes.
+
+    Args:
+        server_url: The server URL to connect to (host:port format)
+        dns_ttl: DNS cache TTL in seconds. Lower values help with network
+                changes but increase DNS queries.
     """
-    client = await get_websocket_client()
-    init_websocket_controller(client)
+    client = None
+    try:
+        # Create fresh client with new HTTP session for DNS refresh
+        client = await get_websocket_client(dns_ttl=dns_ttl)
 
-    await network_event_listener.start()
-    log_info("Network event listener started")
+        # Initialize WebSocket controller (existing topics)
+        init_websocket_controller(client)
 
-    await client.connect(
-        f"https://{server_url}",
-    )
-    log_info(f"Connected to WebSocket server at {server_url}")
-    await client.wait()
+        # Initialize WebRTC controller (signaling topics)
+        init_webrtc_controller(client)
+
+        # Start network event listener
+        await network_event_listener.start()
+        log_info("Network event listener started")
+
+        # Start WebRTC session manager background tasks
+        await start_webrtc_controller()
+        log_info("WebRTC controller started")
+
+        await client.connect(
+            f"https://{server_url}",
+        )
+        log_info(f"Connected to WebSocket server at {server_url}")
+        await client.wait()
+    finally:
+        # Cleanup WebRTC controller on disconnect
+        log_info("Cleaning up controllers...")
+        await stop_webrtc_controller()
+        log_info("WebRTC controller stopped")
+
+        # Cleanup: close HTTP session to release resources
+        if client is not None:
+            try:
+                if client.http and not client.http.closed:
+                    await client.http.close()
+                    log_debug("Closed HTTP session")
+            except Exception as e:
+                log_debug(f"Error closing HTTP session: {e}")
+
+
+def run_websocket_with_reconnection(server_url: str, run_task):
+    """
+    Run WebSocket connection with automatic reconnection and DNS health checks.
+
+    Manages the reconnection loop with exponential backoff and DNS health checks
+    to handle network transitions gracefully.
+
+    Args:
+        server_url: The server URL to connect to (host:port format)
+        run_task: Function to run the async task (e.g., asyncio.run)
+    """
+    reconnect_attempt = 0
+
+    while True:
+        try:
+            # DNS health check before attempting connection
+            if not perform_dns_health_check(server_url, reconnect_attempt):
+                delay = calculate_backoff(reconnect_attempt)
+                log_warning(f"Waiting {delay:.1f}s before next attempt...")
+                sleep(delay)
+                reconnect_attempt += 1
+                continue
+
+            log_info(f"Attempting to connect to server at {server_url}...")
+            run_task(main_websocket_task(server_url))
+
+            # Connection closed normally, reset attempt counter
+            reconnect_attempt = 0
+
+        except KeyboardInterrupt:
+            log_warning("Keyboard interrupt received. Closing connection and exiting.")
+            break
+        except Exception as e:
+            log_error(f"Error on websocket interface: {e}")
+
+            # DNS errors get longer delays to allow network to stabilize
+            if is_dns_error(e):
+                delay = calculate_backoff(reconnect_attempt + 2)
+                log_warning(
+                    f"DNS-related error detected. Waiting {delay:.1f}s to allow network to stabilize..."
+                )
+            else:
+                delay = calculate_backoff(reconnect_attempt)
+                log_warning(f"Reconnecting in {delay:.1f}s (attempt {reconnect_attempt + 1})...")
+
+            sleep(delay)
+            reconnect_attempt += 1
 
 
 async def main_webrtc_task(*args, **kwargs):
-    raise NotImplementedError("WebRTC task is not implemented yet.")
+    """
+    Placeholder for standalone WebRTC task.
+    Currently WebRTC is integrated into main_websocket_task.
+    """
+    raise NotImplementedError(
+        "WebRTC is integrated into main_websocket_task. "
+        "Use main_websocket_task instead."
+    )
+
+
+def get_session_manager():
+    """Get the WebRTC session manager instance."""
+    return get_webrtc_session_manager()

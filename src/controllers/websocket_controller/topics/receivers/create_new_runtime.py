@@ -34,6 +34,7 @@ MESSAGE_TYPE = {
     "container_name": StringType,
     "vnic_configs": ListType(VNIC_CONFIG_TYPE),
     "serial_configs": OptionalType(ListType(SERIAL_CONFIG_TYPE)),
+    "runtime_version": OptionalType(StringType),
 }
 
 
@@ -54,6 +55,7 @@ def init(client):
         container_name = message.get("container_name")
         vnic_configs = message.get("vnic_configs", [])
         serial_configs = message.get("serial_configs", [])
+        runtime_version = message.get("runtime_version")
 
         if (
             not container_name
@@ -137,7 +139,7 @@ def init(client):
             log_info(f"Container {container_name} will have {len(serial_configs)} serial port(s) configured")
 
         asyncio.create_task(
-            create_runtime_container(container_name, vnic_configs, serial_configs)
+            create_runtime_container(container_name, vnic_configs, serial_configs, runtime_version)
         )
 
         return {

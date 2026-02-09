@@ -249,6 +249,41 @@ def get_device_status_data(device_id: str) -> Dict[str, Any]:
                 "gateway": gateway,
             }
 
+        # Include WiFi/Proxy ARP vNICs which are not Docker networks
+        # These use veth pairs configured by netmon and are invisible to Docker
+        for vnic_config in vnic_configs:
+            if not vnic_config.get("_is_wifi"):
+                continue
+
+            vnic_name = vnic_config.get("name", "wifi")
+            parent_interface = vnic_config.get("parent_interface", "wlan0")
+            network_mode = vnic_config.get("network_mode", "dhcp")
+            proxy_arp_config = vnic_config.get("_proxy_arp_config", {})
+
+            # Get IP from proxy_arp_config, dhcp_ip, or static config
+            ip_address = (
+                proxy_arp_config.get("ip_address")
+                or vnic_config.get("dhcp_ip")
+                or vnic_config.get("ip", "").split("/")[0]
+            )
+            gateway = (
+                proxy_arp_config.get("gateway")
+                or vnic_config.get("dhcp_gateway")
+                or vnic_config.get("gateway")
+            )
+
+            if ip_address:
+                network_key = f"wifi_{parent_interface}_{vnic_name}"
+                networks[network_key] = {
+                    "ip_address": ip_address,
+                    "mac_address": None,  # WiFi shares parent MAC
+                    "gateway": gateway,
+                }
+                log_debug(
+                    f"Including WiFi vNIC {vnic_name} in networks: "
+                    f"IP={ip_address}, gateway={gateway}"
+                )
+
         internal_ip = None
         if device_id in CLIENTS:
             internal_ip = CLIENTS[device_id].get("ip")

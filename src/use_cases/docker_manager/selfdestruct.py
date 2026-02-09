@@ -1,11 +1,13 @@
 from . import CLIENTS, get_self_container
 from tools.logger import log_info, log_warning, log_error
 from tools.docker_tools import CLIENT
-from tools.vnic_persistence import delete_vnic_configs
+from tools.vnic_persistence import delete_vnic_configs, load_vnic_configs
 from tools.devices_usage_buffer import get_devices_usage_buffer
 from tools.operations_state import set_deleting, set_step, set_error
 import docker
+import json
 import re
+import socket
 
 NETMON_CONTAINER_NAME = "autonomy_netmon"
 SHARED_VOLUME_NAME = "orchestrator-shared"
@@ -23,6 +25,7 @@ INTERNAL_NETWORK_PATTERN = re.compile(
 MACVLAN_NETWORK_PATTERN = re.compile(r"^macvlan_[a-zA-Z0-9]+_\d+\.\d+\.\d+\.\d+_\d+$")
 
 
+
 def _delete_runtime_container_for_selfdestruct(container_name: str):
     """
     Delete a single runtime container and its associated resources.
@@ -33,6 +36,10 @@ def _delete_runtime_container_for_selfdestruct(container_name: str):
         container_name: Name of the runtime container to delete
     """
     log_info(f"Deleting runtime container: {container_name}")
+
+    # Note: Per-container Proxy ARP cleanup is skipped here.
+    # Veth pairs auto-cleanup when containers are deleted (kernel behavior).
+    # Proxy ARP neighbor entries are cleaned in bulk via _cleanup_proxy_arp_veths().
 
     try:
         container = CLIENT.containers.get(container_name)
@@ -99,6 +106,51 @@ def _delete_all_runtime_containers():
             del CLIENTS[container_name]
 
     log_info("All runtime containers deleted successfully")
+
+
+def _cleanup_proxy_arp_veths():
+    """
+    Clean up all Proxy ARP veth interfaces and neighbor entries via netmon.
+
+    Sends a cleanup_all_proxy_arp command to netmon via a direct synchronous
+    socket write. Netmon has host network access and can run ip commands.
+
+    This is a best-effort cleanup that does NOT raise on failure.
+    """
+    NETMON_SOCKET_PATH = "/var/orchestrator/netmon.sock"
+
+    log_info("Requesting Proxy ARP cleanup from netmon...")
+
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(10)
+            sock.connect(NETMON_SOCKET_PATH)
+
+            command = json.dumps({"command": "cleanup_all_proxy_arp"}) + "\n"
+            sock.sendall(command.encode("utf-8"))
+
+            # Read response
+            response_data = b""
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                response_data += chunk
+                if b"\n" in response_data:
+                    break
+
+        if response_data:
+            response = json.loads(response_data.decode("utf-8").strip())
+            if response.get("success"):
+                veths_removed = response.get("veths_removed", 0)
+                log_info(f"Proxy ARP cleanup via netmon complete: {veths_removed} veths removed")
+            else:
+                log_warning(f"Proxy ARP cleanup via netmon failed: {response.get('error')}")
+        else:
+            log_warning("No response from netmon for Proxy ARP cleanup")
+
+    except Exception as e:
+        log_warning(f"Error requesting Proxy ARP cleanup from netmon: {e}")
 
 
 def _cleanup_orchestrator_networks():
@@ -276,6 +328,9 @@ def self_destruct():
 
         set_step(ORCHESTRATOR_STATUS_ID, "cleaning_networks")
         _cleanup_orchestrator_networks()
+
+        set_step(ORCHESTRATOR_STATUS_ID, "cleaning_proxy_arp")
+        _cleanup_proxy_arp_veths()
 
         set_step(ORCHESTRATOR_STATUS_ID, "deleting_netmon")
         _delete_netmon_container()

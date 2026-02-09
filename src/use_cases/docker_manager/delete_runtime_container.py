@@ -1,10 +1,11 @@
 from . import CLIENTS, remove_client, get_self_container
 from tools.operations_state import set_step, set_error, clear_state
 from tools.logger import *
-from tools.vnic_persistence import delete_vnic_configs
+from tools.vnic_persistence import delete_vnic_configs, load_vnic_configs
 from tools.serial_persistence import delete_serial_configs
 from tools.docker_tools import CLIENT
 from tools.devices_usage_buffer import get_devices_usage_buffer
+from tools.network_event_listener import network_event_listener
 import docker
 import asyncio
 
@@ -132,10 +133,32 @@ async def delete_runtime_container(container_name: str):
     """
     Delete a runtime container and all associated resources.
 
-    This async wrapper offloads all blocking Docker operations to a background thread
-    to prevent blocking the asyncio event loop and causing websocket disconnections.
+    Proxy ARP cleanup is done first via netmon (async), then blocking Docker
+    operations are offloaded to a background thread.
 
     Args:
         container_name: Name of the runtime container to delete
     """
+    # Clean up Proxy ARP bridges via netmon before deleting container
+    # This must be done before container removal to ensure routes are properly cleaned
+    try:
+        all_vnic_configs = load_vnic_configs()
+        vnic_configs = all_vnic_configs.get(container_name, [])
+        for vnic_config in vnic_configs:
+            proxy_arp_config = vnic_config.get("_proxy_arp_config")
+            if proxy_arp_config:
+                ip_address = proxy_arp_config.get("ip_address")
+                parent_interface = proxy_arp_config.get("parent_interface")
+                veth_host = proxy_arp_config.get("veth_host")
+                if ip_address and parent_interface and veth_host:
+                    log_info(f"Cleaning up Proxy ARP bridge for vNIC {vnic_config.get('name')}")
+                    try:
+                        await network_event_listener.cleanup_proxy_arp_bridge(
+                            container_name, ip_address, parent_interface, veth_host
+                        )
+                    except Exception as e:
+                        log_warning(f"Error cleaning up Proxy ARP bridge: {e}")
+    except Exception as e:
+        log_warning(f"Error loading vNIC configs for Proxy ARP cleanup: {e}")
+
     await asyncio.to_thread(_delete_runtime_container_sync, container_name)

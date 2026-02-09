@@ -16,8 +16,23 @@ ssl_context.check_hostname = True
 ssl_context.verify_mode = ssl.CERT_REQUIRED
 
 
-def get_ssl_session():
-    connector = TCPConnector(ssl=ssl_context)
+def get_ssl_session(ttl_dns_cache: int = 30):
+    """
+    Create a new SSL-enabled aiohttp ClientSession.
+
+    Args:
+        ttl_dns_cache: DNS cache TTL in seconds. Lower values help with
+                      network changes but increase DNS lookups. Default 30s.
+
+    Returns:
+        ClientSession configured with mTLS and DNS caching
+    """
+    connector = TCPConnector(
+        ssl=ssl_context,
+        ttl_dns_cache=ttl_dns_cache,
+        use_dns_cache=True,
+        force_close=True,  # Don't reuse connections (helps after network change)
+    )
     return ClientSession(connector=connector)
 
 

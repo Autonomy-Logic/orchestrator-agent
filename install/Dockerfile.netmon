@@ -2,22 +2,26 @@ FROM python:3.12-slim
 
 # Install system dependencies:
 # - iproute2: network interface management (ip command)
+# - iptables: firewall rules (needed to allow forwarding past Docker's DROP policy)
 # - udhcpc: lightweight DHCP client for container vNICs
 # - procps: process utilities (for debugging)
 # Note: Debian slim already includes libudev for pyudev support
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         iproute2 \
+        iptables \
         udhcpc \
         procps \
     && rm -rf /var/lib/apt/lists/* && \
+    update-alternatives --set iptables /usr/sbin/iptables-legacy && \
     pip install --no-cache-dir pyroute2 pyudev
 
 WORKDIR /app
 
 COPY autonomy-netmon.py /app/autonomy-netmon.py
 COPY udhcpc-script.sh /usr/share/udhcpc/default.script
-RUN chmod +x /usr/share/udhcpc/default.script
+COPY udhcpc-wifi.sh /usr/share/udhcpc/wifi.script
+RUN chmod +x /usr/share/udhcpc/default.script /usr/share/udhcpc/wifi.script
 
 ENV PYTHONUNBUFFERED=1
 
