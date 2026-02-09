@@ -8,6 +8,7 @@ from .webrtc_controller import (
     stop as stop_webrtc_controller,
     get_session_manager as get_webrtc_session_manager,
 )
+from bootstrap import get_context
 from tools.logger import *
 from tools.network_event_listener import network_event_listener
 from tools.dns_utils import (
@@ -33,6 +34,9 @@ async def main_websocket_task(server_url: str, dns_ttl: int = 30):
     """
     client = None
     try:
+        # Initialize composition root (creates all adapters)
+        get_context()
+
         # Create fresh client with new HTTP session for DNS refresh
         client = await get_websocket_client(dns_ttl=dns_ttl)
 

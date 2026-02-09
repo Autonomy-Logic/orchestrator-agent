@@ -1,7 +1,7 @@
 from typing import Protocol, Optional
 
 
-class SerialRepository(Protocol):
+class SerialRepo(Protocol):
     """Abstract interface for serial port configuration persistence."""
 
     def save_configs(self, container_name: str, serial_configs: list) -> None: ...

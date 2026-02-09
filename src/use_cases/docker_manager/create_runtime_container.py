@@ -1,10 +1,7 @@
-from . import CLIENTS, add_client, get_self_container
+from . import get_self_container
 from tools.operations_state import set_step, set_error, clear_state
 from tools.logger import *
-from tools.vnic_persistence import save_vnic_configs
-from tools.serial_persistence import save_serial_configs
 from tools.docker_tools import (
-    CLIENT,
     get_or_create_macvlan_network,
     create_internal_network,
     get_macvlan_network_key,
@@ -12,9 +9,35 @@ from tools.docker_tools import (
 from tools.interface_cache import get_interface_type
 from tools.devices_usage_buffer import get_devices_usage_buffer
 from tools.network_event_listener import network_event_listener
-import docker
 import asyncio
 import random
+
+
+def _resolve_deps(
+    container_runtime=None,
+    vnic_repo=None,
+    serial_repo=None,
+    client_registry=None,
+    interface_cache=None,
+    network_commander=None,
+):
+    """Resolve optional dependencies, falling back to bootstrap singletons."""
+    if any(dep is None for dep in [container_runtime, vnic_repo, serial_repo, client_registry, interface_cache]):
+        from bootstrap import get_context
+        ctx = get_context()
+        if container_runtime is None:
+            container_runtime = ctx.container_runtime
+        if vnic_repo is None:
+            vnic_repo = ctx.vnic_repo
+        if serial_repo is None:
+            serial_repo = ctx.serial_repo
+        if client_registry is None:
+            client_registry = ctx.client_registry
+        if interface_cache is None:
+            interface_cache = ctx.network_interface_cache
+    if network_commander is None:
+        network_commander = network_event_listener
+    return container_runtime, vnic_repo, serial_repo, client_registry, interface_cache, network_commander
 
 
 def _generate_mac_address() -> str:
@@ -100,7 +123,18 @@ def _validate_vnic_configs(vnic_configs: list) -> tuple[bool, str]:
     return True, ""
 
 
-def _create_runtime_container_sync(container_name: str, vnic_configs: list, serial_configs: list = None, runtime_version: str = None):
+def _create_runtime_container_sync(
+    container_name: str,
+    vnic_configs: list,
+    serial_configs: list = None,
+    runtime_version: str = None,
+    *,
+    container_runtime=None,
+    vnic_repo=None,
+    serial_repo=None,
+    client_registry=None,
+    interface_cache=None,
+):
     """
     Synchronous implementation of runtime container creation.
     This function contains all blocking Docker operations and runs in a background thread.
@@ -122,13 +156,25 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
             - container_path: Path inside container (e.g., "/dev/modbus0")
             - baud_rate: Baud rate for documentation purposes (optional)
         runtime_version: Version tag for the runtime image (optional, defaults to "latest")
+        container_runtime: Optional ContainerRuntimeRepo adapter (defaults to singleton)
+        vnic_repo: Optional VNICRepo adapter (defaults to singleton)
+        serial_repo: Optional SerialRepo adapter (defaults to singleton)
+        client_registry: Optional ClientRepo adapter (defaults to singleton)
+        interface_cache: Optional InterfaceCacheRepo adapter (defaults to singleton)
     """
+    container_runtime, vnic_repo, serial_repo, client_registry, interface_cache, _ = _resolve_deps(
+        container_runtime=container_runtime,
+        vnic_repo=vnic_repo,
+        serial_repo=serial_repo,
+        client_registry=client_registry,
+        interface_cache=interface_cache,
+    )
     if serial_configs is None:
         serial_configs = []
 
     log_debug(f'Attempting to create runtime container "{container_name}"')
 
-    if container_name in CLIENTS:
+    if client_registry.contains(container_name):
         log_error(f"Container name {container_name} is already in use.")
         set_error(container_name, "Container name is already in use", "create")
         return None
@@ -147,14 +193,14 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
         set_step(container_name, "pulling_image")
         log_info(f"Pulling image {image_name}")
         try:
-            CLIENT.images.pull(image_name)
+            container_runtime.pull_image(image_name)
             log_info(f"Image {image_name} pulled successfully")
-        except docker.errors.NotFound:
+        except container_runtime.NotFoundError:
             # Image doesn't exist in registry, check if available locally
             try:
-                CLIENT.images.get(image_name)
+                container_runtime.get_image(image_name)
                 log_warning(f"Image {image_name} not found in registry, using local image")
-            except docker.errors.ImageNotFound:
+            except container_runtime.ImageNotFound:
                 error_msg = f"Runtime version '{version_tag}' not found. The image {image_name} does not exist in the registry or locally."
                 log_error(error_msg)
                 set_error(container_name, error_msg, "create")
@@ -211,7 +257,7 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
         log_info(f"Creating container {container_name}")
 
         networking_config = {}
-        api_version = CLIENT.api.api_version
+        api_version = container_runtime.get_api_version()
 
         # Only MACVLAN networks are added to container at creation time
         # WiFi vNICs use Proxy ARP Bridge which is configured after container starts
@@ -240,7 +286,7 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
                 )
             endpoint_kwargs["mac_address"] = mac_address
 
-            networking_config[network.name] = docker.types.EndpointConfig(
+            networking_config[network.name] = container_runtime.create_endpoint_config(
                 version=api_version, **endpoint_kwargs
             )
             log_debug(
@@ -248,7 +294,7 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
             )
 
         ## Needed to avoid docker SDK setting 'None' networking_config
-        networking_config[internal_network.name] = docker.types.EndpointConfig(
+        networking_config[internal_network.name] = container_runtime.create_endpoint_config(
             version=api_version
         )
 
@@ -267,8 +313,8 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
             # - rtprio: Maximum real-time priority (99 is highest)
             # - memlock: Unlimited memory locking for future mlockall() support
             "ulimits": [
-                docker.types.Ulimit(name="rtprio", soft=99, hard=99),
-                docker.types.Ulimit(name="memlock", soft=-1, hard=-1),
+                container_runtime.create_ulimit(name="rtprio", soft=99, hard=99),
+                container_runtime.create_ulimit(name="memlock", soft=-1, hard=-1),
             ],
             # Device cgroup rules for serial port passthrough
             # These grant permission to access device classes without requiring container restart
@@ -288,7 +334,7 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
             create_kwargs["dns"] = unique_dns
             log_debug(f"Configuring DNS servers: {unique_dns}")
 
-        container = CLIENT.containers.create(**create_kwargs)
+        container = container_runtime.create_container(**create_kwargs)
 
         container.start()
         log_info(f"Container {container_name} created and started successfully")
@@ -301,7 +347,7 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
                     log_debug(
                         f"Connected {main_container.name} to internal network {internal_network.name}"
                     )
-                except docker.errors.APIError as e:
+                except container_runtime.APIError as e:
                     if (
                         "already exists" in str(e).lower()
                         or "already attached" in str(e).lower()
@@ -326,7 +372,7 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
 
         if internal_network.name in network_settings:
             ip_addr = network_settings[internal_network.name]["IPAddress"]
-            add_client(container_name, ip_addr)
+            client_registry.add_client(container_name, ip_addr)
             log_info(f"Container {container_name} has internal IP {ip_addr}")
         else:
             log_warning(
@@ -362,10 +408,10 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
                 "vnic_config": vnic_config,
             })
 
-        save_vnic_configs(container_name, vnic_configs)
+        vnic_repo.save_configs(container_name, vnic_configs)
 
         if serial_configs:
-            save_serial_configs(container_name, serial_configs)
+            serial_repo.save_configs(container_name, serial_configs)
             log_info(
                 f"Saved {len(serial_configs)} serial port configuration(s) for container {container_name}"
             )
@@ -413,7 +459,19 @@ def _create_runtime_container_sync(container_name: str, vnic_configs: list, seri
         return None
 
 
-async def create_runtime_container(container_name: str, vnic_configs: list, serial_configs: list = None, runtime_version: str = None):
+async def create_runtime_container(
+    container_name: str,
+    vnic_configs: list,
+    serial_configs: list = None,
+    runtime_version: str = None,
+    *,
+    container_runtime=None,
+    vnic_repo=None,
+    serial_repo=None,
+    client_registry=None,
+    interface_cache=None,
+    network_commander=None,
+):
     """
     Create a runtime container with MACVLAN or Proxy ARP Bridge networking for
     physical network bridging and an internal network for orchestrator communication.
@@ -430,9 +488,26 @@ async def create_runtime_container(container_name: str, vnic_configs: list, seri
         vnic_configs: List of virtual NIC configurations
         serial_configs: List of serial port configurations (optional)
         runtime_version: Version tag for the runtime image (optional, defaults to "latest")
+        container_runtime: Optional ContainerRuntimeRepo adapter (defaults to singleton)
+        vnic_repo: Optional VNICRepo adapter (defaults to singleton)
+        serial_repo: Optional SerialRepo adapter (defaults to singleton)
+        client_registry: Optional ClientRepo adapter (defaults to singleton)
+        interface_cache: Optional InterfaceCacheRepo adapter (defaults to singleton)
+        network_commander: Optional NetworkCommanderRepo adapter (defaults to singleton)
     """
+    _, vnic_repo, serial_repo, _, _, network_commander = _resolve_deps(
+        vnic_repo=vnic_repo,
+        serial_repo=serial_repo,
+        network_commander=network_commander,
+    )
+
     result = await asyncio.to_thread(
-        _create_runtime_container_sync, container_name, vnic_configs, serial_configs, runtime_version
+        _create_runtime_container_sync, container_name, vnic_configs, serial_configs, runtime_version,
+        container_runtime=container_runtime,
+        vnic_repo=vnic_repo,
+        serial_repo=serial_repo,
+        client_registry=client_registry,
+        interface_cache=interface_cache,
     )
 
     if result is None:
@@ -448,7 +523,7 @@ async def create_runtime_container(container_name: str, vnic_configs: list, seri
         set_step(container_name, "starting_dhcp")
         for vnic_name, mac_address, container_pid in dhcp_vnics:
             try:
-                await network_event_listener.start_dhcp(
+                await network_commander.start_dhcp(
                     container_name, vnic_name, mac_address, container_pid
                 )
                 log_info(f"Requested DHCP for MACVLAN vNIC {vnic_name} (MAC: {mac_address})")
@@ -476,7 +551,7 @@ async def create_runtime_container(container_name: str, vnic_configs: list, seri
                     if ip_address and gateway:
                         ip_address = ip_address.split("/")[0]
                         log_info(f"Setting up Proxy ARP Bridge for WiFi vNIC {vnic_name} (static IP) via netmon")
-                        await network_event_listener.setup_proxy_arp_bridge(
+                        await network_commander.setup_proxy_arp_bridge(
                             container_name, container_pid, parent_interface,
                             ip_address, gateway, subnet,
                         )
@@ -497,7 +572,7 @@ async def create_runtime_container(container_name: str, vnic_configs: list, seri
                     # DHCP mode - just request DHCP, netmon handles bridge setup
                     # when the lease arrives via its lease monitor
                     log_info(f"Requesting DHCP for WiFi vNIC {vnic_name} via Proxy ARP")
-                    result = await network_event_listener.request_wifi_dhcp(
+                    result = await network_commander.request_wifi_dhcp(
                         container_name, vnic_name, parent_interface, container_pid
                     )
                     if not result.get("success"):
@@ -507,13 +582,13 @@ async def create_runtime_container(container_name: str, vnic_configs: list, seri
                 log_warning(f"Failed to configure WiFi vNIC {vnic_name}: {e}")
 
         # Save updated vnic_configs (static WiFi vNICs have proxy_arp_config now)
-        save_vnic_configs(container_name, updated_vnic_configs)
+        vnic_repo.save_configs(container_name, updated_vnic_configs)
 
     # Trigger serial device sync for the newly created container
     # This creates device nodes for any serial devices that are already connected
     if serial_configs:
         try:
-            await network_event_listener.resync_serial_devices()
+            await network_commander.resync_serial_devices()
             log_info(f"Triggered serial device resync for container {container_name}")
         except Exception as e:
             log_warning(f"Failed to resync serial devices for {container_name}: {e}")

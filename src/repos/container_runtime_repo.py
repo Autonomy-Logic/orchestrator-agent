@@ -1,7 +1,7 @@
 from typing import Protocol, Any, List
 
 
-class ContainerRuntime(Protocol):
+class ContainerRuntimeRepo(Protocol):
     """Abstract interface for container runtime operations (e.g., Docker)."""
 
     def get_container(self, name: str) -> Any: ...

@@ -1,7 +1,7 @@
 from typing import Protocol
 
 
-class RuntimeHttpClient(Protocol):
+class HTTPClientRepo(Protocol):
     """Abstract interface for HTTP communication with runtime containers."""
 
     def make_request(

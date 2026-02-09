@@ -1,16 +1,19 @@
-from . import CLIENTS, remove_client, get_self_container
+from . import get_self_container
 from tools.operations_state import set_step, set_error, clear_state
 from tools.logger import *
-from tools.vnic_persistence import delete_vnic_configs, load_vnic_configs
-from tools.serial_persistence import delete_serial_configs
-from tools.docker_tools import CLIENT
 from tools.devices_usage_buffer import get_devices_usage_buffer
 from tools.network_event_listener import network_event_listener
-import docker
 import asyncio
 
 
-def _delete_runtime_container_sync(container_name: str):
+def _delete_runtime_container_sync(
+    container_name: str,
+    *,
+    container_runtime=None,
+    client_registry=None,
+    vnic_repo=None,
+    serial_repo=None,
+):
     """
     Synchronous implementation of runtime container deletion.
     This function contains all blocking Docker operations and runs in a background thread.
@@ -26,17 +29,32 @@ def _delete_runtime_container_sync(container_name: str):
 
     Args:
         container_name: Name of the runtime container to delete
+        container_runtime: Optional ContainerRuntimeRepo adapter (defaults to singleton)
+        client_registry: Optional ClientRepo adapter (defaults to singleton)
+        vnic_repo: Optional VNICRepo adapter (defaults to singleton)
+        serial_repo: Optional SerialRepo adapter (defaults to singleton)
     """
+    if any(dep is None for dep in [container_runtime, client_registry, vnic_repo, serial_repo]):
+        from bootstrap import get_context
+        ctx = get_context()
+        if container_runtime is None:
+            container_runtime = ctx.container_runtime
+        if client_registry is None:
+            client_registry = ctx.client_registry
+        if vnic_repo is None:
+            vnic_repo = ctx.vnic_repo
+        if serial_repo is None:
+            serial_repo = ctx.serial_repo
 
     log_debug(f'Attempting to delete runtime container "{container_name}"')
 
-    if container_name not in CLIENTS:
+    if not client_registry.contains(container_name):
         log_warning(f"Container {container_name} not found in client registry")
 
     try:
         set_step(container_name, "stopping_container")
         try:
-            container = CLIENT.containers.get(container_name)
+            container = container_runtime.get_container(container_name)
             log_info(f"Stopping container {container_name}")
             container.stop(timeout=10)
 
@@ -44,7 +62,7 @@ def _delete_runtime_container_sync(container_name: str):
             log_info(f"Removing container {container_name}")
             container.remove(force=True)
             log_info(f"Container {container_name} removed successfully")
-        except docker.errors.NotFound:
+        except container_runtime.NotFoundError:
             log_warning(
                 f"Container {container_name} not found, may have been already deleted"
             )
@@ -53,7 +71,7 @@ def _delete_runtime_container_sync(container_name: str):
             raise
 
         try:
-            remove_client(container_name)
+            client_registry.remove_client(container_name)
             log_debug(f"Removed {container_name} from client registry")
         except Exception as e:
             log_warning(f"Error removing {container_name} from client registry: {e}")
@@ -66,13 +84,13 @@ def _delete_runtime_container_sync(container_name: str):
             log_warning(f"Error removing {container_name} from usage buffer: {e}")
 
         try:
-            delete_vnic_configs(container_name)
+            vnic_repo.delete_configs(container_name)
             log_debug(f"Deleted vNIC configurations for {container_name}")
         except Exception as e:
             log_warning(f"Error deleting vNIC configurations for {container_name}: {e}")
 
         try:
-            delete_serial_configs(container_name)
+            serial_repo.delete_configs(container_name)
             log_debug(f"Deleted serial configurations for {container_name}")
         except Exception as e:
             log_warning(f"Error deleting serial configurations for {container_name}: {e}")
@@ -80,7 +98,7 @@ def _delete_runtime_container_sync(container_name: str):
         set_step(container_name, "removing_networks")
         internal_network_name = f"{container_name}_internal"
         try:
-            internal_network = CLIENT.networks.get(internal_network_name)
+            internal_network = container_runtime.get_network(internal_network_name)
 
             internal_network.reload()
             connected_containers = internal_network.attrs.get("Containers", {})
@@ -107,7 +125,7 @@ def _delete_runtime_container_sync(container_name: str):
             internal_network.remove()
             log_info(f"Internal network {internal_network_name} removed successfully")
 
-        except docker.errors.NotFound:
+        except container_runtime.NotFoundError:
             log_debug(
                 f"Internal network {internal_network_name} not found, may have been already deleted"
             )
@@ -129,7 +147,15 @@ def _delete_runtime_container_sync(container_name: str):
         raise
 
 
-async def delete_runtime_container(container_name: str):
+async def delete_runtime_container(
+    container_name: str,
+    *,
+    container_runtime=None,
+    client_registry=None,
+    vnic_repo=None,
+    serial_repo=None,
+    network_commander=None,
+):
     """
     Delete a runtime container and all associated resources.
 
@@ -138,11 +164,22 @@ async def delete_runtime_container(container_name: str):
 
     Args:
         container_name: Name of the runtime container to delete
+        container_runtime: Optional ContainerRuntimeRepo adapter (defaults to singleton)
+        client_registry: Optional ClientRepo adapter (defaults to singleton)
+        vnic_repo: Optional VNICRepo adapter (defaults to singleton)
+        serial_repo: Optional SerialRepo adapter (defaults to singleton)
+        network_commander: Optional NetworkCommanderRepo adapter (defaults to singleton)
     """
+    if vnic_repo is None:
+        from bootstrap import get_context
+        vnic_repo = get_context().vnic_repo
+    if network_commander is None:
+        network_commander = network_event_listener
+
     # Clean up Proxy ARP bridges via netmon before deleting container
     # This must be done before container removal to ensure routes are properly cleaned
     try:
-        all_vnic_configs = load_vnic_configs()
+        all_vnic_configs = vnic_repo.load_configs()
         vnic_configs = all_vnic_configs.get(container_name, [])
         for vnic_config in vnic_configs:
             proxy_arp_config = vnic_config.get("_proxy_arp_config")
@@ -153,7 +190,7 @@ async def delete_runtime_container(container_name: str):
                 if ip_address and parent_interface and veth_host:
                     log_info(f"Cleaning up Proxy ARP bridge for vNIC {vnic_config.get('name')}")
                     try:
-                        await network_event_listener.cleanup_proxy_arp_bridge(
+                        await network_commander.cleanup_proxy_arp_bridge(
                             container_name, ip_address, parent_interface, veth_host
                         )
                     except Exception as e:
@@ -161,4 +198,10 @@ async def delete_runtime_container(container_name: str):
     except Exception as e:
         log_warning(f"Error loading vNIC configs for Proxy ARP cleanup: {e}")
 
-    await asyncio.to_thread(_delete_runtime_container_sync, container_name)
+    await asyncio.to_thread(
+        _delete_runtime_container_sync, container_name,
+        container_runtime=container_runtime,
+        client_registry=client_registry,
+        vnic_repo=vnic_repo,
+        serial_repo=serial_repo,
+    )

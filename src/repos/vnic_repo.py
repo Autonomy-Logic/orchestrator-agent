@@ -1,7 +1,7 @@
 from typing import Protocol, Optional, Union
 
 
-class VnicRepository(Protocol):
+class VNICRepo(Protocol):
     """Abstract interface for vNIC configuration persistence."""
 
     def save_configs(self, container_name: str, vnic_configs: list) -> None: ...

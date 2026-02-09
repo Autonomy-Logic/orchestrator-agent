@@ -2,7 +2,7 @@ import base64
 from . import make_request
 
 
-def execute(instance, command):
+def execute(instance, command, *, http_client=None):
     """
     Execute an HTTP command on a runtime instance.
 
@@ -15,10 +15,14 @@ def execute(instance, command):
             - headers (optional): HTTP headers
             - data (optional): Request body data
             - params (optional): Query parameters
+        http_client: Optional HTTPClientRepo adapter (defaults to singleton)
 
     Returns:
         Dictionary with status_code, headers, body, ok, and content_type
     """
+    if http_client is None:
+        from bootstrap import get_context
+        http_client = get_context().http_client
     method = command.get("method")
     api = command.get("api")
     port = command.get("port", 8443)  # Default to 8443 for openplc-runtime
@@ -72,4 +76,4 @@ def execute(instance, command):
         if processed_files:
             content["files"] = processed_files
 
-    return make_request(method, ip, port, api, content)
+    return http_client.make_request(method, ip, port, api, content)

@@ -1,7 +1,7 @@
 from typing import Protocol, Optional, Dict
 
 
-class ClientRegistry(Protocol):
+class ClientRepo(Protocol):
     """Abstract interface for the runtime container client registry."""
 
     def add_client(self, name: str, ip: str) -> None: ...

@@ -1,7 +1,7 @@
 from typing import Protocol, Optional, Tuple, Dict
 
 
-class NetworkInterfaceCache(Protocol):
+class InterfaceCacheRepo(Protocol):
     """Abstract interface for the network interface discovery cache."""
 
     def get_interface_type(self, interface_name: str) -> str: ...
