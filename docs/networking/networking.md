@@ -49,7 +49,7 @@ When the host moves between networks (e.g., DHCP renewal to different subnet), t
 
 **Implementation:**
 - `src/use_cases/network_monitor/network_event_listener.py` - Event handling and reconnection
-- `src/use_cases/docker_manager/vnic_persistence.py` - vNIC configuration persistence
+- `src/repos/vnic_repo.py` - vNIC configuration persistence (backed by `JsonConfigStore`)
 
 ## vNIC Configuration
 

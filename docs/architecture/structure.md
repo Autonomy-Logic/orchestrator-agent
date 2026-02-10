@@ -22,10 +22,7 @@ orchestrator-agent/
 │   │   │       │   ├── get_device_status.py
 │   │   │       │   ├── get_host_interfaces.py
 │   │   │       │   ├── get_serial_devices.py
-│   │   │       │   ├── restart_device.py
-│   │   │       │   ├── run_command.py
-│   │   │       │   ├── start_device.py
-│   │   │       │   └── stop_device.py
+│   │   │       │   └── run_command.py
 │   │   │       └── emitters/               # Outgoing message handlers
 │   │   │           ├── __init__.py
 │   │   │           └── heartbeat.py        # Periodic heartbeat emitter
@@ -41,10 +38,29 @@ orchestrator-agent/
 │   │           ├── offer_handler.py        # SDP offer handling
 │   │           ├── ice_handler.py          # ICE candidate handling
 │   │           └── disconnect_handler.py   # Peer disconnect handling
+│   ├── repos/                              # Data persistence adapters
+│   │   ├── __init__.py
+│   │   ├── interfaces/                     # Abstract repository interfaces
+│   │   │   ├── __init__.py
+│   │   │   ├── container_runtime_repo_interface.py
+│   │   │   ├── vnic_repo_interface.py
+│   │   │   ├── serial_repo_interface.py
+│   │   │   ├── client_repo_interface.py
+│   │   │   ├── http_client_repo_interface.py
+│   │   │   ├── network_commander_repo_interface.py
+│   │   │   ├── network_interface_cache_repo_interface.py
+│   │   │   └── netmon_client_repo_interface.py
+│   │   ├── container_runtime_repo.py       # Docker API adapter
+│   │   ├── vnic_repo.py                    # vNIC config persistence (JsonConfigStore)
+│   │   ├── serial_repo.py                  # Serial port config persistence (JsonConfigStore)
+│   │   ├── client_repo.py                  # Runtime client registry
+│   │   ├── http_client_repo.py             # HTTP client for runtime commands
+│   │   ├── network_interface_cache_repo.py # Network interface cache
+│   │   └── netmon_client_repo.py           # Netmon sidecar communication
 │   ├── use_cases/                          # Business logic
 │   │   ├── __init__.py
 │   │   ├── docker_manager/                 # Container and network management
-│   │   │   ├── __init__.py                 # Docker client and registry
+│   │   │   ├── __init__.py                 # Self-detection + shared helpers
 │   │   │   ├── create_runtime_container.py # Runtime container creation
 │   │   │   ├── delete_runtime_container.py # Container deletion
 │   │   │   ├── get_device_status.py        # Container status queries
@@ -52,28 +68,32 @@ orchestrator-agent/
 │   │   ├── runtime_commands/               # Runtime command execution
 │   │   │   ├── __init__.py                 # HTTP request utilities
 │   │   │   └── run_command.py              # Command execution
-│   │   └── network_monitor/                # Network monitoring
-│   │       ├── __init__.py
-│   │       └── get_host_interfaces.py      # Host interface discovery
+│   │   ├── network_monitor/                # Network monitoring
+│   │   │   ├── __init__.py
+│   │   │   └── get_host_interfaces.py      # Host interface discovery
+│   │   ├── collect_device_stats.py         # Device stats collection
+│   │   ├── dhcp_manager.py                 # DHCP management
+│   │   ├── get_consumption_device.py       # Device consumption data
+│   │   ├── get_consumption_orchestrator.py # Orchestrator consumption data
+│   │   ├── get_serial_devices.py           # Serial device listing
+│   │   ├── network_reconnection.py         # Network reconnection logic
+│   │   └── serial_device_manager.py        # Serial device management
 │   └── tools/                              # Utilities
 │       ├── __init__.py
 │       ├── chunking.py                     # Message chunking protocol
-│       ├── contract_validation.py          # Message schema validation
+│       ├── contract_validation.py          # Message schema validation (incl. NonEmptyStringType)
 │       ├── devices_usage_buffer.py         # Device usage metrics buffer
 │       ├── dns_utils.py                    # DNS resolution utilities
-│       ├── docker_event_listener.py        # Docker event monitoring
-│       ├── docker_tools.py                 # Docker helper utilities
-│       ├── interface_cache.py              # Interface information cache
+│       ├── json_file.py                    # JSON file I/O and JsonConfigStore
 │       ├── logger.py                       # Logging with rotation
 │       ├── network_event_listener.py       # Network event listener and reconnection
-│       ├── operations_state.py             # Operation state tracking (race prevention)
-│       ├── serial_persistence.py           # Serial device persistence
+│       ├── network_utils.py                # Network helper utilities
+│       ├── operations_state.py             # Operation state tracking (incl. begin_operation)
 │       ├── ssl.py                          # mTLS configuration and agent ID
 │       ├── system_info.py                  # System information
-│       ├── system_metrics.py               # System metrics collection
+│       ├── system_metrics.py               # System metrics collection (incl. _iter_disk_usage)
 │       ├── usage_buffer.py                 # Usage metrics buffer
-│       ├── utils.py                        # General utilities
-│       └── vnic_persistence.py             # vNIC configuration persistence
+│       └── utils.py                        # General utilities
 ├── install/                                # Installation files
 │   ├── install.sh                          # Installation script
 │   ├── autonomy-netmon.py                  # Network monitor daemon
@@ -128,13 +148,16 @@ orchestrator-agent/
 Contains all source code for the orchestrator agent.
 
 ### src/controllers/
-Protocol handlers for WebSocket and WebRTC communication.
+Protocol handlers for WebSocket and WebRTC communication. Receiver handlers use the `@with_response` decorator to automatically wrap responses with `action` and `correlation_id`.
 
 ### src/use_cases/
-Business logic for Docker management, runtime commands, and network monitoring.
+Business logic for Docker management, runtime commands, and network monitoring. The `docker_manager/__init__.py` provides shared helpers: `stop_and_remove_container()` and `remove_internal_network()`.
+
+### src/repos/
+Data persistence adapters implementing repository interfaces. `VNICRepo` and `SerialRepo` use `JsonConfigStore` for thread-safe JSON file access. `ContainerRuntimeRepo` wraps the Docker API.
 
 ### src/tools/
-Utility modules for logging, SSL/mTLS, metrics, validation, persistence, and network/Docker event handling.
+Utility modules for logging, SSL/mTLS, metrics, validation, and network event handling. Key shared utilities: `JsonConfigStore` (thread-safe JSON persistence), `begin_operation()` (operation precondition checks), `_iter_disk_usage()` (disk partition iteration).
 
 ### install/
 Installation script and network monitor sidecar files.
