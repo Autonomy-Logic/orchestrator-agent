@@ -3,9 +3,10 @@ from tools.contract_validation import (
     BASE_MESSAGE,
     StringType,
 )
-from tools.system_info import get_cached_system_info, get_ip_addresses
+from tools.system_info import get_ip_addresses
 from tools.usage_buffer import get_usage_buffer
 from tools.utils import parse_period
+from bootstrap import get_context
 from . import topic, validate_message
 
 NAME = "get_consumption_orchestrator"
@@ -28,7 +29,8 @@ def init(client):
         cpu_period = message.get("cpuPeriod", "1h")
         memory_period = message.get("memoryPeriod", "1h")
 
-        system_info = get_cached_system_info()
+        ctx = get_context()
+        system_info = ctx.static_system_info
         usage_buffer = get_usage_buffer()
 
         cpu_start, cpu_end = parse_period(cpu_period)
@@ -37,9 +39,9 @@ def init(client):
         cpu_usage_data = usage_buffer.get_cpu_usage(cpu_start, cpu_end)
         memory_usage_data = usage_buffer.get_memory_usage(memory_start, memory_end)
 
-        # Fetch IP addresses dynamically from INTERFACE_CACHE (populated by netmon)
-        # since the static system_info cache is computed before netmon discovers interfaces
-        ip_addresses = get_ip_addresses()
+        # Fetch IP addresses dynamically from interface cache (populated by netmon)
+        # since the static system_info is computed before netmon discovers interfaces
+        ip_addresses = get_ip_addresses(ctx.network_interface_cache)
 
         response = {
             "action": NAME,

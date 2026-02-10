@@ -18,6 +18,7 @@ from repos import (
 from tools.operations_state import OperationsStateTracker
 from tools.devices_usage_buffer import DevicesUsageBuffer
 from tools.network_event_listener import NetworkEventListener
+from tools.system_info import get_static_system_info
 from tools.logger import log_info
 from use_cases.dhcp_manager import DHCPManager
 from use_cases.network_reconnection import NetworkReconnectionManager
@@ -47,6 +48,8 @@ class AppContext:
             reconnection_manager=self.reconnection_manager,
             serial_device_manager=self.serial_device_manager,
         )
+
+        self.static_system_info = get_static_system_info()
 
         # Register existing clients for usage data collection at bootstrap time
         clients = self.client_registry.list_clients()
