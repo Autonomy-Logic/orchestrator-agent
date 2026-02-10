@@ -2,7 +2,7 @@ import os
 import socket
 from tools.logger import log_debug, log_info, log_error, log_warning
 
-HOST_NAME = os.getenv("HOST_NAME", "orchestrator-agent-devcontainer")
+HOST_NAME = os.getenv("HOST_NAME", "orchestrator_agent")
 
 
 def get_self_container(*, container_runtime):

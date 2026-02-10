@@ -24,6 +24,9 @@
             ]
         }
     },
+    "containerEnv": {
+        "HOST_NAME": "orchestrator-agent-devcontainer"
+    },
     "forwardPorts": [22, 7676],
     "postCreateCommand": "",
     "remoteUser": "dev",

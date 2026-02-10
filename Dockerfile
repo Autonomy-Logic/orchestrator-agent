@@ -31,6 +31,8 @@ FROM base AS final
 COPY --from=builder-armv7 /wheels /wheels
 RUN pip install --no-cache-dir /wheels/*
 
+ENV HOST_NAME=orchestrator_agent
+
 # Copy source code
 COPY src/ ./src
 
