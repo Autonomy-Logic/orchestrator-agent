@@ -1,7 +1,9 @@
-from unittest.mock import patch
+import socket
+from unittest.mock import patch, MagicMock
 
 from tools.dns_utils import (
     parse_server_address,
+    wait_for_dns,
     calculate_backoff,
     is_dns_error,
     perform_dns_health_check,
@@ -90,4 +92,75 @@ class TestPerformDnsHealthCheck:
     @patch("tools.dns_utils.wait_for_dns", return_value=False)
     def test_fails_on_failed_dns(self, mock_wait):
         result = perform_dns_health_check("api.getedge.me:443", 1)
+        assert result is False
+
+
+class TestWaitForDns:
+    @patch("tools.dns_utils.sleep")
+    @patch("tools.dns_utils.socket")
+    def test_success_on_first_try(self, mock_socket, mock_sleep):
+        """DNS resolves on first attempt -> True."""
+        mock_socket.AF_UNSPEC = socket.AF_UNSPEC
+        mock_socket.SOCK_STREAM = socket.SOCK_STREAM
+        mock_socket.AI_ADDRCONFIG = socket.AI_ADDRCONFIG
+        mock_socket.gaierror = socket.gaierror
+        mock_socket.getaddrinfo.return_value = [("family", "type", "proto", "canon", ("1.2.3.4", 443))]
+
+        result = wait_for_dns("example.com", 443, max_retries=3)
+        assert result is True
+        mock_sleep.assert_not_called()
+
+    @patch("tools.dns_utils.sleep")
+    @patch("tools.dns_utils.socket")
+    def test_gaierror_all_retries(self, mock_socket, mock_sleep):
+        """DNS raises gaierror on every attempt -> False."""
+        mock_socket.AF_UNSPEC = socket.AF_UNSPEC
+        mock_socket.SOCK_STREAM = socket.SOCK_STREAM
+        mock_socket.AI_ADDRCONFIG = socket.AI_ADDRCONFIG
+        mock_socket.gaierror = socket.gaierror
+        mock_socket.getaddrinfo.side_effect = socket.gaierror("Name resolution failed")
+
+        result = wait_for_dns("bad.host", 443, max_retries=3)
+        assert result is False
+
+    @patch("tools.dns_utils.sleep")
+    @patch("tools.dns_utils.socket")
+    def test_generic_exception_all_retries(self, mock_socket, mock_sleep):
+        """DNS raises generic Exception on every attempt -> False."""
+        mock_socket.AF_UNSPEC = socket.AF_UNSPEC
+        mock_socket.SOCK_STREAM = socket.SOCK_STREAM
+        mock_socket.AI_ADDRCONFIG = socket.AI_ADDRCONFIG
+        mock_socket.gaierror = socket.gaierror
+        mock_socket.getaddrinfo.side_effect = OSError("network unreachable")
+
+        result = wait_for_dns("bad.host", 443, max_retries=2)
+        assert result is False
+
+    @patch("tools.dns_utils.sleep")
+    @patch("tools.dns_utils.socket")
+    def test_gaierror_then_success(self, mock_socket, mock_sleep):
+        """DNS fails first, succeeds second -> True."""
+        mock_socket.AF_UNSPEC = socket.AF_UNSPEC
+        mock_socket.SOCK_STREAM = socket.SOCK_STREAM
+        mock_socket.AI_ADDRCONFIG = socket.AI_ADDRCONFIG
+        mock_socket.gaierror = socket.gaierror
+        mock_socket.getaddrinfo.side_effect = [
+            socket.gaierror("fail"),
+            [("family", "type", "proto", "canon", ("1.2.3.4", 443))],
+        ]
+
+        result = wait_for_dns("example.com", 443, max_retries=3)
+        assert result is True
+
+    @patch("tools.dns_utils.sleep")
+    @patch("tools.dns_utils.socket")
+    def test_empty_result(self, mock_socket, mock_sleep):
+        """DNS returns empty list -> retries then False."""
+        mock_socket.AF_UNSPEC = socket.AF_UNSPEC
+        mock_socket.SOCK_STREAM = socket.SOCK_STREAM
+        mock_socket.AI_ADDRCONFIG = socket.AI_ADDRCONFIG
+        mock_socket.gaierror = socket.gaierror
+        mock_socket.getaddrinfo.return_value = []
+
+        result = wait_for_dns("example.com", 443, max_retries=1)
         assert result is False

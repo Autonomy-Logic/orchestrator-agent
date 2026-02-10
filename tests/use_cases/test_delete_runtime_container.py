@@ -1,8 +1,9 @@
 import pytest
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, AsyncMock, patch, call
 
 from use_cases.docker_manager.delete_runtime_container import (
     _delete_runtime_container_sync,
+    delete_runtime_container,
     start_deletion,
 )
 
@@ -103,6 +104,153 @@ class TestDeleteRuntimeContainerSync:
         serial_repo.delete_configs.assert_called_once()
         mock_remove_net.assert_called_once()
         ops.clear_state.assert_called_once_with("plc1")
+
+    @patch("use_cases.docker_manager.delete_runtime_container.stop_and_remove_container")
+    @patch("use_cases.docker_manager.delete_runtime_container.remove_internal_network")
+    def test_client_registry_not_contains_warns(self, mock_remove_net, mock_stop):
+        """client_registry.contains returns False logs warning but continues."""
+        runtime, registry, vnic_repo, serial_repo, ops, buffer = _make_deps()
+        registry.contains.return_value = False
+
+        _call_sync("plc1", runtime, registry, vnic_repo, serial_repo, ops, buffer)
+
+        # Deletion still proceeds
+        mock_stop.assert_called_once()
+        ops.clear_state.assert_called_once_with("plc1")
+
+    @patch("use_cases.docker_manager.delete_runtime_container.stop_and_remove_container")
+    @patch("use_cases.docker_manager.delete_runtime_container.remove_internal_network")
+    def test_usage_buffer_error_continues(self, mock_remove_net, mock_stop):
+        """devices_usage_buffer.remove_device error does not stop deletion."""
+        runtime, registry, vnic_repo, serial_repo, ops, buffer = _make_deps()
+        buffer.remove_device.side_effect = RuntimeError("buffer error")
+
+        _call_sync("plc1", runtime, registry, vnic_repo, serial_repo, ops, buffer)
+
+        vnic_repo.delete_configs.assert_called_once()
+        ops.clear_state.assert_called_once_with("plc1")
+
+    @patch("use_cases.docker_manager.delete_runtime_container.stop_and_remove_container")
+    @patch("use_cases.docker_manager.delete_runtime_container.remove_internal_network")
+    def test_vnic_repo_delete_error_continues(self, mock_remove_net, mock_stop):
+        """vnic_repo.delete_configs error does not stop deletion."""
+        runtime, registry, vnic_repo, serial_repo, ops, buffer = _make_deps()
+        vnic_repo.delete_configs.side_effect = RuntimeError("vnic error")
+
+        _call_sync("plc1", runtime, registry, vnic_repo, serial_repo, ops, buffer)
+
+        serial_repo.delete_configs.assert_called_once()
+        ops.clear_state.assert_called_once_with("plc1")
+
+    @patch("use_cases.docker_manager.delete_runtime_container.stop_and_remove_container")
+    @patch("use_cases.docker_manager.delete_runtime_container.remove_internal_network")
+    def test_serial_repo_delete_error_continues(self, mock_remove_net, mock_stop):
+        """serial_repo.delete_configs error does not stop deletion."""
+        runtime, registry, vnic_repo, serial_repo, ops, buffer = _make_deps()
+        serial_repo.delete_configs.side_effect = RuntimeError("serial error")
+
+        _call_sync("plc1", runtime, registry, vnic_repo, serial_repo, ops, buffer)
+
+        mock_remove_net.assert_called_once()
+        ops.clear_state.assert_called_once_with("plc1")
+
+
+class TestDeleteRuntimeContainerAsync:
+    @pytest.mark.asyncio
+    @patch("use_cases.docker_manager.delete_runtime_container._delete_runtime_container_sync")
+    @patch("use_cases.docker_manager.delete_runtime_container.asyncio")
+    async def test_proxy_arp_cleanup_before_thread(self, mock_asyncio, mock_sync):
+        """Proxy ARP cleanup called before deletion thread."""
+        runtime, registry, vnic_repo, serial_repo, ops, buffer = _make_deps()
+        commander = AsyncMock()
+        vnic_repo.load_configs.return_value = {
+            "plc1": [
+                {
+                    "name": "wifi_v1",
+                    "_proxy_arp_config": {
+                        "ip_address": "10.0.0.5",
+                        "parent_interface": "wlan0",
+                        "veth_host": "veth-plc1",
+                    },
+                }
+            ]
+        }
+
+        # mock asyncio.to_thread to just call the function
+        mock_asyncio.to_thread = AsyncMock()
+
+        await delete_runtime_container(
+            "plc1",
+            container_runtime=runtime,
+            client_registry=registry,
+            vnic_repo=vnic_repo,
+            serial_repo=serial_repo,
+            network_commander=commander,
+            operations_state=ops,
+            devices_usage_buffer=buffer,
+        )
+
+        commander.cleanup_proxy_arp_bridge.assert_called_once_with(
+            "plc1", "10.0.0.5", "wlan0", "veth-plc1"
+        )
+
+    @pytest.mark.asyncio
+    @patch("use_cases.docker_manager.delete_runtime_container._delete_runtime_container_sync")
+    @patch("use_cases.docker_manager.delete_runtime_container.asyncio")
+    async def test_proxy_arp_cleanup_exception_handled(self, mock_asyncio, mock_sync):
+        """Exception during Proxy ARP cleanup is handled gracefully."""
+        runtime, registry, vnic_repo, serial_repo, ops, buffer = _make_deps()
+        commander = AsyncMock()
+        vnic_repo.load_configs.side_effect = RuntimeError("load error")
+
+        mock_asyncio.to_thread = AsyncMock()
+
+        # Should not raise
+        await delete_runtime_container(
+            "plc1",
+            container_runtime=runtime,
+            client_registry=registry,
+            vnic_repo=vnic_repo,
+            serial_repo=serial_repo,
+            network_commander=commander,
+            operations_state=ops,
+            devices_usage_buffer=buffer,
+        )
+
+    @pytest.mark.asyncio
+    @patch("use_cases.docker_manager.delete_runtime_container._delete_runtime_container_sync")
+    @patch("use_cases.docker_manager.delete_runtime_container.asyncio")
+    async def test_proxy_arp_inner_exception_handled(self, mock_asyncio, mock_sync):
+        """Exception during individual Proxy ARP bridge cleanup is handled."""
+        runtime, registry, vnic_repo, serial_repo, ops, buffer = _make_deps()
+        commander = AsyncMock()
+        commander.cleanup_proxy_arp_bridge.side_effect = RuntimeError("cleanup failed")
+        vnic_repo.load_configs.return_value = {
+            "plc1": [
+                {
+                    "name": "wifi_v1",
+                    "_proxy_arp_config": {
+                        "ip_address": "10.0.0.5",
+                        "parent_interface": "wlan0",
+                        "veth_host": "veth-plc1",
+                    },
+                }
+            ]
+        }
+
+        mock_asyncio.to_thread = AsyncMock()
+
+        # Should not raise
+        await delete_runtime_container(
+            "plc1",
+            container_runtime=runtime,
+            client_registry=registry,
+            vnic_repo=vnic_repo,
+            serial_repo=serial_repo,
+            network_commander=commander,
+            operations_state=ops,
+            devices_usage_buffer=buffer,
+        )
 
 
 class TestStartDeletion:

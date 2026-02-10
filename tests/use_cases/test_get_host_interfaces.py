@@ -143,3 +143,27 @@ class TestGetHostInterfacesData:
         names = [i["name"] for i in result["interfaces"]]
         assert "eth0" in names
         assert "docker0" in names
+
+    def test_interface_no_ipv4_skipped(self):
+        """Interface with no IPv4 addresses and include_virtual=False is skipped."""
+        cache = MagicMock()
+        cache.get_all_interfaces.return_value = {
+            "eth0": {"addresses": []},
+        }
+
+        result = get_host_interfaces_data(
+            include_virtual=False, detailed=False, interface_cache=cache
+        )
+
+        assert result["status"] == "success"
+        assert len(result["interfaces"]) == 0
+
+    def test_exception_returns_error(self):
+        """Exception in get_host_interfaces_data returns error dict."""
+        cache = MagicMock()
+        cache.get_all_interfaces.side_effect = RuntimeError("cache broken")
+
+        result = get_host_interfaces_data(interface_cache=cache)
+
+        assert result["status"] == "error"
+        assert "Failed to retrieve" in result["error"]

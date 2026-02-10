@@ -1,5 +1,6 @@
 import json
 import os
+from unittest.mock import patch
 
 from tools.json_file import read_json_file, write_json_file, JsonConfigStore
 
@@ -20,6 +21,15 @@ class TestReadJsonFile:
         good_file.write_text('{"key": "value"}')
         result = read_json_file(str(good_file))
         assert result == {"key": "value"}
+
+    def test_generic_exception_returns_empty_dict(self, tmp_path):
+        """Lines 20-22: non-JSONDecodeError exception returns {}."""
+        good_file = tmp_path / "exists.json"
+        good_file.write_text('{"key": "value"}')
+
+        with patch("builtins.open", side_effect=PermissionError("denied")):
+            result = read_json_file(str(good_file))
+        assert result == {}
 
 
 class TestWriteJsonFile:

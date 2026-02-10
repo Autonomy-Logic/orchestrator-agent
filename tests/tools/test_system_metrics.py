@@ -9,6 +9,7 @@ from tools.system_metrics import (
     get_uptime,
     get_status,
     get_all_metrics,
+    _iter_disk_usage,
     _SKIP_FSTYPES,
 )
 
@@ -98,6 +99,62 @@ class TestGetAllMetrics:
             "disk_usage", "disk_total", "uptime", "status",
         }
         assert set(result.keys()) == expected_keys
+
+
+class TestIterDiskUsage:
+    @patch("tools.system_metrics.psutil")
+    def test_skips_tmpfs_partition(self, mock_psutil):
+        """Line 26: partitions with fstype in _SKIP_FSTYPES are skipped."""
+        tmpfs_partition = MagicMock()
+        tmpfs_partition.fstype = "tmpfs"
+        tmpfs_partition.device = "/dev/sda1"
+        tmpfs_partition.mountpoint = "/tmp"
+
+        real_partition = MagicMock()
+        real_partition.fstype = "ext4"
+        real_partition.device = "/dev/sdb1"
+        real_partition.mountpoint = "/"
+
+        mock_usage = MagicMock(total=100, used=50)
+        mock_psutil.disk_partitions.return_value = [tmpfs_partition, real_partition]
+        mock_psutil.disk_usage.return_value = mock_usage
+
+        results = list(_iter_disk_usage())
+
+        assert len(results) == 1
+        assert results[0] == mock_usage
+        # disk_usage should only be called for the real partition
+        mock_psutil.disk_usage.assert_called_once_with("/")
+
+    @patch("tools.system_metrics.psutil")
+    def test_skips_permission_error(self, mock_psutil):
+        """Lines 32-33: PermissionError from disk_usage is caught and skipped."""
+        partition = MagicMock()
+        partition.fstype = "ext4"
+        partition.device = "/dev/sda1"
+        partition.mountpoint = "/restricted"
+
+        mock_psutil.disk_partitions.return_value = [partition]
+        mock_psutil.disk_usage.side_effect = PermissionError("denied")
+
+        results = list(_iter_disk_usage())
+
+        assert len(results) == 0
+
+    @patch("tools.system_metrics.psutil")
+    def test_skips_os_error(self, mock_psutil):
+        """Lines 32-33: OSError from disk_usage is caught and skipped."""
+        partition = MagicMock()
+        partition.fstype = "ext4"
+        partition.device = "/dev/sda1"
+        partition.mountpoint = "/bad"
+
+        mock_psutil.disk_partitions.return_value = [partition]
+        mock_psutil.disk_usage.side_effect = OSError("no such device")
+
+        results = list(_iter_disk_usage())
+
+        assert len(results) == 0
 
 
 class TestSkipFstypes:

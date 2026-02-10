@@ -263,6 +263,209 @@ class TestRegisterDeviceCallback:
         assert cb in mgr.device_update_callbacks
 
 
+class TestCreateDeviceNode:
+    @pytest.mark.asyncio
+    @patch("use_cases.serial_device_manager.os")
+    async def test_stat_host_device_when_major_minor_none(self, mock_os):
+        """When major/minor are None, stat the host device to get them."""
+        mgr = _make_manager()
+        container = MagicMock()
+        container.status = "running"
+        mgr.container_runtime.get_container.return_value = container
+        exec_result = MagicMock()
+        exec_result.exit_code = 0
+        container.exec_run.return_value = exec_result
+
+        stat_result = MagicMock()
+        stat_result.st_rdev = 48128  # Example rdev
+        mock_os.stat.return_value = stat_result
+        mock_os.major.return_value = 188
+        mock_os.minor.return_value = 0
+
+        result = await mgr._create_device_node("plc1", "/dev/ttyUSB0", "/dev/modbus0", None, None)
+
+        assert result is True
+        mock_os.stat.assert_called_once_with("/dev/ttyUSB0")
+
+    @pytest.mark.asyncio
+    @patch("use_cases.serial_device_manager.os")
+    async def test_stat_host_device_fails(self, mock_os):
+        """OSError from os.stat returns False."""
+        mgr = _make_manager()
+        mock_os.stat.side_effect = OSError("no device")
+
+        result = await mgr._create_device_node("plc1", "/dev/ttyUSB0", "/dev/modbus0", None, None)
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_container_not_found(self):
+        """Container not found returns False."""
+        mgr = _make_manager()
+        mgr.container_runtime.get_container.side_effect = _NotFoundError
+
+        result = await mgr._create_device_node("plc1", "/dev/ttyUSB0", "/dev/modbus0", 188, 0)
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_container_not_running(self):
+        """Container not running returns False."""
+        mgr = _make_manager()
+        container = MagicMock()
+        container.status = "exited"
+        mgr.container_runtime.get_container.return_value = container
+
+        result = await mgr._create_device_node("plc1", "/dev/ttyUSB0", "/dev/modbus0", 188, 0)
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_rm_nonzero_exit_continues(self):
+        """rm exit_code != 0 logs debug but continues."""
+        mgr = _make_manager()
+        container = MagicMock()
+        container.status = "running"
+        mgr.container_runtime.get_container.return_value = container
+
+        rm_result = MagicMock()
+        rm_result.exit_code = 1
+
+        mknod_result = MagicMock()
+        mknod_result.exit_code = 0
+
+        chmod_result = MagicMock()
+        chmod_result.exit_code = 0
+
+        container.exec_run.side_effect = [rm_result, mknod_result, chmod_result]
+
+        result = await mgr._create_device_node("plc1", "/dev/ttyUSB0", "/dev/modbus0", 188, 0)
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_mknod_failure(self):
+        """mknod exit_code != 0 returns False."""
+        mgr = _make_manager()
+        container = MagicMock()
+        container.status = "running"
+        mgr.container_runtime.get_container.return_value = container
+
+        rm_result = MagicMock()
+        rm_result.exit_code = 0
+
+        mknod_result = MagicMock()
+        mknod_result.exit_code = 1
+        mknod_result.output = b"mknod: operation not permitted"
+
+        container.exec_run.side_effect = [rm_result, mknod_result]
+
+        result = await mgr._create_device_node("plc1", "/dev/ttyUSB0", "/dev/modbus0", 188, 0)
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_chmod_failure_still_returns_true(self):
+        """chmod exit_code != 0 logs warning but returns True."""
+        mgr = _make_manager()
+        container = MagicMock()
+        container.status = "running"
+        mgr.container_runtime.get_container.return_value = container
+
+        rm_result = MagicMock()
+        rm_result.exit_code = 0
+
+        mknod_result = MagicMock()
+        mknod_result.exit_code = 0
+
+        chmod_result = MagicMock()
+        chmod_result.exit_code = 1
+        chmod_result.output = b"chmod: failed"
+
+        container.exec_run.side_effect = [rm_result, mknod_result, chmod_result]
+
+        result = await mgr._create_device_node("plc1", "/dev/ttyUSB0", "/dev/modbus0", 188, 0)
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_generic_exception(self):
+        """Generic exception in _create_device_node returns False."""
+        mgr = _make_manager()
+        mgr.container_runtime.get_container.side_effect = RuntimeError("unexpected")
+
+        result = await mgr._create_device_node("plc1", "/dev/ttyUSB0", "/dev/modbus0", 188, 0)
+
+        assert result is False
+
+
+class TestRemoveDeviceNode:
+    @pytest.mark.asyncio
+    async def test_successful_removal(self):
+        """Successful device node removal returns True."""
+        mgr = _make_manager()
+        container = MagicMock()
+        container.status = "running"
+        mgr.container_runtime.get_container.return_value = container
+
+        result = MagicMock()
+        result.exit_code = 0
+        container.exec_run.return_value = result
+
+        ret = await mgr._remove_device_node("plc1", "/dev/modbus0")
+
+        assert ret is True
+
+    @pytest.mark.asyncio
+    async def test_container_not_running(self):
+        """Non-running container returns True (skips removal)."""
+        mgr = _make_manager()
+        container = MagicMock()
+        container.status = "exited"
+        mgr.container_runtime.get_container.return_value = container
+
+        ret = await mgr._remove_device_node("plc1", "/dev/modbus0")
+
+        assert ret is True
+
+    @pytest.mark.asyncio
+    async def test_container_not_found(self):
+        """Container not found returns True (skips removal)."""
+        mgr = _make_manager()
+        mgr.container_runtime.get_container.side_effect = _NotFoundError
+
+        ret = await mgr._remove_device_node("plc1", "/dev/modbus0")
+
+        assert ret is True
+
+    @pytest.mark.asyncio
+    async def test_rm_failure(self):
+        """rm failure returns False."""
+        mgr = _make_manager()
+        container = MagicMock()
+        container.status = "running"
+        mgr.container_runtime.get_container.return_value = container
+
+        result = MagicMock()
+        result.exit_code = 1
+        result.output = b"rm: cannot remove"
+        container.exec_run.return_value = result
+
+        ret = await mgr._remove_device_node("plc1", "/dev/modbus0")
+
+        assert ret is False
+
+    @pytest.mark.asyncio
+    async def test_generic_exception(self):
+        """Generic exception returns False."""
+        mgr = _make_manager()
+        mgr.container_runtime.get_container.side_effect = RuntimeError("unexpected")
+
+        ret = await mgr._remove_device_node("plc1", "/dev/modbus0")
+
+        assert ret is False
+
+
 class TestResyncSerialDevices:
     @pytest.mark.asyncio
     async def test_no_configured_ports(self):
@@ -375,4 +578,114 @@ class TestResyncSerialDevices:
 
         await mgr.resync_serial_devices()
 
+        mgr.serial_repo.update_status.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_incomplete_serial_config_skipped(self):
+        """Incomplete serial config (missing device_id or container_path) is skipped."""
+        mgr = _make_manager()
+        mgr.serial_repo.get_all_configured_ports.return_value = [
+            {
+                "container_name": "plc1",
+                "serial_config": {
+                    "name": "modbus",
+                },
+            }
+        ]
+
+        await mgr.resync_serial_devices()
+
+        mgr.container_runtime.get_container.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_resync_create_device_fails_updates_error(self):
+        """Failed device creation during resync updates status to error."""
+        mgr = _make_manager()
+        mgr.device_cache = {
+            "usb-FTDI-if00": {
+                "path": "/dev/ttyUSB0",
+                "by_id": "usb-FTDI-if00",
+                "major": 188,
+                "minor": 0,
+            }
+        }
+        mgr.serial_repo.get_all_configured_ports.return_value = [
+            {
+                "container_name": "plc1",
+                "serial_config": {
+                    "name": "modbus",
+                    "device_id": "usb-FTDI-if00",
+                    "container_path": "/dev/modbus0",
+                },
+            }
+        ]
+        container = MagicMock()
+        container.status = "running"
+        mgr.container_runtime.get_container.return_value = container
+
+        # mknod fails
+        rm_result = MagicMock()
+        rm_result.exit_code = 0
+        mknod_result = MagicMock()
+        mknod_result.exit_code = 1
+        mknod_result.output = b"mknod: failed"
+        container.exec_run.side_effect = [rm_result, mknod_result]
+
+        await mgr.resync_serial_devices()
+
+        mgr.serial_repo.update_status.assert_called_once_with("plc1", "modbus", "error")
+
+    @pytest.mark.asyncio
+    async def test_resync_exception_logged(self):
+        """Exception in _resync_serial_devices logs error."""
+        mgr = _make_manager()
+        mgr.serial_repo.get_all_configured_ports.side_effect = RuntimeError("db error")
+
+        # Should not raise
+        await mgr.resync_serial_devices()
+
+
+class TestNotifyDeviceCallbacks:
+    @pytest.mark.asyncio
+    async def test_callback_exception_handled(self):
+        """Exception in device callback is handled gracefully."""
+        mgr = _make_manager()
+        failing_cb = MagicMock(side_effect=RuntimeError("callback error"))
+        mgr.device_update_callbacks = [failing_cb]
+
+        # Should not raise
+        await mgr._notify_device_callbacks("plc1", "modbus", "connected", {})
+
+        failing_cb.assert_called_once()
+
+
+class TestHandleDeviceChangeFailedCreate:
+    @pytest.mark.asyncio
+    async def test_add_device_create_fails_logs_error(self):
+        """Failed device node creation logs error (line 103)."""
+        mgr = _make_manager()
+        mgr.serial_repo.get_by_device_id.return_value = [
+            {
+                "container_name": "plc1",
+                "serial_config": {
+                    "name": "modbus",
+                    "device_id": "usb-FTDI",
+                    "container_path": "/dev/modbus0",
+                },
+            }
+        ]
+        # Container not found → _create_device_node returns False
+        mgr.container_runtime.get_container.side_effect = _NotFoundError
+
+        await mgr.handle_device_change({
+            "action": "add",
+            "device": {
+                "path": "/dev/ttyUSB0",
+                "by_id": "usb-FTDI-if00",
+                "major": 188,
+                "minor": 0,
+            },
+        })
+
+        # update_status should NOT be called since creation failed
         mgr.serial_repo.update_status.assert_not_called()

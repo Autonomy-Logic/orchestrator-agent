@@ -108,6 +108,30 @@ class TestExecute:
         files = content["files"]
         assert files["program"] == ("test.zip", raw_bytes, "application/zip")
 
+    def test_base64_file_empty_content_skipped(self):
+        """Base64 file with empty content_base64 is skipped."""
+        http_client = MagicMock()
+        http_client.make_request.return_value = {"ok": True}
+
+        instance = {"ip": "172.18.0.2"}
+        command = {
+            "method": "POST",
+            "api": "/api/upload",
+            "files": {
+                "program": {
+                    "filename": "test.zip",
+                    "content_base64": "",
+                    "content_type": "application/zip",
+                }
+            },
+        }
+
+        execute(instance, command, http_client=http_client)
+
+        call_args = http_client.make_request.call_args
+        content = call_args[0][4]
+        assert "files" not in content
+
     def test_raw_file_passthrough(self):
         """Non-base64 files passed through unchanged."""
         http_client = MagicMock()

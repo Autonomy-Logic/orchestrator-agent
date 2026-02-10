@@ -108,6 +108,48 @@ class TestExtractAgentId:
             os.unlink(cert_path)
             os.unlink(key_path)
 
+    def test_cert_without_cn_returns_unknown(self):
+        """Lines 56-57: cert with no CN attribute returns 'UNKNOWN'."""
+        # Create a cert with only ORGANIZATION_NAME, no CN
+        key = rsa.generate_private_key(
+            public_exponent=65537, key_size=2048, backend=default_backend()
+        )
+        subject = issuer = x509.Name([
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "TestOrg"),
+        ])
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(datetime.datetime.utcnow())
+            .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=1))
+            .sign(key, hashes.SHA256(), default_backend())
+        )
+
+        cert_file = tempfile.NamedTemporaryFile(suffix=".crt", delete=False)
+        cert_file.write(cert.public_bytes(serialization.Encoding.PEM))
+        cert_file.close()
+
+        key_file = tempfile.NamedTemporaryFile(suffix=".key", delete=False)
+        key_file.write(key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption(),
+        ))
+        key_file.close()
+
+        try:
+            ssl_mod = _import_ssl_module(cert_file.name, key_file.name)
+            # Point client_cert at the no-CN cert
+            with patch.object(ssl_mod, "client_cert", cert_file.name):
+                result = ssl_mod._extract_agent_id()
+            assert result == "UNKNOWN"
+        finally:
+            os.unlink(cert_file.name)
+            os.unlink(key_file.name)
+
     def test_get_ssl_session(self):
         """get_ssl_session returns a ClientSession."""
         import asyncio

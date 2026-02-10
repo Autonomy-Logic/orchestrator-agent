@@ -87,6 +87,34 @@ class TestReconnectContainers:
         })
 
     @pytest.mark.asyncio
+    async def test_generic_exception_in_reconnect(self):
+        """Generic exception during reconnect for specific container is handled."""
+        mgr = _make_manager()
+        mgr.interface_cache.get_interface_type.return_value = "ethernet"
+        mgr.vnic_repo.load_configs.return_value = {
+            "plc1": [{"name": "v1", "parent_interface": "eth0"}]
+        }
+        mgr.container_runtime.get_container.side_effect = RuntimeError("Docker error")
+
+        # Should not raise
+        await mgr.reconnect_containers("eth0", {
+            "ipv4_addresses": [{"subnet": "192.168.1.0/24"}],
+            "gateway": "192.168.1.1",
+        })
+
+    @pytest.mark.asyncio
+    async def test_outer_exception_in_reconnect_containers(self):
+        """Outer exception wrapping reconnect_containers is handled (lines 88-89)."""
+        mgr = _make_manager()
+        mgr.vnic_repo.load_configs.side_effect = RuntimeError("db error")
+
+        # Should not raise
+        await mgr.reconnect_containers("eth0", {
+            "ipv4_addresses": [{"subnet": "192.168.1.0/24"}],
+            "gateway": "192.168.1.1",
+        })
+
+    @pytest.mark.asyncio
     async def test_dispatches_macvlan_for_ethernet(self):
         """Ethernet interface dispatches to _reconnect_macvlan_vnic."""
         mgr = _make_manager()
@@ -189,6 +217,36 @@ class TestReconnectMacvlanVnic:
         new_network.connect.assert_called_once_with(container, mac_address="02:00:00:00:00:01")
 
     @pytest.mark.asyncio
+    async def test_disconnect_old_network_exception(self):
+        """Exception disconnecting from old network is handled gracefully."""
+        mgr = _make_manager()
+        container = MagicMock()
+        container.attrs = {
+            "NetworkSettings": {
+                "Networks": {"macvlan_eth0_old": {"IPAddress": "192.168.1.100"}}
+            }
+        }
+
+        old_network = MagicMock()
+        old_network.attrs = {"IPAM": {"Config": [{"Subnet": "192.168.1.0/24"}]}}
+        old_network.disconnect.side_effect = RuntimeError("disconnect failed")
+
+        new_network = MagicMock()
+        new_network.name = "macvlan_eth0_new"
+
+        mgr.container_runtime.get_network.return_value = old_network
+        mgr.container_runtime.get_or_create_macvlan_network.return_value = new_network
+
+        # Should not raise
+        await mgr._reconnect_macvlan_vnic(
+            container, "plc1",
+            {"name": "v1", "parent_interface": "eth0", "network_mode": "dhcp"},
+            "eth0", "10.0.0.0/24", "10.0.0.1",
+        )
+
+        new_network.connect.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_static_ip_passed_to_connect(self):
         """Static mode passes ipv4_address to connect."""
         mgr = _make_manager()
@@ -283,6 +341,112 @@ class TestReconnectWifiVnic:
             "plc1", 1234, "wlan0", "10.0.0.50", "10.0.0.1", "255.255.255.0"
         )
         mgr.vnic_repo.save_configs.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_old_proxy_arp_exception(self):
+        """Exception cleaning up old Proxy ARP config is handled."""
+        mgr = _make_manager()
+        container = MagicMock()
+        container.attrs = {"State": {"Pid": 1234}}
+        mgr.netmon_client.cleanup_proxy_arp_bridge.side_effect = RuntimeError("cleanup error")
+
+        vnic_config = {
+            "name": "wifi_v1",
+            "parent_interface": "wlan0",
+            "network_mode": "dhcp",
+            "_proxy_arp_config": {
+                "ip_address": "192.168.1.50",
+                "veth_host": "veth-plc1",
+            },
+        }
+
+        # Should not raise, continues to DHCP request
+        await mgr._reconnect_wifi_vnic(
+            container, "plc1", vnic_config, "wlan0", "10.0.0.0/24", "10.0.0.1"
+        )
+
+        mgr.netmon_client.request_wifi_dhcp.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_static_wifi_no_ip_logs_error(self):
+        """Static WiFi with no IP configured logs error."""
+        mgr = _make_manager()
+        container = MagicMock()
+        container.attrs = {"State": {"Pid": 1234}}
+
+        vnic_config = {
+            "name": "wifi_v1",
+            "parent_interface": "wlan0",
+            "network_mode": "static",
+            "_proxy_arp_config": {},
+        }
+
+        await mgr._reconnect_wifi_vnic(
+            container, "plc1", vnic_config, "wlan0", "10.0.0.0/24", "10.0.0.1"
+        )
+
+        mgr.netmon_client.setup_proxy_arp_bridge.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_static_wifi_setup_exception(self):
+        """Exception during static WiFi setup is handled (lines 221-222)."""
+        mgr = _make_manager()
+        container = MagicMock()
+        container.attrs = {"State": {"Pid": 1234}}
+        mgr.netmon_client.setup_proxy_arp_bridge.side_effect = RuntimeError("netmon error")
+
+        vnic_config = {
+            "name": "wifi_v1",
+            "parent_interface": "wlan0",
+            "network_mode": "static",
+            "ip": "10.0.0.50",
+            "subnet": "255.255.255.0",
+            "_proxy_arp_config": {},
+        }
+
+        # Should not raise
+        await mgr._reconnect_wifi_vnic(
+            container, "plc1", vnic_config, "wlan0", "10.0.0.0/24", "10.0.0.1"
+        )
+
+    @pytest.mark.asyncio
+    async def test_dhcp_wifi_not_success(self):
+        """WiFi DHCP request returns not success (line 232)."""
+        mgr = _make_manager()
+        container = MagicMock()
+        container.attrs = {"State": {"Pid": 1234}}
+        mgr.netmon_client.request_wifi_dhcp.return_value = {"success": False, "error": "timeout"}
+
+        vnic_config = {
+            "name": "wifi_v1",
+            "parent_interface": "wlan0",
+            "network_mode": "dhcp",
+            "_proxy_arp_config": {},
+        }
+
+        await mgr._reconnect_wifi_vnic(
+            container, "plc1", vnic_config, "wlan0", "10.0.0.0/24", "10.0.0.1"
+        )
+
+    @pytest.mark.asyncio
+    async def test_dhcp_wifi_request_exception(self):
+        """Exception during WiFi DHCP request is handled."""
+        mgr = _make_manager()
+        container = MagicMock()
+        container.attrs = {"State": {"Pid": 1234}}
+        mgr.netmon_client.request_wifi_dhcp.side_effect = RuntimeError("network error")
+
+        vnic_config = {
+            "name": "wifi_v1",
+            "parent_interface": "wlan0",
+            "network_mode": "dhcp",
+            "_proxy_arp_config": {},
+        }
+
+        # Should not raise
+        await mgr._reconnect_wifi_vnic(
+            container, "plc1", vnic_config, "wlan0", "10.0.0.0/24", "10.0.0.1"
+        )
 
     @pytest.mark.asyncio
     async def test_invalid_pid_returns_early(self):

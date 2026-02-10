@@ -339,6 +339,202 @@ class TestGetDeviceStatusData:
         assert net["ip_address"] == "192.168.1.200"
         assert net["gateway"] == "192.168.1.1"
 
+    def test_serial_port_exception_returns_empty(self):
+        """Exception in get_serial_port_status returns empty list."""
+        serial_repo = MagicMock()
+        serial_repo.load_configs.side_effect = RuntimeError("db error")
+
+        result = get_serial_port_status("plc1", serial_repo=serial_repo)
+        assert result == []
+
+    def test_device_info_generic_exception(self):
+        """Generic exception in get_device_info returns N/A values."""
+        runtime = _make_runtime()
+        container = MagicMock()
+        container.attrs = {"HostConfig": {}}
+        runtime.get_container.return_value = container
+        container.reload.side_effect = RuntimeError("reload failed")
+
+        result = get_device_info("plc1", container_runtime=runtime)
+
+        assert result["cpu_count"] == "N/A"
+        assert result["memory_limit"] == "N/A"
+
+    def test_operation_deleting(self):
+        """Deleting operation state returns message with 'being deleted'."""
+        runtime, registry, vnic_repo, serial_repo, ops = self._make_deps()
+        ops.get_state.return_value = {
+            "status": "deleting",
+            "operation": "delete",
+            "step": "stopping_container",
+            "error": None,
+            "started_at": "2024-01-01T00:00:00",
+            "updated_at": "2024-01-01T00:00:01",
+        }
+
+        result = self._call("plc1", runtime, registry, vnic_repo, serial_repo, ops)
+
+        assert result["status"] == "deleting"
+        assert "being deleted" in result["message"]
+
+    def test_uptime_calculation_exception(self):
+        """Exception in uptime calculation logs warning."""
+        runtime, registry, vnic_repo, serial_repo, ops = self._make_deps()
+        ops.get_state.return_value = None
+
+        container = MagicMock()
+        container.attrs = {
+            "State": {
+                "Status": "running",
+                "Running": True,
+                "StartedAt": "invalid-date-format",
+                "RestartCount": 0,
+            },
+            "NetworkSettings": {"Networks": {}},
+        }
+        runtime.get_container.return_value = container
+        vnic_repo.load_configs.return_value = []
+        registry.get_client.return_value = None
+        serial_repo.load_configs.return_value = {"serial_ports": []}
+
+        result = self._call("plc1", runtime, registry, vnic_repo, serial_repo, ops)
+
+        assert result["status"] == "success"
+        assert "uptime_seconds" not in result
+
+    def test_dhcp_ip_fallback_by_parent_interface(self):
+        """DHCP IP fallback by parent_interface matching when docker_network_name is not set."""
+        runtime, registry, vnic_repo, serial_repo, ops = self._make_deps()
+        ops.get_state.return_value = None
+
+        container = MagicMock()
+        container.attrs = {
+            "State": {"Status": "running", "Running": True, "RestartCount": 0},
+            "NetworkSettings": {
+                "Networks": {
+                    "macvlan_eth0_10_0_0_0_24": {
+                        "IPAddress": "0.0.0.0",
+                        "MacAddress": "02:42:ac:11:00:02",
+                        "Gateway": "",
+                    }
+                }
+            },
+        }
+        runtime.get_container.return_value = container
+        vnic_repo.load_configs.return_value = [
+            {
+                "parent_interface": "eth0",
+                "dhcp_ip": "10.0.0.50",
+                "dhcp_gateway": "10.0.0.1",
+            }
+        ]
+        registry.get_client.return_value = None
+        serial_repo.load_configs.return_value = {"serial_ports": []}
+
+        result = self._call("plc1", runtime, registry, vnic_repo, serial_repo, ops)
+
+        net = result["networks"]["macvlan_eth0_10_0_0_0_24"]
+        assert net["ip_address"] == "10.0.0.50"
+        assert net["gateway"] == "10.0.0.1"
+
+    def test_dhcp_ip_override_with_gateway(self):
+        """DHCP IP override includes gateway when present."""
+        runtime, registry, vnic_repo, serial_repo, ops = self._make_deps()
+        ops.get_state.return_value = None
+
+        container = MagicMock()
+        container.attrs = {
+            "State": {"Status": "running", "Running": True, "RestartCount": 0},
+            "NetworkSettings": {
+                "Networks": {
+                    "macvlan_eth0_net": {
+                        "IPAddress": "0.0.0.0",
+                        "MacAddress": "02:42:ac:11:00:02",
+                        "Gateway": "",
+                    }
+                }
+            },
+        }
+        runtime.get_container.return_value = container
+        vnic_repo.load_configs.return_value = [
+            {
+                "docker_network_name": "macvlan_eth0_net",
+                "dhcp_ip": "192.168.1.50",
+                "dhcp_gateway": "192.168.1.1",
+            }
+        ]
+        registry.get_client.return_value = None
+        serial_repo.load_configs.return_value = {"serial_ports": []}
+
+        result = self._call("plc1", runtime, registry, vnic_repo, serial_repo, ops)
+
+        net = result["networks"]["macvlan_eth0_net"]
+        assert net["ip_address"] == "192.168.1.50"
+        assert net["gateway"] == "192.168.1.1"
+
+    def test_health_status_included(self):
+        """Health status from container state is included."""
+        runtime, registry, vnic_repo, serial_repo, ops = self._make_deps()
+        ops.get_state.return_value = None
+
+        container = MagicMock()
+        container.attrs = {
+            "State": {
+                "Status": "running",
+                "Running": True,
+                "RestartCount": 0,
+                "Health": {"Status": "healthy"},
+            },
+            "NetworkSettings": {"Networks": {}},
+        }
+        runtime.get_container.return_value = container
+        vnic_repo.load_configs.return_value = []
+        registry.get_client.return_value = None
+        serial_repo.load_configs.return_value = {"serial_ports": []}
+
+        result = self._call("plc1", runtime, registry, vnic_repo, serial_repo, ops)
+
+        assert result["health_status"] == "healthy"
+
+    def test_serial_ports_included(self):
+        """Serial ports included in response when configured."""
+        runtime, registry, vnic_repo, serial_repo, ops = self._make_deps()
+        ops.get_state.return_value = None
+
+        container = MagicMock()
+        container.attrs = {
+            "State": {"Status": "running", "Running": True, "RestartCount": 0},
+            "NetworkSettings": {"Networks": {}},
+        }
+        runtime.get_container.return_value = container
+        vnic_repo.load_configs.return_value = []
+        registry.get_client.return_value = None
+        serial_repo.load_configs.return_value = {
+            "serial_ports": [
+                {
+                    "name": "modbus",
+                    "device_id": "usb-FTDI",
+                    "container_path": "/dev/modbus0",
+                    "status": "connected",
+                }
+            ]
+        }
+
+        result = self._call("plc1", runtime, registry, vnic_repo, serial_repo, ops)
+
+        assert "serial_ports" in result
+        assert len(result["serial_ports"]) == 1
+
+    def test_generic_exception_returns_error(self):
+        """Generic exception returns status='error'."""
+        runtime, registry, vnic_repo, serial_repo, ops = self._make_deps()
+        ops.get_state.side_effect = RuntimeError("unexpected error")
+
+        result = self._call("plc1", runtime, registry, vnic_repo, serial_repo, ops)
+
+        assert result["status"] == "error"
+        assert "Failed to retrieve" in result["error"]
+
     def test_stopped_container_exit_code(self):
         """Not running → includes exit_code."""
         runtime, registry, vnic_repo, serial_repo, ops = self._make_deps()

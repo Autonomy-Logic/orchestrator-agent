@@ -1,6 +1,8 @@
 import pytest
+from unittest.mock import MagicMock
 
 from tools.contract_validation import (
+    BaseType,
     StringType,
     NonEmptyStringType,
     NumberType,
@@ -8,6 +10,7 @@ from tools.contract_validation import (
     DateType,
     ListType,
     OptionalType,
+    ContractValidationError,
     validate_contract,
     validate_contract_with_error_response,
     BASE_MESSAGE,
@@ -250,3 +253,47 @@ class TestSchemaConstants:
 
     def test_base_device_valid(self):
         validate_contract(BASE_DEVICE, {"device_id": "my-device-001"})
+
+
+# --- BaseType ---
+
+
+class TestBaseType:
+    def test_cannot_instantiate(self):
+        with pytest.raises(Exception, match="Cannot instantiate"):
+            BaseType()
+
+    def test_validate_raises_not_implemented(self):
+        with pytest.raises(NotImplementedError):
+            BaseType.validate()
+
+
+# --- ContractValidationError ---
+
+
+class TestContractValidationError:
+    def test_stores_fields(self):
+        err = ContractValidationError("type_err", "bad value")
+        assert err.error_type == "type_err"
+        assert err.message == "bad value"
+        assert str(err) == "bad value"
+
+
+# --- Generic Exception in validate_contract_with_error_response ---
+
+
+class TestValidateContractGenericException:
+    def test_generic_exception_returns_error(self):
+        """Line 163-165: catch non-KeyError/TypeError Exception."""
+        # Create a mock type whose validate() raises ValueError
+        bad_type = MagicMock()
+        bad_type.validate.side_effect = ValueError("something went wrong")
+
+        schema = {"field": bad_type}
+        is_valid, error = validate_contract_with_error_response(
+            schema, {"field": "anything"}
+        )
+        assert is_valid is False
+        assert error["status"] == "error"
+        assert "Validation error" in error["error"]
+        assert "something went wrong" in error["error"]

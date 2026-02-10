@@ -201,6 +201,15 @@ class TestRoundtrip:
 
         assert result == original
 
+    def test_unknown_msg_type_returns_none(self):
+        """handle_chunk_message with unknown type returns None (line 181)."""
+        r = ChunkReassembler()
+        result = r.handle_chunk_message({
+            "type": "unknown_type",
+            "transfer_id": "x",
+        })
+        assert result is None
+
     def test_split_and_reassemble_large(self):
         # Test with message that produces multiple chunk_data messages
         original = "B" * (CHUNK_PAYLOAD_SIZE * 3 + 500)

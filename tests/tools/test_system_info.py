@@ -1,3 +1,4 @@
+import sys
 from unittest.mock import MagicMock, patch
 
 from tools.system_info import (
@@ -6,6 +7,8 @@ from tools.system_info import (
     get_total_memory,
     get_cpu_count,
     get_kernel_version,
+    get_os_info,
+    get_total_disk,
     get_static_system_info,
 )
 
@@ -144,6 +147,64 @@ class TestGetKernelVersion:
         mock_platform.release.return_value = "5.15.0-generic"
 
         assert get_kernel_version() == "5.15.0-generic"
+
+
+class TestGetOsInfo:
+    def test_distro_returns_name(self):
+        """distro module available and returns non-empty name."""
+        mock_distro = MagicMock()
+        mock_distro.name.return_value = "Ubuntu 22.04 LTS"
+
+        with patch.dict(sys.modules, {"distro": mock_distro}):
+            result = get_os_info()
+
+        assert result == "Ubuntu 22.04 LTS"
+
+    def test_distro_import_error_fallback(self):
+        """distro import fails -> fallback to platform."""
+        # Remove distro from sys.modules to force ImportError
+        original = sys.modules.get("distro")
+        sys.modules["distro"] = None  # Causes ImportError on `import distro`
+        try:
+            with patch("tools.system_info.platform") as mock_platform:
+                mock_platform.system.return_value = "Linux"
+                mock_platform.release.return_value = "5.15.0"
+                result = get_os_info()
+
+            assert result == "Linux 5.15.0"
+        finally:
+            if original is not None:
+                sys.modules["distro"] = original
+            else:
+                sys.modules.pop("distro", None)
+
+    def test_distro_returns_empty_fallback(self):
+        """distro.name() returns empty string -> fallback to platform."""
+        mock_distro = MagicMock()
+        mock_distro.name.return_value = ""
+
+        with patch.dict(sys.modules, {"distro": mock_distro}):
+            with patch("tools.system_info.platform") as mock_platform:
+                mock_platform.system.return_value = "Linux"
+                mock_platform.release.return_value = "6.1.0"
+                result = get_os_info()
+
+        assert result == "Linux 6.1.0"
+
+
+class TestGetTotalDisk:
+    @patch("tools.system_info._iter_disk_usage")
+    def test_returns_int_gb(self, mock_iter):
+        """get_total_disk returns sum of totals in GB as int."""
+        usage1 = MagicMock()
+        usage1.total = 100 * (1024 ** 3)  # 100 GB
+        usage2 = MagicMock()
+        usage2.total = 50 * (1024 ** 3)  # 50 GB
+        mock_iter.return_value = [usage1, usage2]
+
+        result = get_total_disk()
+        assert result == 150
+        assert isinstance(result, int)
 
 
 class TestGetStaticSystemInfo:
