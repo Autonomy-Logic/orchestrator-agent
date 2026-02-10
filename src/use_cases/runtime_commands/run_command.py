@@ -1,5 +1,4 @@
 import base64
-from . import make_request
 from bootstrap import get_context
 
 
