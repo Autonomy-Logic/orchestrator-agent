@@ -1,4 +1,4 @@
-from use_cases.docker_manager.create_runtime_container import create_runtime_container
+from use_cases.docker_manager.create_runtime_container import start_creation
 from tools.logger import *
 from tools.contract_validation import (
     StringType,
@@ -7,9 +7,7 @@ from tools.contract_validation import (
     BASE_MESSAGE,
     SERIAL_CONFIG_TYPE,
 )
-from bootstrap import get_context
 from . import topic, validate_message
-import asyncio
 
 NAME = "create_new_runtime"
 
@@ -78,44 +76,11 @@ def init(client):
                 "error": "At least one vNIC configuration is required",
             }
 
-        operations_state = get_context().operations_state
-
-        in_progress, operation_type = operations_state.is_operation_in_progress(container_name)
-        if in_progress:
-            log_warning(
-                f"Container {container_name} already has a {operation_type} operation in progress"
-            )
-            return {
-                "action": NAME,
-                "correlation_id": correlation_id,
-                "status": "error",
-                "error": f"Container {container_name} already has a {operation_type} operation in progress",
-            }
-
-        if not operations_state.set_creating(container_name):
-            log_error(
-                f"Failed to set creating state for {container_name} (race condition)"
-            )
-            return {
-                "action": NAME,
-                "correlation_id": correlation_id,
-                "status": "error",
-                "error": f"Failed to start creation for {container_name}",
-            }
-
-        log_info(f"Creating runtime container: {container_name}")
-        if serial_configs:
-            log_info(f"Container {container_name} will have {len(serial_configs)} serial port(s) configured")
-
-        asyncio.create_task(
-            create_runtime_container(container_name, vnic_configs, serial_configs, runtime_version)
+        result, started = await start_creation(
+            container_name, vnic_configs, serial_configs, runtime_version
         )
-
-        return {
-            "action": NAME,
-            "correlation_id": correlation_id,
-            "status": "creating",
-            "container_id": container_name,
-            "message": f"Container creation started for {container_name}",
-            "serial_configs_count": len(serial_configs) if serial_configs else 0,
-        }
+        result["action"] = NAME
+        result["correlation_id"] = correlation_id
+        if started and serial_configs:
+            result["serial_configs_count"] = len(serial_configs)
+        return result

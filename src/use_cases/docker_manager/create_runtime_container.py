@@ -646,3 +646,42 @@ async def create_runtime_container(
             log_info(f"Triggered serial device resync for container {container_name}")
         except Exception as e:
             log_warning(f"Failed to resync serial devices for {container_name}: {e}")
+
+
+async def start_creation(container_name, vnic_configs, serial_configs=None, runtime_version=None):
+    """
+    Validate preconditions and begin container creation as a background task.
+
+    Returns:
+        Tuple of (status_dict, started: bool). If started=True, creation is running
+        as a background task. If started=False, status_dict contains the error.
+    """
+    ctx = get_context()
+    operations_state = ctx.operations_state
+
+    in_progress, operation_type = operations_state.is_operation_in_progress(container_name)
+    if in_progress:
+        return {
+            "status": "error",
+            "error": f"Container {container_name} already has a {operation_type} operation in progress",
+        }, False
+
+    if not operations_state.set_creating(container_name):
+        return {
+            "status": "error",
+            "error": f"Failed to start creation for {container_name}",
+        }, False
+
+    log_info(f"Creating runtime container: {container_name}")
+    if serial_configs:
+        log_info(f"Container {container_name} will have {len(serial_configs)} serial port(s) configured")
+
+    asyncio.create_task(
+        create_runtime_container(container_name, vnic_configs, serial_configs, runtime_version)
+    )
+
+    return {
+        "status": "creating",
+        "container_id": container_name,
+        "message": f"Container creation started for {container_name}",
+    }, True

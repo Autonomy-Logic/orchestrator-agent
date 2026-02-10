@@ -1,22 +1,11 @@
-from use_cases.docker_manager.delete_runtime_container import delete_runtime_container
+from use_cases.docker_manager.delete_runtime_container import start_deletion
 from tools.logger import *
-from tools.contract_validation import (
-    StringType,
-    NumberType,
-    OptionalType,
-)
-from bootstrap import get_context
+from tools.contract_validation import BASE_DEVICE
 from . import topic, validate_message
-import asyncio
 
 NAME = "delete_device"
 
-MESSAGE_TYPE = {
-    "correlation_id": NumberType,
-    "device_id": StringType,
-    "action": OptionalType(StringType),
-    "requested_at": OptionalType(StringType),
-}
+MESSAGE_TYPE = {**BASE_DEVICE}
 
 
 @topic(NAME)
@@ -43,37 +32,7 @@ def init(client):
                 "error": "Device ID must be a non-empty string",
             }
 
-        operations_state = get_context().operations_state
-
-        in_progress, operation_type = operations_state.is_operation_in_progress(device_id)
-        if in_progress:
-            log_warning(
-                f"Container {device_id} already has a {operation_type} operation in progress"
-            )
-            return {
-                "action": NAME,
-                "correlation_id": correlation_id,
-                "status": "error",
-                "error": f"Container {device_id} already has a {operation_type} operation in progress",
-            }
-
-        if not operations_state.set_deleting(device_id):
-            log_error(f"Failed to set deleting state for {device_id} (race condition)")
-            return {
-                "action": NAME,
-                "correlation_id": correlation_id,
-                "status": "error",
-                "error": f"Failed to start deletion for {device_id}",
-            }
-
-        log_info(f"Deleting runtime container: {device_id}")
-
-        asyncio.create_task(delete_runtime_container(device_id))
-
-        return {
-            "action": NAME,
-            "correlation_id": correlation_id,
-            "status": "deleting",
-            "device_id": device_id,
-            "message": f"Container deletion started for {device_id}",
-        }
+        result, started = await start_deletion(device_id)
+        result["action"] = NAME
+        result["correlation_id"] = correlation_id
+        return result

@@ -1,3 +1,5 @@
+import asyncio
+
 from use_cases.runtime_commands import run_command
 from bootstrap import get_context
 from . import topic, validate_message
@@ -6,17 +8,15 @@ from tools.contract_validation import (
     StringType,
     NumberType,
     OptionalType,
+    BASE_DEVICE,
 )
 
 NAME = "run_command"
 
 MESSAGE_TYPE = {
-    "correlation_id": NumberType,
-    "device_id": StringType,
+    **BASE_DEVICE,
     "method": StringType,
     "api": StringType,
-    "action": OptionalType(StringType),
-    "requested_at": OptionalType(StringType),
     "port": OptionalType(NumberType),
     # headers, data, params, files are optional and not type-validated
     # They are passed through directly to the HTTP request
@@ -96,8 +96,8 @@ def init(client):
             "files": message.get("files"),
         }
 
-        # Execute the HTTP request
-        http_response = run_command.execute(instance, command)
+        # Execute the HTTP request in a thread to avoid blocking the event loop
+        http_response = await asyncio.to_thread(run_command.execute, instance, command)
         log_info(f"Command completed with status {http_response.get('status_code')}")
 
         # Return response with correlation_id

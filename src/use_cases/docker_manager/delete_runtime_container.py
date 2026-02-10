@@ -212,3 +212,38 @@ async def delete_runtime_container(
         serial_repo=serial_repo,
         operations_state=operations_state,
     )
+
+
+async def start_deletion(container_name):
+    """
+    Validate preconditions and begin container deletion as a background task.
+
+    Returns:
+        Tuple of (status_dict, started: bool). If started=True, deletion is running
+        as a background task. If started=False, status_dict contains the error.
+    """
+    ctx = get_context()
+    operations_state = ctx.operations_state
+
+    in_progress, operation_type = operations_state.is_operation_in_progress(container_name)
+    if in_progress:
+        return {
+            "status": "error",
+            "error": f"Container {container_name} already has a {operation_type} operation in progress",
+        }, False
+
+    if not operations_state.set_deleting(container_name):
+        return {
+            "status": "error",
+            "error": f"Failed to start deletion for {container_name}",
+        }, False
+
+    log_info(f"Deleting runtime container: {container_name}")
+
+    asyncio.create_task(delete_runtime_container(container_name))
+
+    return {
+        "status": "deleting",
+        "device_id": container_name,
+        "message": f"Container deletion started for {container_name}",
+    }, True
