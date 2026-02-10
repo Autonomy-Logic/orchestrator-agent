@@ -25,9 +25,9 @@ RUN mkdir -p /home/dev/.mtls && \
     chown -R dev:dev /home/dev/.mtls && \
     chmod 700 /home/dev/.mtls
 
-COPY requirements.txt .
+COPY requirements.txt requirements-dev.txt ./
 RUN python3 -m pip install --upgrade pip && \
-    python3 -m pip install -r requirements.txt
+    python3 -m pip install -r requirements-dev.txt
 
 RUN sudo mkdir -p /var/orchestrator/{logs,debug,data} && \
     sudo chown -R dev:dev /var/orchestrator
