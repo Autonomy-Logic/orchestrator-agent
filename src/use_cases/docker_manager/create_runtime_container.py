@@ -264,11 +264,12 @@ def _create_runtime_container_sync(
         operations_state.set_step(container_name, "creating_container")
         log_info(f"Creating container {container_name}")
 
-        networking_config = {}
         api_version = container_runtime.get_api_version()
 
-        # Only MACVLAN networks are added to container at creation time
-        # WiFi vNICs use Proxy ARP Bridge which is configured after container starts
+        # Prepare MACVLAN endpoint configs for post-creation connection
+        # Docker API only allows one network at creation time, so MACVLAN
+        # networks are connected after the container is created
+        macvlan_endpoint_configs = []
         for network, vnic_config in macvlan_networks:
             vnic_name = vnic_config.get("name")
             network_mode = vnic_config.get("network_mode", "dhcp")
@@ -294,17 +295,10 @@ def _create_runtime_container_sync(
                 )
             endpoint_kwargs["mac_address"] = mac_address
 
-            networking_config[network.name] = container_runtime.create_endpoint_config(
-                version=api_version, **endpoint_kwargs
-            )
+            macvlan_endpoint_configs.append((network, vnic_config, endpoint_kwargs))
             log_debug(
                 f"Prepared EndpointConfig for MACVLAN network {network.name}"
             )
-
-        ## Needed to avoid docker SDK setting 'None' networking_config
-        networking_config[internal_network.name] = container_runtime.create_endpoint_config(
-            version=api_version
-        )
 
         create_kwargs = {
             "image": image_name,
@@ -312,7 +306,6 @@ def _create_runtime_container_sync(
             "detach": True,
             "restart_policy": {"Name": "always"},
             "network": internal_network.name,
-            "networking_config": networking_config,
             # Real-time scheduling capabilities for PLC deterministic execution
             # SYS_NICE: Required for sched_setscheduler(SCHED_FIFO) in the PLC core
             # MKNOD: Required for dynamic serial port passthrough (creating device nodes at runtime)
@@ -343,6 +336,18 @@ def _create_runtime_container_sync(
             log_debug(f"Configuring DNS servers: {unique_dns}")
 
         container = container_runtime.create_container(**create_kwargs)
+
+        # Connect MACVLAN networks after creation (Docker API only allows
+        # one network at creation time). If this fails, remove the container
+        # to avoid leaving it in a partial state with only the internal network.
+        try:
+            for network, vnic_config, endpoint_kwargs in macvlan_endpoint_configs:
+                network.connect(container, **endpoint_kwargs)
+                log_debug(f"Connected container to MACVLAN network {network.name}")
+        except container_runtime.APIError as e:
+            log_error(f"Failed to connect MACVLAN network, removing container: {e}")
+            container.remove(force=True)
+            raise
 
         container.start()
         log_info(f"Container {container_name} created and started successfully")
