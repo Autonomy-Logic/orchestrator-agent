@@ -264,11 +264,19 @@ def _create_runtime_container_sync(
         operations_state.set_step(container_name, "creating_container")
         log_info(f"Creating container {container_name}")
 
-        networking_config = {}
         api_version = container_runtime.get_api_version()
 
-        # Only MACVLAN networks are added to container at creation time
-        # WiFi vNICs use Proxy ARP Bridge which is configured after container starts
+        # Docker API <1.44 rejects container creation when networking_config
+        # contains multiple network endpoints. Use network.connect() after
+        # creation as a fallback for older API versions.
+        use_networking_config = tuple(api_version.split(".")) >= ("1", "44")
+        if not use_networking_config:
+            log_info(
+                f"Docker API {api_version} < 1.44: will connect MACVLAN networks after creation"
+            )
+
+        networking_config = {}
+        macvlan_endpoint_configs = []
         for network, vnic_config in macvlan_networks:
             vnic_name = vnic_config.get("name")
             network_mode = vnic_config.get("network_mode", "dhcp")
@@ -294,17 +302,20 @@ def _create_runtime_container_sync(
                 )
             endpoint_kwargs["mac_address"] = mac_address
 
-            networking_config[network.name] = container_runtime.create_endpoint_config(
-                version=api_version, **endpoint_kwargs
-            )
+            if use_networking_config:
+                networking_config[network.name] = container_runtime.create_endpoint_config(
+                    version=api_version, **endpoint_kwargs
+                )
+            else:
+                macvlan_endpoint_configs.append((network, vnic_config, endpoint_kwargs))
             log_debug(
                 f"Prepared EndpointConfig for MACVLAN network {network.name}"
             )
 
-        ## Needed to avoid docker SDK setting 'None' networking_config
-        networking_config[internal_network.name] = container_runtime.create_endpoint_config(
-            version=api_version
-        )
+        if use_networking_config:
+            networking_config[internal_network.name] = container_runtime.create_endpoint_config(
+                version=api_version
+            )
 
         create_kwargs = {
             "image": image_name,
@@ -312,7 +323,6 @@ def _create_runtime_container_sync(
             "detach": True,
             "restart_policy": {"Name": "always"},
             "network": internal_network.name,
-            "networking_config": networking_config,
             # Real-time scheduling capabilities for PLC deterministic execution
             # SYS_NICE: Required for sched_setscheduler(SCHED_FIFO) in the PLC core
             # MKNOD: Required for dynamic serial port passthrough (creating device nodes at runtime)
@@ -342,7 +352,23 @@ def _create_runtime_container_sync(
             create_kwargs["dns"] = unique_dns
             log_debug(f"Configuring DNS servers: {unique_dns}")
 
+        if use_networking_config:
+            create_kwargs["networking_config"] = networking_config
+
         container = container_runtime.create_container(**create_kwargs)
+
+        # For older Docker API (<1.44), connect MACVLAN networks after creation.
+        # If this fails, remove the container to avoid leaving it in a partial
+        # state with only the internal network.
+        if not use_networking_config and macvlan_endpoint_configs:
+            try:
+                for network, vnic_config, endpoint_kwargs in macvlan_endpoint_configs:
+                    network.connect(container, **endpoint_kwargs)
+                    log_debug(f"Connected container to MACVLAN network {network.name}")
+            except container_runtime.APIError as e:
+                log_error(f"Failed to connect MACVLAN network, removing container: {e}")
+                container.remove(force=True)
+                raise
 
         container.start()
         log_info(f"Container {container_name} created and started successfully")
