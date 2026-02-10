@@ -127,16 +127,3 @@ class UsageBuffer(BaseUsageBuffer):
     """
 
     pass
-
-
-_usage_buffer = UsageBuffer()
-
-
-def get_usage_buffer() -> UsageBuffer:
-    """
-    Get the global usage buffer instance for the orchestrator agent.
-
-    Returns:
-        UsageBuffer: The global usage buffer
-    """
-    return _usage_buffer

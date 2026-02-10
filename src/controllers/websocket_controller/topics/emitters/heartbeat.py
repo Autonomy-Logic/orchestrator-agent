@@ -1,7 +1,6 @@
 from tools.logger import *
 from tools.system_metrics import get_all_metrics
 from tools.ssl import get_agent_id
-from tools.usage_buffer import get_usage_buffer
 from bootstrap import get_context
 import asyncio
 from datetime import datetime
@@ -73,8 +72,9 @@ async def emit_heartbeat(client):
     the orchestrator agent and all managed devices.
     """
     agent_id = get_agent_id()
-    usage_buffer = get_usage_buffer()
-    devices_buffer = get_context().devices_usage_buffer
+    ctx = get_context()
+    usage_buffer = ctx.usage_buffer
+    devices_buffer = ctx.devices_usage_buffer
 
     while True:
         await asyncio.sleep(5)

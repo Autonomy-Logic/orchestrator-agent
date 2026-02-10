@@ -19,6 +19,7 @@ from tools.operations_state import OperationsStateTracker
 from tools.devices_usage_buffer import DevicesUsageBuffer
 from tools.network_event_listener import NetworkEventListener
 from tools.system_info import get_static_system_info
+from tools.usage_buffer import UsageBuffer
 from tools.logger import log_info
 from use_cases.dhcp_manager import DHCPManager
 from use_cases.network_reconnection import NetworkReconnectionManager
@@ -36,6 +37,7 @@ class AppContext:
         self.http_client = HTTPClientRepo()
         self.network_interface_cache = NetworkInterfaceCacheRepo()
         self.operations_state = OperationsStateTracker()
+        self.usage_buffer = UsageBuffer()
         self.devices_usage_buffer = DevicesUsageBuffer()
         self.netmon_client = NetmonClientRepo()
         self.dhcp_manager = DHCPManager(self.netmon_client)

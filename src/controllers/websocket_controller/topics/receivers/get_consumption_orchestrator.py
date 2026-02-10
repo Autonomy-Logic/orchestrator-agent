@@ -4,7 +4,6 @@ from tools.contract_validation import (
     StringType,
 )
 from tools.system_info import get_ip_addresses
-from tools.usage_buffer import get_usage_buffer
 from tools.utils import parse_period
 from bootstrap import get_context
 from . import topic, validate_message
@@ -31,7 +30,7 @@ def init(client):
 
         ctx = get_context()
         system_info = ctx.static_system_info
-        usage_buffer = get_usage_buffer()
+        usage_buffer = ctx.usage_buffer
 
         cpu_start, cpu_end = parse_period(cpu_period)
         memory_start, memory_end = parse_period(memory_period)
