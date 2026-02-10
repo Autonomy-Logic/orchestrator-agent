@@ -266,9 +266,16 @@ def _create_runtime_container_sync(
 
         api_version = container_runtime.get_api_version()
 
-        # Prepare MACVLAN endpoint configs for post-creation connection
-        # Docker API only allows one network at creation time, so MACVLAN
-        # networks are connected after the container is created
+        # Docker API <1.44 rejects container creation when networking_config
+        # contains multiple network endpoints. Use network.connect() after
+        # creation as a fallback for older API versions.
+        use_networking_config = tuple(api_version.split(".")) >= ("1", "44")
+        if not use_networking_config:
+            log_info(
+                f"Docker API {api_version} < 1.44: will connect MACVLAN networks after creation"
+            )
+
+        networking_config = {}
         macvlan_endpoint_configs = []
         for network, vnic_config in macvlan_networks:
             vnic_name = vnic_config.get("name")
@@ -295,9 +302,19 @@ def _create_runtime_container_sync(
                 )
             endpoint_kwargs["mac_address"] = mac_address
 
-            macvlan_endpoint_configs.append((network, vnic_config, endpoint_kwargs))
+            if use_networking_config:
+                networking_config[network.name] = container_runtime.create_endpoint_config(
+                    version=api_version, **endpoint_kwargs
+                )
+            else:
+                macvlan_endpoint_configs.append((network, vnic_config, endpoint_kwargs))
             log_debug(
                 f"Prepared EndpointConfig for MACVLAN network {network.name}"
+            )
+
+        if use_networking_config:
+            networking_config[internal_network.name] = container_runtime.create_endpoint_config(
+                version=api_version
             )
 
         create_kwargs = {
@@ -335,19 +352,23 @@ def _create_runtime_container_sync(
             create_kwargs["dns"] = unique_dns
             log_debug(f"Configuring DNS servers: {unique_dns}")
 
+        if use_networking_config:
+            create_kwargs["networking_config"] = networking_config
+
         container = container_runtime.create_container(**create_kwargs)
 
-        # Connect MACVLAN networks after creation (Docker API only allows
-        # one network at creation time). If this fails, remove the container
-        # to avoid leaving it in a partial state with only the internal network.
-        try:
-            for network, vnic_config, endpoint_kwargs in macvlan_endpoint_configs:
-                network.connect(container, **endpoint_kwargs)
-                log_debug(f"Connected container to MACVLAN network {network.name}")
-        except container_runtime.APIError as e:
-            log_error(f"Failed to connect MACVLAN network, removing container: {e}")
-            container.remove(force=True)
-            raise
+        # For older Docker API (<1.44), connect MACVLAN networks after creation.
+        # If this fails, remove the container to avoid leaving it in a partial
+        # state with only the internal network.
+        if not use_networking_config and macvlan_endpoint_configs:
+            try:
+                for network, vnic_config, endpoint_kwargs in macvlan_endpoint_configs:
+                    network.connect(container, **endpoint_kwargs)
+                    log_debug(f"Connected container to MACVLAN network {network.name}")
+            except container_runtime.APIError as e:
+                log_error(f"Failed to connect MACVLAN network, removing container: {e}")
+                container.remove(force=True)
+                raise
 
         container.start()
         log_info(f"Container {container_name} created and started successfully")
