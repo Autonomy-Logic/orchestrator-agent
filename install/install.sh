@@ -54,6 +54,9 @@ check_root() {
 # Make sure we are root before proceeding
 check_root "$@"
 
+# Capture the real (non-root) user who invoked the script via sudo
+REAL_USER="${SUDO_USER:-$USER}"
+
 ### --- DEPENDENCIES --- ###
 echo "Checking and installing required dependencies..."
 PKG_MANAGER=""
@@ -129,6 +132,17 @@ if [ ${#MISSING_PKGS[@]} -ne 0 ]; then
     exit 1
     ;;
   esac
+fi
+
+# Ensure the real user can run Docker commands without sudo
+if id -nG "$REAL_USER" | grep -qw docker; then
+  echo "[SUCCESS] User '$REAL_USER' is already in the docker group."
+else
+  echo "Adding user '$REAL_USER' to the docker group..."
+  groupadd -f docker
+  usermod -aG docker "$REAL_USER"
+  echo "[SUCCESS] User '$REAL_USER' added to the docker group."
+  echo "[NOTE] You may need to log out and back in for this to take effect."
 fi
 
 echo "Creating shared volume for container communication..."
