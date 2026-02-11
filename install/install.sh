@@ -45,9 +45,11 @@ trap cleanup_temp_files EXIT
 check_root() {
   if [[ $EUID -ne 0 ]]; then
     echo "[INFO] Root privileges are required. Trying to elevate with sudo..."
-    # Re-run the script with sudo, passing all original arguments
-    exec sudo /usr/bin/env bash "$0" "$@"
-    # exec replaces the current shell with the new command, so the rest of the script continues as root
+    # Run the script as root (without exec, so we return here afterward)
+    sudo /usr/bin/env bash "$0" "$@"
+    # Install finished — refresh group membership so docker works without logout
+    echo "[INFO] Refreshing shell to apply docker group membership..."
+    exec newgrp docker
   fi
 }
 
@@ -142,7 +144,6 @@ else
   groupadd -f docker
   usermod -aG docker "$REAL_USER"
   echo "[SUCCESS] User '$REAL_USER' added to the docker group."
-  echo "[NOTE] You may need to log out and back in for this to take effect."
 fi
 
 echo "Creating shared volume for container communication..."
