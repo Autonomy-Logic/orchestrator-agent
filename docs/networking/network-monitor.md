@@ -109,8 +109,8 @@ The orchestrator agent connects to the network monitor socket on startup:
 5. **Reconnection**: Triggers container reconnection when parent interface changes
 
 **Implementation:**
-- `src/use_cases/network_monitor/network_event_listener.py` - Event listener
-- `src/use_cases/network_monitor/interface_cache.py` - Interface cache
+- `src/tools/network_event_listener.py` - Event listener
+- `src/repos/network_interface_cache_repo.py` - Interface cache
 
 ## Healthcheck
 

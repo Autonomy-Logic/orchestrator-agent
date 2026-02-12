@@ -1,20 +1,15 @@
-from . import CLIENTS
-from tools.operations_state import get_state
 from tools.logger import log_debug, log_info, log_warning, log_error
-from tools.docker_tools import CLIENT
-from tools.vnic_persistence import load_vnic_configs
-from tools.serial_persistence import load_serial_configs
-import docker
 from datetime import datetime
 from typing import Dict, Any, List
 
 
-def get_serial_port_status(device_id: str) -> List[Dict[str, Any]]:
+def get_serial_port_status(device_id: str, *, serial_repo) -> List[Dict[str, Any]]:
     """
     Get the status of serial ports configured for a runtime container.
 
     Args:
         device_id: The name/ID of the container
+        serial_repo: Optional SerialRepo adapter (defaults to singleton)
 
     Returns:
         List of serial port status dicts, each containing:
@@ -25,7 +20,7 @@ def get_serial_port_status(device_id: str) -> List[Dict[str, Any]]:
         - current_host_path: Current /dev/ttyUSBx path (if connected)
     """
     try:
-        serial_config = load_serial_configs(device_id)
+        serial_config = serial_repo.load_configs(device_id)
         serial_ports = serial_config.get("serial_ports", [])
 
         result = []
@@ -50,12 +45,13 @@ def get_serial_port_status(device_id: str) -> List[Dict[str, Any]]:
         return []
 
 
-def get_device_info(device_id: str) -> Dict[str, Any]:
+def get_device_info(device_id: str, *, container_runtime) -> Dict[str, Any]:
     """
     Get basic information about a runtime container (CPU, memory limits).
 
     Args:
         device_id: The name/ID of the container
+        container_runtime: Optional ContainerRuntimeRepo adapter (defaults to singleton)
 
     Returns:
         Dictionary containing:
@@ -63,7 +59,7 @@ def get_device_info(device_id: str) -> Dict[str, Any]:
         - memory_limit: Memory limit in MB (or "N/A")
     """
     try:
-        container = CLIENT.containers.get(device_id)
+        container = container_runtime.get_container(device_id)
         container.reload()
 
         host_config = container.attrs.get("HostConfig", {})
@@ -91,7 +87,7 @@ def get_device_info(device_id: str) -> Dict[str, Any]:
             "memory_limit": memory_limit_str,
         }
 
-    except docker.errors.NotFound:
+    except container_runtime.NotFoundError:
         log_warning(f"Container {device_id} not found when getting device info")
         return {
             "cpu_count": "N/A",
@@ -105,7 +101,15 @@ def get_device_info(device_id: str) -> Dict[str, Any]:
         }
 
 
-def get_device_status_data(device_id: str) -> Dict[str, Any]:
+def get_device_status_data(
+    device_id: str,
+    *,
+    container_runtime,
+    client_registry,
+    vnic_repo,
+    serial_repo,
+    operations_state,
+) -> Dict[str, Any]:
     """
     Get the current status of a runtime container.
 
@@ -114,6 +118,11 @@ def get_device_status_data(device_id: str) -> Dict[str, Any]:
 
     Args:
         device_id: The name/ID of the container to check
+        container_runtime: Optional ContainerRuntimeRepo adapter (defaults to singleton)
+        client_registry: Optional ClientRepo adapter (defaults to singleton)
+        vnic_repo: Optional VNICRepo adapter (defaults to singleton)
+        serial_repo: Optional SerialRepo adapter (defaults to singleton)
+        operations_state: Optional OperationsStateTracker (defaults to singleton)
 
     Returns:
         Dictionary containing status information:
@@ -132,7 +141,7 @@ def get_device_status_data(device_id: str) -> Dict[str, Any]:
     log_debug(f"Retrieving status for container: {device_id}")
 
     try:
-        op_state = get_state(device_id)
+        op_state = operations_state.get_state(device_id)
         if op_state:
             log_debug(
                 f"Container {device_id} has tracked operation state: {op_state['status']}"
@@ -163,8 +172,8 @@ def get_device_status_data(device_id: str) -> Dict[str, Any]:
             return response
 
         try:
-            container = CLIENT.containers.get(device_id)
-        except docker.errors.NotFound:
+            container = container_runtime.get_container(device_id)
+        except container_runtime.NotFoundError:
             log_info(f"Container {device_id} not found")
             return {
                 "status": "not_found",
@@ -195,7 +204,7 @@ def get_device_status_data(device_id: str) -> Dict[str, Any]:
         networks = {}
 
         # Load vNIC configs to check for DHCP-assigned IPs
-        vnic_configs = load_vnic_configs(device_id)
+        vnic_configs = vnic_repo.load_configs(device_id)
 
         # Build mappings for DHCP IP lookup by docker_network_name and parent_interface
         dhcp_ips_by_network = {}
@@ -285,8 +294,9 @@ def get_device_status_data(device_id: str) -> Dict[str, Any]:
                 )
 
         internal_ip = None
-        if device_id in CLIENTS:
-            internal_ip = CLIENTS[device_id].get("ip")
+        client_data = client_registry.get_client(device_id)
+        if client_data:
+            internal_ip = client_data.get("ip")
 
         restart_count = container_state.get("RestartCount", 0)
 
@@ -317,7 +327,7 @@ def get_device_status_data(device_id: str) -> Dict[str, Any]:
             response["health_status"] = health.get("Status")
 
         # Include serial port status if configured
-        serial_ports = get_serial_port_status(device_id)
+        serial_ports = get_serial_port_status(device_id, serial_repo=serial_repo)
         if serial_ports:
             response["serial_ports"] = serial_ports
             log_debug(f"Container {device_id} has {len(serial_ports)} serial port(s) configured")

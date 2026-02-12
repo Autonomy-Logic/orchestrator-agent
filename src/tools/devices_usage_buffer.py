@@ -210,14 +210,3 @@ class DevicesUsageBuffer:
             log_debug("Cleared all device usage buffers")
 
 
-_devices_usage_buffer = DevicesUsageBuffer()
-
-
-def get_devices_usage_buffer() -> DevicesUsageBuffer:
-    """
-    Get the global devices usage buffer instance.
-
-    Returns:
-        DevicesUsageBuffer: The global devices usage buffer manager
-    """
-    return _devices_usage_buffer

@@ -7,52 +7,40 @@ Signaling is handled via the existing Socket.IO connection to the cloud.
 
 from tools.logger import log_info
 
-from .session_manager import (
-    WebRTCSessionManager,
-    get_session_manager,
-)
+from .signaling import initialize_signaling
+from .session_manager import WebRTCSessionManager
 
 
-def init(client, session_manager: WebRTCSessionManager = None):
+def init(client, session_manager: WebRTCSessionManager, client_registry, http_client):
     """
     Initialize the WebRTC controller by registering signaling handlers.
 
     Args:
         client: Socket.IO client for signaling
-        session_manager: Optional WebRTCSessionManager instance for dependency injection.
-                        If not provided, uses the global singleton.
+        session_manager: WebRTCSessionManager instance
+        client_registry: ClientRepo instance for device lookups
+        http_client: HTTPClientRepo instance for command execution
     """
-    from .signaling import initialize_signaling
-
-    if session_manager is None:
-        session_manager = get_session_manager()
-
     log_info("Initializing WebRTC Controller...")
-    initialize_signaling(client, session_manager)
+    initialize_signaling(client, session_manager, client_registry, http_client)
     log_info("WebRTC Controller initialized successfully.")
 
 
-async def start(session_manager: WebRTCSessionManager = None):
+async def start(session_manager: WebRTCSessionManager):
     """
     Start the WebRTC controller background tasks.
 
     Args:
-        session_manager: Optional WebRTCSessionManager instance.
-                        If not provided, uses the global singleton.
+        session_manager: WebRTCSessionManager instance
     """
-    if session_manager is None:
-        session_manager = get_session_manager()
     await session_manager.start()
 
 
-async def stop(session_manager: WebRTCSessionManager = None):
+async def stop(session_manager: WebRTCSessionManager):
     """
     Stop the WebRTC controller.
 
     Args:
-        session_manager: Optional WebRTCSessionManager instance.
-                        If not provided, uses the global singleton.
+        session_manager: WebRTCSessionManager instance
     """
-    if session_manager is None:
-        session_manager = get_session_manager()
     await session_manager.stop()

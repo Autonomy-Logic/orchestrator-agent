@@ -26,13 +26,13 @@ def _configure_socketio_logging():
         logger.addFilter(heartbeat_filter)
 
 
-def init(client):
+def init(client, ctx):
     """
     Initialize the Websocket controller by registering necessary topics.
     """
     log_info("Initializing Websocket Controller...")
 
-    initialize_all(client)
+    initialize_all(client, ctx)
 
     log_info("Websocket Controller initialized successfully.")
 

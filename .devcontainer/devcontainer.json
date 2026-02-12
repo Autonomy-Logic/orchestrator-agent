@@ -4,9 +4,9 @@
         "dockerfile": "Dockerfile"
     },
     "mounts": [
-        "source=${env:HOME}/.ssh,target=/home/dev/.ssh,type=bind",
-        "source=${env:HOME}/.mtls,target=/home/dev/.mtls,type=bind",
-        "source=/var/orchestrator,target=/var/orchestrator,type=bind"
+        "source=${env:HOME}/.ssh,target=/root/.ssh,type=bind",
+        "source=/root/.mtls,target=/root/.mtls,type=bind",
+        "source=orchestrator-shared,target=/var/orchestrator,type=volume"
     ],
     "features": {
         "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
@@ -24,8 +24,11 @@
             ]
         }
     },
+    "containerEnv": {
+        "HOST_NAME": "orchestrator-agent-devcontainer"
+    },
     "forwardPorts": [22, 7676],
     "postCreateCommand": "",
-    "remoteUser": "dev",
+    "remoteUser": "root",
     "runArgs": ["--name", "orchestrator-agent-devcontainer"]
 }

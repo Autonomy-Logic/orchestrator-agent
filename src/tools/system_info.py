@@ -1,13 +1,13 @@
 """
 System information collection module for the orchestrator agent.
-Collects static system information at boot time (IP addresses, OS, kernel, CPU count, etc.).
+Collects static system information at boot time (memory, CPU, OS, kernel, disk)
+and dynamic IP addresses from the interface cache.
 """
 
 import psutil
 import platform
 from typing import List, Dict
-
-from tools.interface_cache import INTERFACE_CACHE
+from tools.system_metrics import _iter_disk_usage
 
 # Virtual interface prefixes to filter out (Docker bridges, VPNs, etc.)
 VIRTUAL_INTERFACE_PREFIXES = [
@@ -44,12 +44,15 @@ def _is_physical_interface(interface_name: str) -> bool:
     return True
 
 
-def get_ip_addresses() -> List[Dict[str, str]]:
+def get_ip_addresses(interface_cache) -> List[Dict[str, str]]:
     """
     Get all IP addresses from physical HOST network interfaces.
-    Uses the INTERFACE_CACHE populated by the netmon sidecar to access host
+    Uses the interface cache populated by the netmon sidecar to access host
     network information from within the container.
     Filters out virtual interfaces (Docker bridges, VPNs, etc.).
+
+    Args:
+        interface_cache: NetworkInterfaceCacheRepo instance
 
     Returns:
         List[Dict[str, str]]: List of {"interface": name, "ip_address": ip} dicts
@@ -57,7 +60,7 @@ def get_ip_addresses() -> List[Dict[str, str]]:
     ip_addresses = []
 
     # Take a snapshot for thread safety (cache may be updated by netmon events)
-    cache_snapshot = dict(INTERFACE_CACHE)
+    cache_snapshot = interface_cache.get_all_interfaces()
 
     for interface_name, cache_data in cache_snapshot.items():
         if not _is_physical_interface(interface_name):
@@ -135,58 +138,16 @@ def get_total_disk() -> int:
     Returns:
         int: Total disk space in GB
     """
-    total_space = 0
-    seen_devices = set()
-
-    SKIP_FSTYPES = {
-        "tmpfs",
-        "devtmpfs",
-        "overlay",
-        "squashfs",
-        "ramfs",
-        "proc",
-        "sysfs",
-        "cgroup",
-        "cgroup2",
-        "debugfs",
-        "tracefs",
-        "pstore",
-        "autofs",
-        "devpts",
-        "mqueue",
-        "hugetlbfs",
-        "fusectl",
-        "none",
-    }
-
-    partitions = psutil.disk_partitions(all=False)
-
-    for partition in partitions:
-        if partition.fstype.lower() in SKIP_FSTYPES:
-            continue
-
-        if not partition.device or partition.device in seen_devices:
-            continue
-
-        seen_devices.add(partition.device)
-
-        try:
-            usage = psutil.disk_usage(partition.mountpoint)
-            total_space += usage.total
-        except (PermissionError, OSError):
-            continue
-
-    return int(total_space / (1024 * 1024 * 1024))
+    return int(sum(u.total for u in _iter_disk_usage()) / (1024 ** 3))
 
 
-def get_system_info() -> Dict:
+def get_static_system_info() -> Dict:
     """
-    Get all static system information.
+    Get static system information (everything except IP addresses).
     This should be called once at boot time and cached.
 
     Returns:
-        Dict: Dictionary containing all system information:
-            - ip_addresses: List[Dict] - List of {interface, ip_address} for each physical interface
+        Dict: Dictionary containing static system information:
             - memory: int - Total RAM in MB
             - cpu: int - Number of CPUs
             - os: str - Operating system
@@ -194,23 +155,9 @@ def get_system_info() -> Dict:
             - disk: int - Total disk space in GB
     """
     return {
-        "ip_addresses": get_ip_addresses(),
         "memory": get_total_memory(),
         "cpu": get_cpu_count(),
         "os": get_os_info(),
         "kernel": get_kernel_version(),
         "disk": get_total_disk(),
     }
-
-
-_system_info = get_system_info()
-
-
-def get_cached_system_info() -> Dict:
-    """
-    Get cached system information.
-
-    Returns:
-        Dict: Cached system information
-    """
-    return _system_info.copy()

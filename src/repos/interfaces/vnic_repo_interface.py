@@ -1,0 +1,9 @@
+from typing import Protocol, Optional, Union
+
+
+class VNICRepoInterface(Protocol):
+    """Abstract interface for vNIC configuration persistence."""
+
+    def save_configs(self, container_name: str, vnic_configs: list) -> None: ...
+    def load_configs(self, container_name: Optional[str] = None) -> Union[dict, list]: ...
+    def delete_configs(self, container_name: str) -> None: ...

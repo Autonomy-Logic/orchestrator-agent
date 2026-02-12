@@ -12,7 +12,6 @@ from tools.contract_validation import (
     BASE_MESSAGE,
     validate_contract_with_error_response,
 )
-from use_cases.docker_manager import CLIENTS
 from ..types import SessionState
 from ..data_channel import DataChannelHandler
 
@@ -29,13 +28,15 @@ MESSAGE_CONTRACT = {
 }
 
 
-def init(client, session_manager):
+def init(client, session_manager, client_registry, http_client):
     """
     Initialize the WebRTC offer handler.
 
     Args:
         client: Socket.IO client
         session_manager: WebRTCSessionManager instance
+        client_registry: ClientRepo instance for device lookups
+        http_client: HTTPClientRepo instance for command execution
     """
     log_info(f"Registering topic: {NAME}")
 
@@ -73,10 +74,10 @@ def init(client, session_manager):
         log_info(f"Device ID: {device_id}")
         log_info(f"SDP type: {sdp_type}")
         log_info(f"SDP length: {len(sdp)} chars")
-        log_debug(f"Available devices: {list(CLIENTS.keys())}")
+        log_debug(f"Available devices: {list(client_registry.list_clients().keys())}")
 
         # Verify device exists
-        if device_id not in CLIENTS:
+        if not client_registry.contains(device_id):
             log_warning(f"Device {device_id} not found for WebRTC session")
             return {
                 "action": NAME,
@@ -139,7 +140,7 @@ def init(client, session_manager):
                 session_manager.set_data_channel(session_id, channel)
 
                 log_info(f"Creating DataChannelHandler for session {session_id}")
-                handler = DataChannelHandler(channel, session_id, session_manager)
+                handler = DataChannelHandler(channel, session_id, session_manager, client_registry, http_client)
                 session_manager.set_channel_handler(session_id, handler)
                 log_info(f"DataChannelHandler created successfully")
 

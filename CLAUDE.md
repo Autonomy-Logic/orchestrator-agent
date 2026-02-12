@@ -33,10 +33,11 @@ src/
 ├── index.py              # Entry point with reconnection loop
 ├── controllers/          # Transport layer (WebSocket/WebRTC)
 ├── use_cases/           # Business logic (Docker, networking, commands)
+├── repos/               # Data persistence adapters (JSON files, Docker API)
 └── tools/               # Infrastructure utilities
 ```
 
-**Data flow:** `index.py` → `controllers/` (topic routing) → `use_cases/` (business logic) → `tools/` (utilities)
+**Data flow:** `index.py` → `controllers/` (topic routing) → `use_cases/` (business logic) → `repos/` (persistence) / `tools/` (utilities)
 
 ### Two-Container Model
 
@@ -57,7 +58,8 @@ The agent runs alongside a network monitor sidecar (`autonomy-netmon`) that uses
 - **WebRTC Controller** (`src/controllers/webrtc_controller/`): Manages WebRTC peer connections for remote terminal access to runtime containers
 - **Topic Receivers** (`src/controllers/websocket_controller/topics/receivers/`): Handlers for cloud commands (create_new_runtime, delete_device, run_command, etc.)
 - **Topic Emitters** (`src/controllers/websocket_controller/topics/emitters/`): Heartbeat emission every 5 seconds with system metrics
-- **Docker Manager** (`src/use_cases/docker_manager/`): Container and MACVLAN network lifecycle
+- **Docker Manager** (`src/use_cases/docker_manager/`): Container and MACVLAN network lifecycle, shared helpers (`stop_and_remove_container`, `remove_internal_network`)
+- **Repos** (`src/repos/`): Data persistence adapters — `VNICRepo`, `SerialRepo` (backed by `JsonConfigStore`), `ClientRepo`, `ContainerRuntimeRepo`, etc.
 - **Network Event Listener** (`src/tools/network_event_listener.py`): Communicates with sidecar via Unix socket for network change events
 
 ### WebRTC Remote Terminal
@@ -81,40 +83,45 @@ Key files:
 New topics follow this decorator pattern in `src/controllers/websocket_controller/topics/receivers/`:
 
 ```python
-from . import topic, validate_message
+from . import topic, validate_message, with_response
 from tools.contract_validation import StringType, BASE_MESSAGE
 
 NAME = "topic_name"
 MESSAGE_TYPE = {**BASE_MESSAGE, "field": StringType}
 
 @topic(NAME)
-def init(client):
+def init(client, ctx):
     @client.on(NAME)
     @validate_message(MESSAGE_TYPE, NAME, add_defaults=True)
+    @with_response(NAME)
     async def callback(message):
-        # Handler logic
-        return {"action": NAME, "correlation_id": message.get("correlation_id"), ...}
+        # Handler logic — return plain dict, decorator adds action + correlation_id
+        return {"status": "success", ...}
 ```
+
+The `@with_response` decorator automatically wraps the return value with `action` and `correlation_id` from the message, eliminating boilerplate in each handler.
 
 ### Contract Validation
 
 Type-safe schema validation in `src/tools/contract_validation.py`:
-- `StringType`, `NumberType`, `BooleanType`, `DateType`
+- `StringType`, `NonEmptyStringType`, `NumberType`, `BooleanType`, `DateType`
 - `ListType(ItemType)` for arrays
 - `OptionalType(Type)` for optional fields
 - `validate_contract(schema, data)` or use `@validate_message` decorator
+- `BASE_DEVICE` uses `NonEmptyStringType` for `device_id` to reject empty strings at the validation layer
 
 ### Operations State Tracking
 
 Prevents race conditions for container operations (`src/tools/operations_state.py`):
 ```python
-from tools.operations_state import set_creating, is_operation_in_progress, clear_state
+from tools.operations_state import begin_operation
 
-if not set_creating(container_name):
-    # Race condition - another operation started
-    return error_response
+# begin_operation checks is_operation_in_progress and sets state atomically
+error, ok = begin_operation(container_name, operations_state.set_creating, operations_state=operations_state)
+if not ok:
+    return error, False
 # ... do work ...
-clear_state(container_name)
+operations_state.clear_state(container_name)
 ```
 
 ### Network Model

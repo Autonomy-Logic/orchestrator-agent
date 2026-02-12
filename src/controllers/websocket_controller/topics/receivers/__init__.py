@@ -16,6 +16,21 @@ def topic(name):
     return wrapper
 
 
+def with_response(name):
+    """Decorator that wraps the return value with action and correlation_id."""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(message, *args, **kwargs):
+            result = await func(message, *args, **kwargs)
+            return {
+                "action": name,
+                "correlation_id": message.get("correlation_id"),
+                **result,
+            }
+        return wrapper
+    return decorator
+
+
 def validate_message(contract, name, add_defaults=False):
     """
     Decorator to validate incoming messages against a contract schema.

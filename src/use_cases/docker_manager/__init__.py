@@ -1,16 +1,11 @@
-import docker
 import os
-import json
 import socket
-from tools.logger import log_debug, log_info, log_warning
-from tools.docker_tools import CLIENT
-from tools.devices_usage_buffer import get_devices_usage_buffer
+from tools.logger import log_debug, log_info, log_error, log_warning
 
-HOST_NAME = os.getenv("HOST_NAME", "orchestrator-agent-devcontainer")
-CLIENTS_FILE = os.getenv("CLIENTS_FILE", "/var/orchestrator/data/clients.json")
+HOST_NAME = os.getenv("HOST_NAME", "orchestrator_agent")
 
 
-def get_self_container():
+def get_self_container(*, container_runtime):
     """
     Detect the orchestrator-agent's own container from inside the container.
 
@@ -20,37 +15,40 @@ def get_self_container():
     3. HOST_NAME environment variable (explicit override)
     4. Search by label edge.autonomy.role=orchestrator-agent
 
+    Args:
+        container_runtime: Optional ContainerRuntimeRepo adapter (defaults to singleton)
+
     Returns the container object or None if not found.
     """
     container_id = os.getenv("HOSTNAME")
     if container_id:
         try:
-            container = CLIENT.containers.get(container_id)
+            container = container_runtime.get_container(container_id)
             log_debug(f"Found self container via HOSTNAME env: {container.name}")
             return container
-        except docker.errors.NotFound:
+        except container_runtime.NotFoundError:
             log_debug(f"HOSTNAME env {container_id} not found as container")
 
     try:
         hostname = socket.gethostname()
-        container = CLIENT.containers.get(hostname)
+        container = container_runtime.get_container(hostname)
         log_debug(f"Found self container via socket.gethostname(): {container.name}")
         return container
-    except docker.errors.NotFound:
+    except container_runtime.NotFoundError:
         log_debug(f"socket.gethostname() {hostname} not found as container")
     except Exception as e:
         log_debug(f"Error getting hostname: {e}")
 
     if HOST_NAME:
         try:
-            container = CLIENT.containers.get(HOST_NAME)
+            container = container_runtime.get_container(HOST_NAME)
             log_debug(f"Found self container via HOST_NAME env: {container.name}")
             return container
-        except docker.errors.NotFound:
+        except container_runtime.NotFoundError:
             log_debug(f"HOST_NAME env {HOST_NAME} not found as container")
 
     try:
-        containers = CLIENT.containers.list(
+        containers = container_runtime.list_containers(
             filters={"label": "edge.autonomy.role=orchestrator-agent"}
         )
         if containers:
@@ -64,59 +62,48 @@ def get_self_container():
     return None
 
 
-def load_clients_from_file():
-    if not os.path.exists(CLIENTS_FILE):
-        return {}
-    with open(CLIENTS_FILE, "r") as f:
-        try:
-            return json.load(f)
-        except json.JSONDecodeError:
-            return {}
+def stop_and_remove_container(container_name, *, container_runtime):
+    """Stop and force-remove a container. Logs warning if not found, re-raises other errors."""
+    try:
+        container = container_runtime.get_container(container_name)
+        log_info(f"Stopping container {container_name}")
+        container.stop(timeout=10)
+        log_info(f"Removing container {container_name}")
+        container.remove(force=True)
+        log_info(f"Container {container_name} removed successfully")
+    except container_runtime.NotFoundError:
+        log_warning(f"Container {container_name} not found, may have been already deleted")
+    except Exception as e:
+        log_error(f"Error stopping/removing container {container_name}: {e}")
+        raise
 
 
-CLIENTS = load_clients_from_file()
-
-
-def _register_existing_clients_with_usage_buffer():
-    """
-    Register all existing clients with the devices usage buffer.
-    This is called at module load time to ensure existing containers
-    have their usage data collected from startup.
-    """
-    if not CLIENTS:
-        return
-
-    devices_buffer = get_devices_usage_buffer()
-    for client_name in CLIENTS:
-        devices_buffer.add_device(client_name)
-        log_info(f"Registered existing client {client_name} for usage data collection")
-
-
-_register_existing_clients_with_usage_buffer()
-
-
-def ensure_clients_file_exists():
-    if not os.path.exists(CLIENTS_FILE):
-        dir_name = os.path.dirname(CLIENTS_FILE)
-        if dir_name:
-            os.makedirs(dir_name, exist_ok=True)
-        with open(CLIENTS_FILE, "w") as f:
-            f.write("{}")
-
-
-def write_clients_to_file():
-    ensure_clients_file_exists()
-    with open(CLIENTS_FILE, "w") as f:
-        json.dump(CLIENTS, f, indent=4)
-
-
-def add_client(clientName: str, ip: str):
-    # TODO: Define structure of CLIENTS better
-    CLIENTS[clientName] = {"ip": ip, "name": clientName}
-    write_clients_to_file()
-
-
-def remove_client(clientName: str):
-    if clientName in CLIENTS:
-        del CLIENTS[clientName]
-        write_clients_to_file()
+def remove_internal_network(container_name, *, container_runtime, disconnect_all=False):
+    """Remove a container's internal network.
+    If disconnect_all=True, disconnects all containers. Otherwise only disconnects orchestrator."""
+    internal_network_name = f"{container_name}_internal"
+    try:
+        network = container_runtime.get_network(internal_network_name)
+        network.reload()
+        connected = network.attrs.get("Containers", {})
+        if connected:
+            if disconnect_all:
+                for cid in list(connected.keys()):
+                    try:
+                        network.disconnect(cid, force=True)
+                    except Exception as e:
+                        log_warning(f"Error disconnecting container from {internal_network_name}: {e}")
+            else:
+                try:
+                    main = get_self_container(container_runtime=container_runtime)
+                    if main and main.id in connected:
+                        network.disconnect(main, force=True)
+                except Exception as e:
+                    log_warning(f"Error disconnecting orchestrator from internal network: {e}")
+        log_info(f"Removing internal network {internal_network_name}")
+        network.remove()
+        log_info(f"Internal network {internal_network_name} removed successfully")
+    except container_runtime.NotFoundError:
+        log_warning(f"Internal network {internal_network_name} not found")
+    except Exception as e:
+        log_warning(f"Error removing internal network {internal_network_name}: {e}")

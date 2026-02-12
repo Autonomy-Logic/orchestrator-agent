@@ -1,4 +1,5 @@
 from datetime import datetime
+from tools.logger import log_error
 
 
 class BaseType:
@@ -25,6 +26,16 @@ class StringType(BaseType):
     def validate(value):
         if not isinstance(value, str):
             raise TypeError("Value must be a string.")
+
+
+class NonEmptyStringType(BaseType):
+
+    @staticmethod
+    def validate(value):
+        if not isinstance(value, str):
+            raise TypeError("Value must be a string.")
+        if not value.strip():
+            raise TypeError("Value must be a non-empty string.")
 
 
 class DateType(BaseType):
@@ -82,7 +93,7 @@ BASE_MESSAGE = {
     "requested_at": OptionalType(DateType),
 }
 
-BASE_DEVICE = {**BASE_MESSAGE, "device_id": StringType}
+BASE_DEVICE = {**BASE_MESSAGE, "device_id": NonEmptyStringType}
 
 # Serial port configuration schema for vPLC containers
 # Used in create_new_runtime and attach_serial_device topics
@@ -128,8 +139,6 @@ def validate_contract_with_error_response(contract, data):
             - If valid: (True, None)
             - If invalid: (False, error_response_dict with status and error fields)
     """
-    from tools.logger import log_error
-
     try:
         validate_contract(contract, data)
         return (True, None)

@@ -23,16 +23,11 @@ The agent handles the following command topics from the cloud:
 | `run_command` | Execute runtime command | Proxies HTTP command to runtime container |
 | `get_consumption_device` | Get device metrics | Returns CPU/memory usage for specified period |
 | `get_consumption_orchestrator` | Get orchestrator metrics | Returns agent CPU/memory usage for specified period |
+| `get_device_status` | Get device status | Returns container state, network info, health |
+| `get_host_interfaces` | Get host interfaces | Returns physical network interfaces from cache |
+| `get_serial_devices` | Get serial devices | Lists available serial devices on the host |
 
 **Source:** `src/controllers/websocket_controller/topics/receivers/`
-
-### Placeholder Topics
-
-The following topics are registered but return dummy responses (not yet fully implemented):
-
-- `start_device` - Returns `{"action": "start_device", "success": true}`
-- `stop_device` - Returns `{"action": "stop_device", "success": true}`
-- `restart_device` - Returns `{"action": "restart_device", "success": true}`
 
 ## Heartbeat
 
@@ -73,7 +68,7 @@ The agent emits periodic heartbeat messages to report system health and metrics.
 All incoming messages are validated against predefined contracts before processing.
 
 **Validation Features:**
-- Type checking (string, number, boolean, date, list)
+- Type checking (string, non-empty string, number, boolean, date, list)
 - Required field validation
 - Nested object validation
 - Optional field support
@@ -81,14 +76,14 @@ All incoming messages are validated against predefined contracts before processi
 **Base Contracts:**
 ```python
 BASE_MESSAGE = {
-    "correlation_id": NumberType,
-    "action": StringType,
-    "requested_at": DateType
+    "correlation_id": OptionalType(NumberType),
+    "action": OptionalType(StringType),
+    "requested_at": OptionalType(DateType),
 }
 
 BASE_DEVICE = {
     **BASE_MESSAGE,
-    "device_id": StringType
+    "device_id": NonEmptyStringType,  # Rejects empty/whitespace-only strings
 }
 ```
 

@@ -6,10 +6,10 @@ from .webrtc_controller import (
     init as init_webrtc_controller,
     start as start_webrtc_controller,
     stop as stop_webrtc_controller,
-    get_session_manager as get_webrtc_session_manager,
+    WebRTCSessionManager,
 )
+from bootstrap import get_context
 from tools.logger import *
-from tools.network_event_listener import network_event_listener
 from tools.dns_utils import (
     perform_dns_health_check,
     calculate_backoff,
@@ -33,21 +33,25 @@ async def main_websocket_task(server_url: str, dns_ttl: int = 30):
     """
     client = None
     try:
+        # Initialize composition root (creates all adapters)
+        ctx = get_context()
+
         # Create fresh client with new HTTP session for DNS refresh
         client = await get_websocket_client(dns_ttl=dns_ttl)
 
         # Initialize WebSocket controller (existing topics)
-        init_websocket_controller(client)
+        init_websocket_controller(client, ctx)
 
         # Initialize WebRTC controller (signaling topics)
-        init_webrtc_controller(client)
+        session_manager = WebRTCSessionManager()
+        init_webrtc_controller(client, session_manager, ctx.client_registry, ctx.http_client)
 
         # Start network event listener
-        await network_event_listener.start()
+        await ctx.network_event_listener.start()
         log_info("Network event listener started")
 
         # Start WebRTC session manager background tasks
-        await start_webrtc_controller()
+        await start_webrtc_controller(session_manager)
         log_info("WebRTC controller started")
 
         await client.connect(
@@ -58,7 +62,7 @@ async def main_websocket_task(server_url: str, dns_ttl: int = 30):
     finally:
         # Cleanup WebRTC controller on disconnect
         log_info("Cleaning up controllers...")
-        await stop_webrtc_controller()
+        await stop_webrtc_controller(session_manager)
         log_info("WebRTC controller stopped")
 
         # Cleanup: close HTTP session to release resources
@@ -131,6 +135,3 @@ async def main_webrtc_task(*args, **kwargs):
     )
 
 
-def get_session_manager():
-    """Get the WebRTC session manager instance."""
-    return get_webrtc_session_manager()

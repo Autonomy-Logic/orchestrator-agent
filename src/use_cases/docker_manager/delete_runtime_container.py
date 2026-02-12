@@ -1,16 +1,18 @@
-from . import CLIENTS, remove_client, get_self_container
-from tools.operations_state import set_step, set_error, clear_state
+from . import stop_and_remove_container, remove_internal_network
 from tools.logger import *
-from tools.vnic_persistence import delete_vnic_configs, load_vnic_configs
-from tools.serial_persistence import delete_serial_configs
-from tools.docker_tools import CLIENT
-from tools.devices_usage_buffer import get_devices_usage_buffer
-from tools.network_event_listener import network_event_listener
-import docker
 import asyncio
 
 
-def _delete_runtime_container_sync(container_name: str):
+def _delete_runtime_container_sync(
+    container_name: str,
+    *,
+    container_runtime,
+    client_registry,
+    vnic_repo,
+    serial_repo,
+    operations_state,
+    devices_usage_buffer,
+):
     """
     Synchronous implementation of runtime container deletion.
     This function contains all blocking Docker operations and runs in a background thread.
@@ -26,110 +28,74 @@ def _delete_runtime_container_sync(container_name: str):
 
     Args:
         container_name: Name of the runtime container to delete
+        container_runtime: Optional ContainerRuntimeRepo adapter (defaults to singleton)
+        client_registry: Optional ClientRepo adapter (defaults to singleton)
+        vnic_repo: Optional VNICRepo adapter (defaults to singleton)
+        serial_repo: Optional SerialRepo adapter (defaults to singleton)
+        operations_state: Optional OperationsStateTracker (defaults to singleton)
     """
-
     log_debug(f'Attempting to delete runtime container "{container_name}"')
 
-    if container_name not in CLIENTS:
+    if not client_registry.contains(container_name):
         log_warning(f"Container {container_name} not found in client registry")
 
     try:
-        set_step(container_name, "stopping_container")
-        try:
-            container = CLIENT.containers.get(container_name)
-            log_info(f"Stopping container {container_name}")
-            container.stop(timeout=10)
-
-            set_step(container_name, "removing_container")
-            log_info(f"Removing container {container_name}")
-            container.remove(force=True)
-            log_info(f"Container {container_name} removed successfully")
-        except docker.errors.NotFound:
-            log_warning(
-                f"Container {container_name} not found, may have been already deleted"
-            )
-        except Exception as e:
-            log_error(f"Error stopping/removing container {container_name}: {e}")
-            raise
+        operations_state.set_step(container_name, "stopping_container")
+        stop_and_remove_container(container_name, container_runtime=container_runtime)
 
         try:
-            remove_client(container_name)
+            client_registry.remove_client(container_name)
             log_debug(f"Removed {container_name} from client registry")
         except Exception as e:
             log_warning(f"Error removing {container_name} from client registry: {e}")
 
         try:
-            devices_buffer = get_devices_usage_buffer()
-            devices_buffer.remove_device(container_name)
+            devices_usage_buffer.remove_device(container_name)
             log_debug(f"Removed {container_name} from usage data collection")
         except Exception as e:
             log_warning(f"Error removing {container_name} from usage buffer: {e}")
 
         try:
-            delete_vnic_configs(container_name)
+            vnic_repo.delete_configs(container_name)
             log_debug(f"Deleted vNIC configurations for {container_name}")
         except Exception as e:
             log_warning(f"Error deleting vNIC configurations for {container_name}: {e}")
 
         try:
-            delete_serial_configs(container_name)
+            serial_repo.delete_configs(container_name)
             log_debug(f"Deleted serial configurations for {container_name}")
         except Exception as e:
             log_warning(f"Error deleting serial configurations for {container_name}: {e}")
 
-        set_step(container_name, "removing_networks")
-        internal_network_name = f"{container_name}_internal"
-        try:
-            internal_network = CLIENT.networks.get(internal_network_name)
-
-            internal_network.reload()
-            connected_containers = internal_network.attrs.get("Containers", {})
-
-            if connected_containers:
-                log_debug(
-                    f"Internal network {internal_network_name} still has {len(connected_containers)} "
-                    f"connected container(s), disconnecting them before removal"
-                )
-
-                try:
-                    main_container = get_self_container()
-                    if main_container and main_container.id in connected_containers:
-                        internal_network.disconnect(main_container, force=True)
-                        log_debug(
-                            f"Disconnected orchestrator-agent from internal network {internal_network_name}"
-                        )
-                except Exception as e:
-                    log_warning(
-                        f"Error disconnecting orchestrator-agent from internal network: {e}"
-                    )
-
-            log_info(f"Removing internal network {internal_network_name}")
-            internal_network.remove()
-            log_info(f"Internal network {internal_network_name} removed successfully")
-
-        except docker.errors.NotFound:
-            log_debug(
-                f"Internal network {internal_network_name} not found, may have been already deleted"
-            )
-        except Exception as e:
-            log_warning(f"Error removing internal network {internal_network_name}: {e}")
+        operations_state.set_step(container_name, "removing_networks")
+        remove_internal_network(container_name, container_runtime=container_runtime)
 
         log_info(
             f"Runtime container {container_name} and associated resources deleted successfully"
         )
 
-        clear_state(container_name)
+        operations_state.clear_state(container_name)
 
     except Exception as e:
         log_error(f"Failed to delete runtime container {container_name}. Error: {e}")
         import traceback
 
         log_error(f"Traceback: {traceback.format_exc()}")
-        set_error(container_name, str(e), "delete")
+        operations_state.set_error(container_name, str(e), "delete")
         raise
 
 
-async def delete_runtime_container(container_name: str):
+async def delete_runtime_container(
+    container_name: str,
+    *,
+    container_runtime,
+    client_registry,
+    vnic_repo,
+    serial_repo,
+    network_commander,
+    operations_state,
+    devices_usage_buffer,
+):
     """
     Delete a runtime container and all associated resources.
 
@@ -138,11 +104,17 @@ async def delete_runtime_container(container_name: str):
 
     Args:
         container_name: Name of the runtime container to delete
+        container_runtime: Optional ContainerRuntimeRepo adapter (defaults to singleton)
+        client_registry: Optional ClientRepo adapter (defaults to singleton)
+        vnic_repo: Optional VNICRepo adapter (defaults to singleton)
+        serial_repo: Optional SerialRepo adapter (defaults to singleton)
+        network_commander: Optional NetworkCommanderRepo adapter (defaults to singleton)
+        operations_state: Optional OperationsStateTracker (defaults to singleton)
     """
     # Clean up Proxy ARP bridges via netmon before deleting container
     # This must be done before container removal to ensure routes are properly cleaned
     try:
-        all_vnic_configs = load_vnic_configs()
+        all_vnic_configs = vnic_repo.load_configs()
         vnic_configs = all_vnic_configs.get(container_name, [])
         for vnic_config in vnic_configs:
             proxy_arp_config = vnic_config.get("_proxy_arp_config")
@@ -153,7 +125,7 @@ async def delete_runtime_container(container_name: str):
                 if ip_address and parent_interface and veth_host:
                     log_info(f"Cleaning up Proxy ARP bridge for vNIC {vnic_config.get('name')}")
                     try:
-                        await network_event_listener.cleanup_proxy_arp_bridge(
+                        await network_commander.cleanup_proxy_arp_bridge(
                             container_name, ip_address, parent_interface, veth_host
                         )
                     except Exception as e:
@@ -161,4 +133,47 @@ async def delete_runtime_container(container_name: str):
     except Exception as e:
         log_warning(f"Error loading vNIC configs for Proxy ARP cleanup: {e}")
 
-    await asyncio.to_thread(_delete_runtime_container_sync, container_name)
+    await asyncio.to_thread(
+        _delete_runtime_container_sync, container_name,
+        container_runtime=container_runtime,
+        client_registry=client_registry,
+        vnic_repo=vnic_repo,
+        serial_repo=serial_repo,
+        operations_state=operations_state,
+        devices_usage_buffer=devices_usage_buffer,
+    )
+
+
+async def start_deletion(container_name, *, ctx):
+    """
+    Validate preconditions and begin container deletion as a background task.
+
+    Returns:
+        Tuple of (status_dict, started: bool). If started=True, deletion is running
+        as a background task. If started=False, status_dict contains the error.
+    """
+    from tools.operations_state import begin_operation
+    operations_state = ctx.operations_state
+
+    error, ok = begin_operation(container_name, operations_state.set_deleting, operations_state=operations_state)
+    if not ok:
+        return error, False
+
+    log_info(f"Deleting runtime container: {container_name}")
+
+    asyncio.create_task(delete_runtime_container(
+        container_name,
+        container_runtime=ctx.container_runtime,
+        client_registry=ctx.client_registry,
+        vnic_repo=ctx.vnic_repo,
+        serial_repo=ctx.serial_repo,
+        network_commander=ctx.network_event_listener,
+        operations_state=ctx.operations_state,
+        devices_usage_buffer=ctx.devices_usage_buffer,
+    ))
+
+    return {
+        "status": "deleting",
+        "device_id": container_name,
+        "message": f"Container deletion started for {container_name}",
+    }, True

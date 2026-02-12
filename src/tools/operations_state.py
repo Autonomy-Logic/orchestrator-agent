@@ -10,6 +10,23 @@ from datetime import datetime
 from typing import Dict, Optional, Tuple
 
 
+def begin_operation(container_name, set_fn, *, operations_state):
+    """Check no operation is in progress and set the new state.
+    Returns (error_dict, False) on failure, (None, True) on success."""
+    in_progress, operation_type = operations_state.is_operation_in_progress(container_name)
+    if in_progress:
+        return {
+            "status": "error",
+            "error": f"Container {container_name} already has a {operation_type} operation in progress",
+        }, False
+    if not set_fn(container_name):
+        return {
+            "status": "error",
+            "error": f"Failed to start operation for {container_name}",
+        }, False
+    return None, True
+
+
 class OperationsStateTracker:
     """
     Thread-safe tracker for container operations state.
@@ -158,39 +175,3 @@ class OperationsStateTracker:
             return False, None
 
 
-_tracker = OperationsStateTracker()
-
-
-def set_creating(container_name: str) -> bool:
-    """Mark a container as being created."""
-    return _tracker.set_creating(container_name)
-
-
-def set_deleting(container_name: str) -> bool:
-    """Mark a container as being deleted."""
-    return _tracker.set_deleting(container_name)
-
-
-def set_step(container_name: str, step: str):
-    """Update the current step of an ongoing operation."""
-    _tracker.set_step(container_name, step)
-
-
-def set_error(container_name: str, error: str, operation: str = None):
-    """Mark an operation as failed with an error message."""
-    _tracker.set_error(container_name, error, operation)
-
-
-def clear_state(container_name: str):
-    """Clear the operation state for a container."""
-    _tracker.clear_state(container_name)
-
-
-def get_state(container_name: str) -> Optional[Dict]:
-    """Get the current operation state for a container."""
-    return _tracker.get_state(container_name)
-
-
-def is_operation_in_progress(container_name: str) -> Tuple[bool, Optional[str]]:
-    """Check if an operation is in progress for a container."""
-    return _tracker.is_operation_in_progress(container_name)

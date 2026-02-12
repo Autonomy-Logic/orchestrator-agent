@@ -1,12 +1,7 @@
 from tools.logger import *
-from tools.contract_validation import (
-    BASE_MESSAGE,
-    StringType,
-)
-from tools.system_info import get_cached_system_info, get_ip_addresses
-from tools.usage_buffer import get_usage_buffer
-from tools.utils import parse_period
-from . import topic, validate_message
+from tools.contract_validation import BASE_MESSAGE, StringType
+from use_cases.get_consumption_orchestrator import get_consumption_orchestrator_data
+from . import topic, validate_message, with_response
 
 NAME = "get_consumption_orchestrator"
 
@@ -14,47 +9,27 @@ MESSAGE_TYPE = {**BASE_MESSAGE, "cpuPeriod": StringType, "memoryPeriod": StringT
 
 
 @topic(NAME)
-def init(client):
+def init(client, ctx):
     """
     Handle the 'get_consumption_orchestrator' topic to send consumption data.
     """
 
     @client.on(NAME)
     @validate_message(MESSAGE_TYPE, NAME)
+    @with_response(NAME)
     async def callback(message):
         log_debug(f"Received get_consumption_orchestrator request: {message}")
 
-        corr_id = message.get("correlation_id")
-        cpu_period = message.get("cpuPeriod", "1h")
-        memory_period = message.get("memoryPeriod", "1h")
-
-        system_info = get_cached_system_info()
-        usage_buffer = get_usage_buffer()
-
-        cpu_start, cpu_end = parse_period(cpu_period)
-        memory_start, memory_end = parse_period(memory_period)
-
-        cpu_usage_data = usage_buffer.get_cpu_usage(cpu_start, cpu_end)
-        memory_usage_data = usage_buffer.get_memory_usage(memory_start, memory_end)
-
-        # Fetch IP addresses dynamically from INTERFACE_CACHE (populated by netmon)
-        # since the static system_info cache is computed before netmon discovers interfaces
-        ip_addresses = get_ip_addresses()
-
-        response = {
-            "action": NAME,
-            "correlation_id": corr_id,
-            "ip_addresses": ip_addresses,
-            "memory": system_info["memory"],
-            "cpu": system_info["cpu"],
-            "os": system_info["os"],
-            "kernel": system_info["kernel"],
-            "disk": system_info["disk"],
-            "cpu_usage": cpu_usage_data,
-            "memory_usage": memory_usage_data,
-        }
+        result = get_consumption_orchestrator_data(
+            message.get("cpuPeriod", "1h"),
+            message.get("memoryPeriod", "1h"),
+            static_system_info=ctx.static_system_info,
+            usage_buffer=ctx.usage_buffer,
+            network_interface_cache=ctx.network_interface_cache,
+        )
 
         log_debug(
-            f"Returning get_consumption_orchestrator response with {len(cpu_usage_data)} CPU samples and {len(memory_usage_data)} memory samples"
+            f"Returning get_consumption_orchestrator response with "
+            f"{len(result['cpu_usage'])} CPU samples and {len(result['memory_usage'])} memory samples"
         )
-        return response
+        return result

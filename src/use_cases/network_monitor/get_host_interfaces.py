@@ -1,4 +1,3 @@
-from tools.interface_cache import INTERFACE_CACHE
 from tools.logger import log_debug, log_info, log_warning, log_error
 from typing import Dict, Any, List
 
@@ -82,21 +81,22 @@ def build_interface_info_from_cache(
 
 
 def get_host_interfaces_data(
-    include_virtual: bool = False, detailed: bool = True
+    include_virtual: bool = False, detailed: bool = True, *, interface_cache
 ) -> Dict[str, Any]:
     """
-    Get network interfaces on the host from the INTERFACE_CACHE.
+    Get network interfaces on the host from the interface cache.
 
     This function contains the core business logic for retrieving host network interfaces,
     separated from the transport layer (WebSocket topic handling).
 
-    The INTERFACE_CACHE is populated by the netmon sidecar with HOST network interface
+    The interface cache is populated by the netmon sidecar with HOST network interface
     information, allowing the orchestrator-agent (running in a container) to see the
     host's physical network interfaces.
 
     Args:
         include_virtual: Whether to include virtual/container interfaces (default: False)
         detailed: Whether to include detailed information like subnet and gateway (default: True)
+        interface_cache: Optional InterfaceCacheRepo adapter (defaults to singleton)
 
     Returns:
         Dictionary containing:
@@ -105,12 +105,13 @@ def get_host_interfaces_data(
         - error: Error message (on error)
     """
     log_debug(
-        f"Retrieving host network interfaces from INTERFACE_CACHE "
+        f"Retrieving host network interfaces from interface cache "
         f"(include_virtual={include_virtual}, detailed={detailed})"
     )
 
     try:
-        if not INTERFACE_CACHE:
+        all_interfaces = interface_cache.get_all_interfaces()
+        if not all_interfaces:
             log_warning(
                 "INTERFACE_CACHE is empty - netmon sidecar may not be running or "
                 "has not yet discovered network interfaces"
@@ -120,11 +121,11 @@ def get_host_interfaces_data(
                 "error": "Network interface cache is empty. The netmon sidecar may not be running or has not yet discovered interfaces.",
             }
 
-        log_debug(f"INTERFACE_CACHE has {len(INTERFACE_CACHE)} interface(s)")
+        log_debug(f"Interface cache has {len(all_interfaces)} interface(s)")
 
         interfaces: List[dict] = []
 
-        cache_snapshot = dict(INTERFACE_CACHE)
+        cache_snapshot = all_interfaces
 
         for interface_name, cache_data in cache_snapshot.items():
             if not should_include_interface(interface_name, include_virtual):
@@ -150,7 +151,7 @@ def get_host_interfaces_data(
 
         log_info(
             f"Retrieved {len(interfaces)} network interface(s) from host "
-            f"(total in cache: {len(INTERFACE_CACHE)})"
+            f"(total in cache: {len(all_interfaces)})"
         )
 
         return {

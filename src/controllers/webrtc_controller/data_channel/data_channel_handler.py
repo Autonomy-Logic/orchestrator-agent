@@ -8,6 +8,7 @@ to execute HTTP commands on runtime containers.
 
 from tools.logger import log_info, log_debug, log_error
 from tools.chunking import ChunkReassembler, split_into_chunks
+from use_cases.runtime_commands.run_command import execute_for_device
 from ..types import SessionState
 import json
 import asyncio
@@ -38,7 +39,7 @@ class DataChannelHandler:
             {"type": "command_response", "correlation_id": 12345, "status": "success", "http_response": {...}}
     """
 
-    def __init__(self, data_channel, session_id: str, session_manager=None):
+    def __init__(self, data_channel, session_id: str, session_manager=None, client_registry=None, http_client=None):
         """
         Initialize data channel handler.
 
@@ -46,10 +47,14 @@ class DataChannelHandler:
             data_channel: RTCDataChannel instance
             session_id: Associated WebRTC session ID
             session_manager: WebRTCSessionManager instance (optional)
+            client_registry: ClientRepo instance for device lookups
+            http_client: HTTPClientRepo instance for command execution
         """
         self.channel = data_channel
         self.session_id = session_id
         self.session_manager = session_manager
+        self.client_registry = client_registry
+        self.http_client = http_client
         self._closed = False
         self._ready = False
         self._ping_task: Optional[asyncio.Task] = None
@@ -172,55 +177,28 @@ class DataChannelHandler:
         """
         Handle run_command message - execute HTTP command on runtime container.
 
-        Uses the same execution logic as the WebSocket run_command handler.
+        Uses the shared execute_for_device use case.
 
         Args:
             message: Command message with device_id, method, api, etc.
         """
-        from use_cases.runtime_commands import run_command
-        from use_cases.docker_manager import CLIENTS
-
         correlation_id = message.get("correlation_id")
         device_id = message.get("device_id")
-        method = message.get("method")
-        api = message.get("api")
 
-        log_info(f"WebRTC run_command for device {device_id}: {method} {api}")
-
-        # Validate device exists
-        instance = CLIENTS.get(device_id)
-        if not instance:
-            log_error(f"Device not found: {device_id}")
-            self._send_message({
-                "type": "command_response",
-                "correlation_id": correlation_id,
-                "status": "error",
-                "error": f"Device not found: {device_id}",
-            })
-            return
+        log_info(f"WebRTC run_command for device {device_id}: {message.get('method')} {message.get('api')}")
 
         try:
-            # Build command object for run_command.execute
-            command = {
-                "method": method,
-                "api": api,
-                "port": message.get("port", 8443),
-                "headers": message.get("headers", {}),
-                "data": message.get("data"),
-                "params": message.get("params"),
-                "files": message.get("files"),
-            }
+            result = await asyncio.to_thread(
+                execute_for_device, device_id, message, client_registry=self.client_registry, http_client=self.http_client
+            )
 
-            # Execute the HTTP request in a thread to avoid blocking the event loop
-            http_response = await asyncio.to_thread(run_command.execute, instance, command)
-            log_info(f"WebRTC command completed with status {http_response.get('status_code')}")
+            if result.get("http_response"):
+                log_info(f"WebRTC command completed with status {result['http_response'].get('status_code')}")
 
-            # Return response with correlation_id
             self._send_message({
                 "type": "command_response",
                 "correlation_id": correlation_id,
-                "status": "success" if http_response.get("ok") else "error",
-                "http_response": http_response,
+                **result,
             })
         except Exception as e:
             log_error(f"Error executing WebRTC command: {e}")

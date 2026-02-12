@@ -286,20 +286,3 @@ class WebRTCSessionManager:
     def on_session_closed(self, callback: Callable):
         """Register a callback for when sessions are closed."""
         self._on_session_closed = callback
-
-
-# Private module-level instance (lazy initialization)
-_session_manager: Optional[WebRTCSessionManager] = None
-
-
-def get_session_manager() -> WebRTCSessionManager:
-    """
-    Get the global WebRTC session manager instance.
-
-    Returns:
-        The singleton WebRTCSessionManager instance
-    """
-    global _session_manager
-    if _session_manager is None:
-        _session_manager = WebRTCSessionManager()
-    return _session_manager
