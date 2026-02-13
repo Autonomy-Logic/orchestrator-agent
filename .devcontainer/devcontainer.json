@@ -28,7 +28,7 @@
         "HOST_NAME": "orchestrator-agent-devcontainer"
     },
     "forwardPorts": [22, 7676],
-    "postCreateCommand": "",
+    "postCreateCommand": "./scripts/install-hooks.sh",
     "remoteUser": "root",
     "runArgs": ["--name", "orchestrator-agent-devcontainer"]
 }
