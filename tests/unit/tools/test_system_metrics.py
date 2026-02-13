@@ -131,6 +131,42 @@ class TestIterDiskUsage:
         mock_psutil.disk_usage.assert_called_once_with("/")
 
     @patch("tools.system_metrics.psutil")
+    def test_skips_duplicate_device(self, mock_psutil):
+        """Line 38-39: duplicate partition devices are skipped."""
+        partition1 = MagicMock()
+        partition1.fstype = "ext4"
+        partition1.device = "/dev/sda1"
+        partition1.mountpoint = "/"
+
+        partition2 = MagicMock()
+        partition2.fstype = "ext4"
+        partition2.device = "/dev/sda1"
+        partition2.mountpoint = "/mnt"
+
+        mock_usage = MagicMock(total=100, used=50)
+        mock_psutil.disk_partitions.return_value = [partition1, partition2]
+        mock_psutil.disk_usage.return_value = mock_usage
+
+        results = list(_iter_disk_usage())
+
+        assert len(results) == 1
+        mock_psutil.disk_usage.assert_called_once_with("/")
+
+    @patch("tools.system_metrics.psutil")
+    def test_skips_empty_device(self, mock_psutil):
+        """Line 38-39: partitions with empty device string are skipped."""
+        partition = MagicMock()
+        partition.fstype = "ext4"
+        partition.device = ""
+        partition.mountpoint = "/mnt"
+
+        mock_psutil.disk_partitions.return_value = [partition]
+
+        results = list(_iter_disk_usage())
+
+        assert len(results) == 0
+
+    @patch("tools.system_metrics.psutil")
     def test_skips_permission_error(self, mock_psutil):
         """Lines 32-33: PermissionError from disk_usage is caught and skipped."""
         partition = MagicMock()
