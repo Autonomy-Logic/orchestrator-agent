@@ -130,6 +130,62 @@ operations_state.clear_state(container_name)
 - Internal bridge networks: `<container_name>_internal` - agent-to-runtime control plane
 - vNIC configs persisted for automatic reconnection after network changes
 
+### WebRTC Debug Bridge
+
+The debug bridge enables real-time PLC debugging from the browser through a dedicated WebRTC DataChannel labeled `"debug"`. It bridges between the browser and the OpenPLC runtime's Socket.IO `/api/debug` endpoint using persistent sessions.
+
+**Architecture:**
+```
+Browser (WebRTC DataChannel "debug")
+    ↓ JSON messages (debug_start, debug_get_md5, debug_get_list, debug_set, debug_stop)
+DebugChannelHandler (controller layer)
+    ↓ routes to _handle_start / _handle_command / _handle_stop
+run_debug_command (use_case layer) — dispatches single commands
+    ↓ builds hex commands via debug_protocol.py
+DebugSocketRepo (repo layer) — persistent Socket.IO connection
+    ↓ Socket.IO emit("debug_command", {command: hex})
+Runtime Container (/api/debug namespace)
+```
+
+**Key files:**
+- `src/controllers/webrtc_controller/data_channel/debug_channel_handler.py` — WebRTC DataChannel message routing, persistent session management
+- `src/use_cases/debug_client/run_debug_command.py` — Stateless command dispatcher for a single debug command
+- `src/use_cases/debug_client/validate_session.py` — Single-shot validation sequence (kept for backward compatibility)
+- `src/repos/debug_socket_repo.py` — Socket.IO client for runtime's `/api/debug`
+- `src/tools/debug_protocol.py` — Pure protocol functions: `build_get_md5()`, `build_get_list()`, `build_set_variable()`, `parse_response()`
+
+**Debug function codes (defined in `debug_protocol.py`):**
+| Code | Name | Builder | Parser |
+|------|------|---------|--------|
+| 0x41 | DEBUG_INFO | `build_get_info()` | `_parse_info()` |
+| 0x42 | DEBUG_SET | `build_set_variable()` | `_parse_set()` |
+| 0x43 | DEBUG_GET | (unused) | — |
+| 0x44 | DEBUG_GET_LIST | `build_get_list()` | `_parse_get_list()` |
+| 0x45 | DEBUG_GET_MD5 | `build_get_md5()` | `_parse_get_md5()` |
+
+**Message protocol (Browser ↔ Agent):**
+
+| Browser → Agent | Agent → Browser | Description |
+|----------------|----------------|-------------|
+| `debug_start` | `debug_connected` | Authenticate + connect Socket.IO |
+| `debug_get_md5` | `debug_md5_response` | Get runtime program MD5 |
+| `debug_get_list` | `debug_values_response` | Get variable values (raw hex) |
+| `debug_set` | `debug_set_response` | Force/release a variable |
+| `debug_info` | `debug_info_response` | Get variable count |
+| `debug_stop` | `debug_disconnected` | Disconnect Socket.IO |
+| (any error) | `debug_error` | Error message |
+
+**Session lifecycle:**
+1. Browser sends `debug_start` with `device_id`, `username`, `password`, `port`
+2. Agent POSTs to `https://{device_ip}:{port}/api/login` → gets JWT
+3. Agent connects Socket.IO to `/api/debug` with JWT auth (persistent connection)
+4. Agent responds with `debug_connected`
+5. Browser sends arbitrary commands (`debug_get_md5`, `debug_get_list`, `debug_set`)
+6. Browser sends `debug_stop` → agent disconnects Socket.IO
+7. JWT never sent back to browser
+
+**Polling pattern:** The browser polls at 200ms intervals with `debug_get_list` containing batched variable indexes (max 60 per request). The agent returns raw hex variable data for the browser to parse.
+
 ## Important Files
 
 - `src/index.py` - Entry point with reconnection loop
