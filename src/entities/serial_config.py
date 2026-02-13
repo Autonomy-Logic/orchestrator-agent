@@ -6,6 +6,8 @@ from typing import Optional
 class SerialConfig:
     """Represents a serial port configuration for a runtime container."""
 
+    VALID_STATUSES = frozenset({"connected", "disconnected"})
+
     # User-provided fields (from cloud message)
     name: str = ""
     device_id: str = ""
@@ -17,6 +19,18 @@ class SerialConfig:
     current_host_path: Optional[str] = None
     major: Optional[int] = None
     minor: Optional[int] = None
+
+    def validate(self) -> None:
+        """Raise ValueError if business invariants are violated."""
+        if self.status not in self.VALID_STATUSES:
+            raise ValueError(f"status must be one of {self.VALID_STATUSES}, got '{self.status}'")
+
+    @classmethod
+    def create(cls, **kwargs) -> "SerialConfig":
+        """Construct and validate a new SerialConfig."""
+        instance = cls(**kwargs)
+        instance.validate()
+        return instance
 
     def to_dict(self) -> dict:
         """Convert to a JSON-serializable dict."""

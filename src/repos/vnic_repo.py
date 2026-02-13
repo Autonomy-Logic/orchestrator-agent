@@ -1,5 +1,3 @@
-from typing import Optional, Union
-
 from repos.interfaces import VNICRepoInterface
 from tools.json_file import JsonConfigStore
 from tools.logger import log_debug, log_error, log_warning
@@ -24,17 +22,20 @@ class VNICRepo(VNICRepoInterface):
                 f"Failed to save vNIC configurations for {container_name}: {e}"
             )
 
-    def load_configs(self, container_name: Optional[str] = None) -> Union[dict, list]:
+    def load_all_configs(self) -> dict:
         try:
-            all_configs = self._store.read_all()
-
-            if container_name:
-                return all_configs.get(container_name, [])
-            else:
-                return all_configs
+            return self._store.read_all()
         except Exception as e:
             log_error(f"Failed to load vNIC configurations: {e}")
-            return [] if container_name else {}
+            return {}
+
+    def load_configs(self, container_name: str) -> list:
+        try:
+            all_configs = self._store.read_all()
+            return all_configs.get(container_name, [])
+        except Exception as e:
+            log_error(f"Failed to load vNIC configurations: {e}")
+            return []
 
     def delete_configs(self, container_name: str) -> None:
         try:

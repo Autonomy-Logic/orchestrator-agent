@@ -111,9 +111,5 @@ Staged src/ files: $(echo "$DIFF" | tr '\n' ', ')
 Staged diff:
 $STAGED_DIFF"
 
-    jq -n --arg ctx "$REVIEW" '{
-        "hookSpecificOutput": {
-            "additionalContext": $ctx
-        }
-    }'
+    echo "$REVIEW"
 fi

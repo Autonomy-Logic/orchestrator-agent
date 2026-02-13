@@ -23,7 +23,7 @@ class NetworkReconnectionManager:
         """
 
         try:
-            all_vnic_configs = self.vnic_repo.load_configs()
+            all_vnic_configs = self.vnic_repo.load_all_configs()
 
             if not all_vnic_configs:
                 log_debug("No runtime containers with vNIC configurations found")

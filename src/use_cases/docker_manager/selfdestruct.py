@@ -21,7 +21,7 @@ MACVLAN_NETWORK_PATTERN = re.compile(r"^macvlan_[a-zA-Z0-9]+_\d+\.\d+\.\d+\.\d+_
 
 
 
-def _delete_runtime_container_for_selfdestruct(container_name, container_runtime, vnic_repo, devices_usage_buffer):
+def _delete_runtime_container_for_selfdestruct(container_name, container_runtime, vnic_repo, devices_usage_buffer, socket_repo):
     """
     Delete a single runtime container and its associated resources.
     This is a simplified version of delete_runtime_container for use during self-destruct.
@@ -50,10 +50,10 @@ def _delete_runtime_container_for_selfdestruct(container_name, container_runtime
     except Exception as e:
         log_warning(f"Error deleting vNIC configurations for {container_name}: {e}")
 
-    remove_internal_network(container_name, container_runtime=container_runtime, disconnect_all=True)
+    remove_internal_network(container_name, container_runtime=container_runtime, socket_repo=socket_repo, disconnect_all=True)
 
 
-def _delete_all_runtime_containers(container_runtime, client_registry, vnic_repo, devices_usage_buffer):
+def _delete_all_runtime_containers(container_runtime, client_registry, vnic_repo, devices_usage_buffer, socket_repo):
     """
     Delete all managed runtime containers.
     Raises exception on failure to stop the self-destruct process.
@@ -67,7 +67,7 @@ def _delete_all_runtime_containers(container_runtime, client_registry, vnic_repo
     log_info(f"Deleting {len(container_names)} runtime container(s): {container_names}")
 
     for container_name in container_names:
-        _delete_runtime_container_for_selfdestruct(container_name, container_runtime, vnic_repo, devices_usage_buffer)
+        _delete_runtime_container_for_selfdestruct(container_name, container_runtime, vnic_repo, devices_usage_buffer, socket_repo)
         client_registry.remove_client(container_name)
 
     log_info("All runtime containers deleted successfully")
@@ -224,17 +224,18 @@ def _delete_shared_volume(container_runtime):
         )
 
 
-def _delete_orchestrator_container(container_runtime):
+def _delete_orchestrator_container(container_runtime, socket_repo):
     """
     Delete the orchestrator-agent container itself.
     This should be called last as it will terminate the process.
 
     Args:
         container_runtime: ContainerRuntimeRepo adapter
+        socket_repo: SocketRepo adapter
     """
     log_info("Deleting orchestrator-agent container (self)...")
 
-    self_container = get_self_container(container_runtime=container_runtime)
+    self_container = get_self_container(container_runtime=container_runtime, socket_repo=socket_repo)
     if not self_container:
         log_error("Could not detect orchestrator-agent container")
         raise RuntimeError("Could not detect orchestrator-agent container for self-destruct")
@@ -269,7 +270,7 @@ def start_self_destruct(*, operations_state) -> bool:
     return True
 
 
-def self_destruct(*, container_runtime, client_registry, vnic_repo, operations_state, devices_usage_buffer):
+def self_destruct(*, container_runtime, client_registry, vnic_repo, operations_state, devices_usage_buffer, socket_repo):
     """
     Self-destruct the orchestrator by removing all managed resources.
 
@@ -298,7 +299,7 @@ def self_destruct(*, container_runtime, client_registry, vnic_repo, operations_s
 
     try:
         operations_state.set_step(ORCHESTRATOR_STATUS_ID, "deleting_runtimes")
-        _delete_all_runtime_containers(container_runtime, client_registry, vnic_repo, devices_usage_buffer)
+        _delete_all_runtime_containers(container_runtime, client_registry, vnic_repo, devices_usage_buffer, socket_repo)
 
         operations_state.set_step(ORCHESTRATOR_STATUS_ID, "cleaning_networks")
         _cleanup_orchestrator_networks(container_runtime)
@@ -313,7 +314,7 @@ def self_destruct(*, container_runtime, client_registry, vnic_repo, operations_s
         _delete_shared_volume(container_runtime)
 
         operations_state.set_step(ORCHESTRATOR_STATUS_ID, "removing_self")
-        _delete_orchestrator_container(container_runtime)
+        _delete_orchestrator_container(container_runtime, socket_repo)
 
     except Exception as e:
         log_error(f"Self-destruct failed: {e}")

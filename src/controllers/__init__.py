@@ -87,11 +87,12 @@ def run_websocket_with_reconnection(server_url: str, run_task):
         run_task: Function to run the async task (e.g., asyncio.run)
     """
     reconnect_attempt = 0
+    ctx = get_context()
 
     while True:
         try:
             # DNS health check before attempting connection
-            if not perform_dns_health_check(server_url, reconnect_attempt):
+            if not perform_dns_health_check(server_url, reconnect_attempt, socket_repo=ctx.socket_repo):
                 delay = calculate_backoff(reconnect_attempt)
                 log_warning(f"Waiting {delay:.1f}s before next attempt...")
                 sleep(delay)

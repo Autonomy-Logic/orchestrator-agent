@@ -7,15 +7,26 @@ import psutil
 import time
 from typing import Dict, List
 
-_start_time = time.time()
-
-psutil.cpu_percent(interval=None)
+_start_time = None
+_memory_total = None
+_disk_total = None
 
 _SKIP_FSTYPES = {
     "tmpfs", "devtmpfs", "overlay", "squashfs", "ramfs", "proc",
     "sysfs", "cgroup", "cgroup2", "debugfs", "tracefs", "pstore",
     "autofs", "devpts", "mqueue", "hugetlbfs", "fusectl", "none",
 }
+
+
+def _ensure_initialized():
+    """Lazily initialize cached values on first use."""
+    global _start_time, _memory_total, _disk_total
+    if _start_time is not None:
+        return
+    _start_time = time.time()
+    psutil.cpu_percent(interval=None)
+    _memory_total = _calculate_memory_total()
+    _disk_total = _calculate_disk_total()
 
 
 def _iter_disk_usage():
@@ -34,18 +45,14 @@ def _iter_disk_usage():
 
 
 def _calculate_memory_total() -> float:
-    """Calculate total system memory at module load time."""
+    """Calculate total system memory."""
     memory = psutil.virtual_memory()
     return round(memory.total / (1024 * 1024 * 1024), 1)
 
 
 def _calculate_disk_total() -> float:
-    """Calculate total disk space at module load time."""
+    """Calculate total disk space."""
     return round(sum(u.total for u in _iter_disk_usage()) / (1024 ** 3), 1)
-
-
-_memory_total = _calculate_memory_total()
-_disk_total = _calculate_disk_total()
 
 
 def get_cpu_usage() -> float:
@@ -56,6 +63,7 @@ def get_cpu_usage() -> float:
     Returns:
         float: CPU utilization percentage (0-100)
     """
+    _ensure_initialized()
     return psutil.cpu_percent(interval=None)
 
 
@@ -73,11 +81,12 @@ def get_memory_usage() -> float:
 def get_memory_total() -> float:
     """
     Get the total system memory in gigabytes (GB).
-    This value is cached at module load time for efficiency.
+    This value is cached at first access for efficiency.
 
     Returns:
         float: Total memory in GB (rounded to 1 decimal place)
     """
+    _ensure_initialized()
     return _memory_total
 
 
@@ -96,11 +105,12 @@ def get_disk_usage() -> float:
 def get_disk_total() -> float:
     """
     Get total disk space across all mounted disks in gigabytes (GB).
-    This value is cached at module load time for efficiency.
+    This value is cached at first access for efficiency.
 
     Returns:
         float: Total disk space in GB (rounded to 1 decimal place)
     """
+    _ensure_initialized()
     return _disk_total
 
 
@@ -112,6 +122,7 @@ def get_uptime() -> int:
     Returns:
         int: Uptime in seconds
     """
+    _ensure_initialized()
     return int(time.time() - _start_time)
 
 
@@ -139,6 +150,7 @@ def get_all_metrics() -> Dict:
             - uptime: int - Agent uptime in seconds
             - status: str - Agent status ("active" or "stopped")
     """
+    _ensure_initialized()
     return {
         "cpu_usage": get_cpu_usage(),
         "memory_usage": get_memory_usage(),

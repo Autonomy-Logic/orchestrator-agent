@@ -14,6 +14,7 @@ from repos import (
     HTTPClientRepo,
     NetworkInterfaceCacheRepo,
     NetmonClientRepo,
+    SocketRepo,
 )
 from tools.operations_state import OperationsStateTracker
 from tools.devices_usage_buffer import DevicesUsageBuffer
@@ -39,6 +40,7 @@ class AppContext:
         self.operations_state = OperationsStateTracker()
         self.usage_buffer = UsageBuffer()
         self.devices_usage_buffer = DevicesUsageBuffer()
+        self.socket_repo = SocketRepo()
         self.netmon_client = NetmonClientRepo()
         self.dhcp_manager = DHCPManager(self.netmon_client, self.container_runtime, self.vnic_repo)
         self.reconnection_manager = NetworkReconnectionManager(
