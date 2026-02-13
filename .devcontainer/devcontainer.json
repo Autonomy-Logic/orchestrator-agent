@@ -4,8 +4,8 @@
         "dockerfile": "Dockerfile"
     },
     "mounts": [
-        "source=${env:HOME}/.ssh,target=/home/dev/.ssh,type=bind",
-        "source=${env:HOME}/.mtls,target=/home/dev/.mtls,type=bind",
+        "source=${env:HOME}/.ssh,target=/root/.ssh,type=bind",
+        "source=/root/.mtls,target=/root/.mtls,type=bind",
         "source=orchestrator-shared,target=/var/orchestrator,type=volume"
     ],
     "features": {
@@ -29,6 +29,6 @@
     },
     "forwardPorts": [22, 7676],
     "postCreateCommand": "",
-    "remoteUser": "dev",
+    "remoteUser": "root",
     "runArgs": ["--name", "orchestrator-agent-devcontainer"]
 }

@@ -1,0 +1,9 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "av"
+version = "16.1.0"
+description = "Stub av package for platforms without PyAV wheels"
+requires-python = ">=3.8"
