@@ -22,22 +22,38 @@ python3 src/index.py --log-level DEBUG
 docker build -t orchestrator-agent:latest .
 ```
 
-**Note:** There is no automated test suite. Manual testing is required.
+### Testing
+
+```bash
+# Run all tests
+pytest
+
+# Run unit tests only
+pytest tests/unit/
+
+# Run architecture dependency tests
+pytest tests/architecture/
+
+# Run with coverage
+pytest --cov=src tests/
+```
 
 ## Architecture
 
-The codebase follows a layered architecture:
+The codebase follows Clean Architecture with dependency injection:
 
 ```
 src/
 ├── index.py              # Entry point with reconnection loop
+├── bootstrap.py          # Composition root (dependency wiring)
+├── entities/             # Domain entities (zero dependencies)
 ├── controllers/          # Transport layer (WebSocket/WebRTC)
 ├── use_cases/           # Business logic (Docker, networking, commands)
 ├── repos/               # Data persistence adapters (JSON files, Docker API)
 └── tools/               # Infrastructure utilities
 ```
 
-**Data flow:** `index.py` → `controllers/` (topic routing) → `use_cases/` (business logic) → `repos/` (persistence) / `tools/` (utilities)
+**Data flow:** `index.py` → `bootstrap.py` (wiring) → `controllers/` (topic routing) → `use_cases/` (business logic) → `repos/` (persistence) / `tools/` (utilities)
 
 ### Two-Container Model
 
