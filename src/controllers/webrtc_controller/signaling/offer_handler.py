@@ -150,14 +150,19 @@ def init(client, session_manager, client_registry, http_client,
                     log_info(f"DataChannelHandler created successfully")
                 elif label == "debug":
                     session_manager.set_debug_channel(session_id, channel)
-                    log_info(f"Creating DebugChannelHandler for session {session_id}")
-                    handler = DebugChannelHandler(
-                        channel, session_id, session_manager, client_registry,
-                        http_client_factory=http_client_factory,
-                        debug_socket_factory=debug_socket_factory,
-                    )
-                    session_manager.set_debug_channel_handler(session_id, handler)
-                    log_info(f"DebugChannelHandler created successfully")
+                    if http_client_factory is None or debug_socket_factory is None:
+                        log_warning(f"Debug channel received for session {session_id} but "
+                                    f"http_client_factory or debug_socket_factory is None, "
+                                    f"skipping DebugChannelHandler creation")
+                    else:
+                        log_info(f"Creating DebugChannelHandler for session {session_id}")
+                        handler = DebugChannelHandler(
+                            channel, session_id, session_manager, client_registry,
+                            http_client_factory=http_client_factory,
+                            debug_socket_factory=debug_socket_factory,
+                        )
+                        session_manager.set_debug_channel_handler(session_id, handler)
+                        log_info(f"DebugChannelHandler created successfully")
                 else:
                     log_warning(f"Unknown data channel label '{label}' for session {session_id}, ignoring")
 

@@ -12,7 +12,7 @@ from tools.debug_protocol import (
     build_set_variable,
     parse_response,
 )
-from tools.logger import log_info, log_error, log_debug
+from tools.logger import log_error, log_debug
 
 
 def run_debug_command(command_type, params, debug_socket, debug_protocol=None):
@@ -43,9 +43,14 @@ def run_debug_command(command_type, params, debug_socket, debug_protocol=None):
             hex_cmd = build_get_list(indexes)
         elif command_type == "set":
             index = params.get("index")
+            if index is None or not isinstance(index, int) or not (0 <= index <= 65535):
+                return {"success": False, "error": f"Invalid index: must be an integer 0–65535, got {index!r}"}
             force = params.get("force", True)
             value_hex = params.get("value", "00")
-            value_bytes = bytes.fromhex(value_hex.replace(" ", ""))
+            try:
+                value_bytes = bytes.fromhex(value_hex.replace(" ", ""))
+            except (ValueError, AttributeError) as e:
+                return {"success": False, "error": f"Invalid value hex string: {value_hex!r} ({e})"}
             hex_cmd = build_set_variable(index, force, value_bytes)
         else:
             return {"success": False, "error": f"Unknown command type: {command_type}"}

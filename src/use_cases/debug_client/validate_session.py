@@ -10,11 +10,6 @@ from tools.debug_protocol import (
     build_get_info,
     build_get_list,
     parse_response,
-    fc_name,
-    FC_DEBUG_GET_MD5,
-    FC_DEBUG_INFO,
-    FC_DEBUG_GET_LIST,
-    STATUS_SUCCESS,
 )
 from tools.logger import log_info, log_error, log_warning
 
@@ -150,7 +145,11 @@ def _send_and_log(debug_socket, command_name, hex_command):
     if success:
         log_info(f"[{command_name}] Raw response: {raw_data}")
         step["raw_response"] = raw_data
-        step["parsed"] = parse_response(raw_data)
+        try:
+            step["parsed"] = parse_response(raw_data)
+        except Exception as e:
+            log_error(f"[{command_name}] Failed to parse response: {e}")
+            step["error"] = f"Parse error: {e}"
     else:
         log_warning(f"[{command_name}] Runtime error: {error_msg}")
         step["raw_response"] = raw_data

@@ -146,6 +146,7 @@ class DebugSessionManager:
                 "debug_socket": debug_socket,
                 "connected": True,
                 "last_activity": datetime.now(timezone.utc),
+                "command_lock": threading.Lock(),
             }
 
         log_info(f"HTTP debug session: Socket.IO connected for {device_id}")
@@ -159,7 +160,13 @@ class DebugSessionManager:
                 return {"type": "debug_error", "error": "No active debug session. Send debug_start first."}
             session["last_activity"] = datetime.now(timezone.utc)
             debug_socket = session["debug_socket"]
+            command_lock = session["command_lock"]
 
+        with command_lock:
+            return self._execute_command(debug_socket, message)
+
+    def _execute_command(self, debug_socket, message):
+        """Execute a debug command under the per-device lock."""
         msg_type = message.get("type")
 
         command_map = {

@@ -60,6 +60,7 @@ class DebugChannelHandler:
         self._http_client_factory = http_client_factory
         self._debug_socket_factory = debug_socket_factory
         self._closed = False
+        self._command_lock = asyncio.Lock()
 
         # Persistent session state
         self._debug_socket = None
@@ -112,9 +113,17 @@ class DebugChannelHandler:
                 await self._handle_command(message)
             else:
                 log_debug(f"Unknown debug channel message type: {msg_type}")
+                self._send_message({
+                    "type": "debug_error",
+                    "error": f"Unknown message type: {msg_type}",
+                })
 
         except json.JSONDecodeError as e:
             log_error(f"Invalid JSON on debug channel {self.session_id}: {e}")
+            self._send_message({
+                "type": "debug_error",
+                "error": f"Invalid JSON: {e}",
+            })
         except Exception as e:
             log_error(f"Error handling debug channel message {self.session_id}: {e}")
             self._send_message({"type": "debug_error", "error": str(e)})
@@ -204,7 +213,13 @@ class DebugChannelHandler:
 
         Forwards the command to the runtime via the persistent Socket.IO
         connection and sends the response back to the browser.
+        Commands are serialized per session via _command_lock.
         """
+        async with self._command_lock:
+            await self._handle_command_inner(message)
+
+    async def _handle_command_inner(self, message):
+        """Inner command handler, called under _command_lock."""
         if not self._connected or not self._debug_socket:
             self._send_message({
                 "type": "debug_error",

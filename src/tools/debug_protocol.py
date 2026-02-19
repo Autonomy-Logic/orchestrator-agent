@@ -127,7 +127,10 @@ def parse_response(hex_string: str) -> dict:
     Additional fields depend on the function code.
     """
     raw = hex_string
-    data = hex_to_bytes(hex_string)
+    try:
+        data = hex_to_bytes(hex_string)
+    except (ValueError, TypeError) as e:
+        return {"function_code": None, "error": f"malformed hex: {e}", "raw": raw}
 
     if len(data) < 1:
         return {"function_code": None, "error": "empty response", "raw": raw}
@@ -204,7 +207,11 @@ def _parse_get_list(data: bytes) -> dict:
     last_index = struct.unpack(">H", data[2:4])[0]
     tick = struct.unpack(">I", data[4:8])[0]
     data_size = struct.unpack(">H", data[8:10])[0]
-    var_data = data[10:]
+
+    if len(data) < 10 + data_size:
+        return {**result, "error": f"response truncated: expected {10 + data_size} bytes, got {len(data)}"}
+
+    var_data = data[10:10 + data_size]
 
     result["last_index"] = last_index
     result["tick"] = tick

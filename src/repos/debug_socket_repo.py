@@ -25,6 +25,7 @@ class DebugSocketRepo(DebugSocketRepoInterface):
         self._connected_status = None
         self._response_event = threading.Event()
         self._response = None
+        self._command_lock = threading.Lock()
 
     def connect(self, url: str, token: str, timeout: float = 5.0) -> dict:
         """Connect to the runtime's /api/debug Socket.IO namespace.
@@ -67,11 +68,15 @@ class DebugSocketRepo(DebugSocketRepoInterface):
             log_info(f"Socket.IO disconnected from {NAMESPACE}")
 
         log_info(f"Connecting to {url}{NAMESPACE}")
-        self._sio.connect(
-            url,
-            namespaces=[NAMESPACE],
-            auth={"token": token},
-        )
+        try:
+            self._sio.connect(
+                url,
+                namespaces=[NAMESPACE],
+                auth={"token": token},
+            )
+        except Exception:
+            self._safe_disconnect()
+            raise
 
         if not self._connected_event.wait(timeout):
             self._safe_disconnect()
@@ -101,18 +106,19 @@ class DebugSocketRepo(DebugSocketRepoInterface):
         if self._sio is None or not self._sio.connected:
             raise RuntimeError("Not connected to runtime debug namespace")
 
-        self._response_event.clear()
-        self._response = None
+        with self._command_lock:
+            self._response_event.clear()
+            self._response = None
 
-        log_debug(f"Sending debug_command: {hex_command}")
-        self._sio.emit("debug_command", {"command": hex_command}, namespace=NAMESPACE)
+            log_debug(f"Sending debug_command: {hex_command}")
+            self._sio.emit("debug_command", {"command": hex_command}, namespace=NAMESPACE)
 
-        if not self._response_event.wait(timeout):
-            raise TimeoutError(
-                f"No debug_response received within {timeout}s for command: {hex_command}"
-            )
+            if not self._response_event.wait(timeout):
+                raise TimeoutError(
+                    f"No debug_response received within {timeout}s for command: {hex_command}"
+                )
 
-        return self._response
+            return self._response
 
     def disconnect(self) -> None:
         """Disconnect from the runtime debug namespace."""
