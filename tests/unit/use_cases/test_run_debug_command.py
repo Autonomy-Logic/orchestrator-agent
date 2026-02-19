@@ -123,6 +123,43 @@ class TestSet:
         # force = 1
         assert data[3] == 0x01
 
+    def test_set_invalid_index_none(self):
+        socket = _make_socket()
+        result = run_debug_command("set", {"index": None, "value": "01"}, socket)
+        assert result["success"] is False
+        assert "Invalid index" in result["error"]
+        socket.send_command.assert_not_called()
+
+    def test_set_invalid_index_negative(self):
+        socket = _make_socket()
+        result = run_debug_command("set", {"index": -1, "value": "01"}, socket)
+        assert result["success"] is False
+        assert "Invalid index" in result["error"]
+
+    def test_set_invalid_index_too_large(self):
+        socket = _make_socket()
+        result = run_debug_command("set", {"index": 70000, "value": "01"}, socket)
+        assert result["success"] is False
+        assert "Invalid index" in result["error"]
+
+    def test_set_invalid_index_string(self):
+        socket = _make_socket()
+        result = run_debug_command("set", {"index": "abc", "value": "01"}, socket)
+        assert result["success"] is False
+        assert "Invalid index" in result["error"]
+
+    def test_set_invalid_value_hex(self):
+        socket = _make_socket()
+        result = run_debug_command("set", {"index": 5, "value": "ZZ"}, socket)
+        assert result["success"] is False
+        assert "Invalid value" in result["error"]
+
+    def test_set_value_not_string(self):
+        socket = _make_socket()
+        result = run_debug_command("set", {"index": 5, "value": 123}, socket)
+        assert result["success"] is False
+        assert "Invalid value" in result["error"]
+
     def test_sends_set_command_force_false(self):
         socket = _make_socket()
         socket.send_command.return_value = _debug_response("42 7E")

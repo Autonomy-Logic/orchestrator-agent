@@ -217,6 +217,19 @@ class TestBuildSetVariable:
 # ---------------------------------------------------------------------------
 
 
+class TestParseResponseMalformedHex:
+    def test_invalid_hex_characters(self):
+        result = parse_response("ZZ GG")
+        assert result["function_code"] is None
+        assert "malformed hex" in result["error"]
+        assert result["raw"] == "ZZ GG"
+
+    def test_odd_length_hex(self):
+        result = parse_response("4")
+        assert result["function_code"] is None
+        assert "malformed hex" in result["error"]
+
+
 class TestParseResponseEmpty:
     def test_empty_string(self):
         result = parse_response("")
@@ -338,6 +351,11 @@ class TestParseGetListResponse:
         assert result["tick"] == 1
         assert result["data_size"] == 2
         assert result["variable_data_hex"] == "AB CD"
+
+    def test_truncated_variable_data(self):
+        # Header says data_size=5 but only 2 bytes of var data present
+        result = parse_response("44 7E 00 02 00 00 00 42 00 05 01 02")
+        assert "truncated" in result["error"]
 
     def test_too_short_for_any_parse(self):
         result = parse_response("44")

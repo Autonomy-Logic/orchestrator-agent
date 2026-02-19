@@ -1,6 +1,6 @@
 """Tests for use_cases.debug_client.validate_session."""
 
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -257,6 +257,25 @@ class TestCommandErrors:
         assert result["status"] == "success"
         assert result["steps"][0]["error"] == "no response"
         assert result["steps"][0]["raw_response"] is None
+
+    @patch("use_cases.debug_client.validate_session.parse_response")
+    def test_parse_response_exception_captured(self, mock_parse):
+        mock_parse.side_effect = RuntimeError("unexpected parse failure")
+        http_client, debug_socket = _make_deps()
+        _auth_ok(http_client)
+        debug_socket.connect.return_value = {"status": "ok"}
+        debug_socket.send_command.side_effect = [
+            _debug_response("45 7E 61"),
+            _debug_response("41 00 00"),
+        ]
+
+        result = validate_debug_session(
+            "172.18.0.2", "openplc", "openplc",
+            http_client=http_client, debug_socket=debug_socket,
+        )
+
+        assert result["status"] == "success"
+        assert "Parse error" in result["steps"][0]["error"]
 
     def test_runtime_error_response_captured(self):
         http_client, debug_socket = _make_deps()
