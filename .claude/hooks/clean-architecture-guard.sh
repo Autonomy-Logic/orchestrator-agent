@@ -81,9 +81,5 @@ DEPENDENCY RULE: Source code dependencies must point ONLY inward.
   repos/ implements interfaces defined in use_cases/
   tools/ are standalone utilities"
 
-# Output as JSON with additionalContext
-jq -n --arg ctx "$CONTEXT" '{
-    "hookSpecificOutput": {
-        "additionalContext": $ctx
-    }
-}'
+# Output plain text context
+echo "$CONTEXT"

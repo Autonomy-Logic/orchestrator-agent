@@ -144,16 +144,6 @@ Container creation happens asynchronously in the background to avoid blocking th
 
 Runtime containers are created with restart policy "always", so they automatically start on boot and restart if they crash.
 
-**Note:** The `start_device` topic is currently a placeholder and returns a dummy response.
-
-### Stopping Containers
-
-**Note:** The `stop_device` topic is currently a placeholder and returns a dummy response.
-
-### Restarting Containers
-
-**Note:** The `restart_device` topic is currently a placeholder and returns a dummy response.
-
 ### Deleting Containers
 
 Use the `delete_device` topic to remove a runtime container and its associated networks.

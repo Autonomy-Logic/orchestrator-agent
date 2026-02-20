@@ -1,0 +1,30 @@
+name: Unit Tests
+
+on:
+  pull_request:
+    branches: [development, main]
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run unit tests with coverage
+        run: |
+          python3 -m pytest tests/unit/ -v --tb=short \
+            --cov=src/entities \
+            --cov=src/tools \
+            --cov=src/use_cases \
+            --cov-report=term-missing \
+            --cov-fail-under=100

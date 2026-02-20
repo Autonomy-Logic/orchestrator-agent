@@ -100,6 +100,34 @@ Common causes of build failures:
 - GitHub Actions runners have limited resources
 - Consider optimizing Dockerfile to reduce build time
 
+## Pull Request Checks
+
+The following GitHub Actions workflows run automatically on pull requests to `development`:
+
+### Unit Tests
+
+**Workflow:** `.github/workflows/unit-tests.yml`
+
+Runs the pytest unit test suite (`tests/unit/`) to validate business logic, repositories, tools, and use cases.
+
+### Architecture Tests
+
+**Workflow:** `.github/workflows/architecture-tests.yml`
+
+Runs architecture dependency rule tests (`tests/architecture/`) to verify that clean architecture layer boundaries are respected (inner layers never import outer layers).
+
+### Format Check
+
+**Workflow:** `.github/workflows/format-check.yml`
+
+Runs [Black](https://black.readthedocs.io/) to check Python code formatting. This is a non-blocking check — it reports formatting issues without failing the build.
+
+### Lint
+
+**Workflow:** `.github/workflows/lint.yml`
+
+Runs [Pylint](https://pylint.readthedocs.io/) in errors-only mode to catch code errors without enforcing style conventions.
+
 ## Network Monitor Image
 
 The network monitor sidecar has a separate Dockerfile:
@@ -110,8 +138,6 @@ Currently, the network monitor image is built manually. Consider adding it to th
 
 ## Future Improvements
 
-- Add automated testing to CI/CD pipeline
-- Add code linting and formatting checks
 - Add security scanning for Docker images
 - Add automated deployment to staging environment
 - Add network monitor image to CI/CD workflow

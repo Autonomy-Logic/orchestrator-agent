@@ -1,22 +1,22 @@
 import os
-import socket
 from tools.logger import log_debug, log_info, log_error, log_warning
 
 HOST_NAME = os.getenv("HOST_NAME", "orchestrator_agent")
 
 
-def get_self_container(*, container_runtime):
+def get_self_container(*, container_runtime, socket_repo):
     """
     Detect the orchestrator-agent's own container from inside the container.
 
     Tries multiple methods in order:
     1. HOSTNAME environment variable (Docker sets this to container ID by default)
-    2. socket.gethostname() (usually returns container ID)
+    2. socket_repo.get_hostname() (usually returns container ID)
     3. HOST_NAME environment variable (explicit override)
     4. Search by label edge.autonomy.role=orchestrator-agent
 
     Args:
-        container_runtime: Optional ContainerRuntimeRepo adapter (defaults to singleton)
+        container_runtime: ContainerRuntimeRepo adapter
+        socket_repo: SocketRepo adapter for hostname resolution
 
     Returns the container object or None if not found.
     """
@@ -30,12 +30,12 @@ def get_self_container(*, container_runtime):
             log_debug(f"HOSTNAME env {container_id} not found as container")
 
     try:
-        hostname = socket.gethostname()
+        hostname = socket_repo.get_hostname()
         container = container_runtime.get_container(hostname)
-        log_debug(f"Found self container via socket.gethostname(): {container.name}")
+        log_debug(f"Found self container via socket_repo.get_hostname(): {container.name}")
         return container
     except container_runtime.NotFoundError:
-        log_debug(f"socket.gethostname() {hostname} not found as container")
+        log_debug(f"socket_repo.get_hostname() {hostname} not found as container")
     except Exception as e:
         log_debug(f"Error getting hostname: {e}")
 
@@ -78,7 +78,7 @@ def stop_and_remove_container(container_name, *, container_runtime):
         raise
 
 
-def remove_internal_network(container_name, *, container_runtime, disconnect_all=False):
+def remove_internal_network(container_name, *, container_runtime, socket_repo, disconnect_all=False):
     """Remove a container's internal network.
     If disconnect_all=True, disconnects all containers. Otherwise only disconnects orchestrator."""
     internal_network_name = f"{container_name}_internal"
@@ -95,7 +95,7 @@ def remove_internal_network(container_name, *, container_runtime, disconnect_all
                         log_warning(f"Error disconnecting container from {internal_network_name}: {e}")
             else:
                 try:
-                    main = get_self_container(container_runtime=container_runtime)
+                    main = get_self_container(container_runtime=container_runtime, socket_repo=socket_repo)
                     if main and main.id in connected:
                         network.disconnect(main, force=True)
                 except Exception as e:

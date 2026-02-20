@@ -24,33 +24,47 @@ stream_handler.setFormatter(log_format)
 stream_handler.set_name("stream_handler")
 LOGGER.addHandler(stream_handler)
 
-## Create log directories if they don't exist
-os.makedirs("/var/orchestrator/logs", exist_ok=True)
-os.makedirs("/var/orchestrator/debug", exist_ok=True)
+_file_handlers_initialized = False
 
-## Configure debug logging file
-debugger_handler = logging.FileHandler(
-    f"/var/orchestrator/debug/orchestrator-debug-{datetime.now().strftime('%Y-%m-%d')}.log",
-    mode="w",
-)
-debugger_handler.setLevel(logging.DEBUG)
-debugger_handler.setFormatter(log_format)
-debugger_handler.set_name("debugger_handler")
-LOGGER.addHandler(debugger_handler)
 
-## Configure regular logging file
-regular_handler = logging.FileHandler(
-    f"/var/orchestrator/logs/orchestrator-logs-{datetime.now().strftime('%Y-%m-%d')}.log",
-    mode="w",
-)
-regular_handler.setLevel(level)
-regular_handler.setFormatter(log_format)
-regular_handler.set_name("regular_handler")
-LOGGER.addHandler(regular_handler)
+def _ensure_file_handlers():
+    """Lazily initialize file handlers on first use."""
+    global _file_handlers_initialized
+    if _file_handlers_initialized:
+        return
+
+    try:
+        os.makedirs("/var/orchestrator/logs", exist_ok=True)
+        os.makedirs("/var/orchestrator/debug", exist_ok=True)
+
+        ## Configure debug logging file
+        debugger_handler = logging.FileHandler(
+            f"/var/orchestrator/debug/orchestrator-debug-{datetime.now().strftime('%Y-%m-%d')}.log",
+            mode="w",
+        )
+        debugger_handler.setLevel(logging.DEBUG)
+        debugger_handler.setFormatter(log_format)
+        debugger_handler.set_name("debugger_handler")
+        LOGGER.addHandler(debugger_handler)
+
+        ## Configure regular logging file
+        regular_handler = logging.FileHandler(
+            f"/var/orchestrator/logs/orchestrator-logs-{datetime.now().strftime('%Y-%m-%d')}.log",
+            mode="w",
+        )
+        regular_handler.setLevel(level)
+        regular_handler.setFormatter(log_format)
+        regular_handler.set_name("regular_handler")
+        LOGGER.addHandler(regular_handler)
+
+        _file_handlers_initialized = True
+    except OSError:
+        pass  # Fall back to stream-only logging
 
 
 def log_critical(message: str) -> None:
     """Log a critical error message."""
+    _ensure_file_handlers()
     LOGGER.critical(
         f"{inspect.stack()[1].function} | {message}",
         stack_info=True,
@@ -60,6 +74,7 @@ def log_critical(message: str) -> None:
 
 def log_error(message: str) -> None:
     """Log an error message."""
+    _ensure_file_handlers()
     LOGGER.error(
         f"{inspect.stack()[1].function} | {message}",
         stack_info=True,
@@ -69,21 +84,25 @@ def log_error(message: str) -> None:
 
 def log_info(message: str) -> None:
     """Log an informational message."""
+    _ensure_file_handlers()
     LOGGER.info(f"{inspect.stack()[1].function} | {message}")
 
 
 def log_warning(message: str) -> None:
     """Log a warning message."""
+    _ensure_file_handlers()
     LOGGER.warning(f"{inspect.stack()[1].function} | {message}")
 
 
 def log_debug(message: str) -> None:
     """Log a debug message."""
+    _ensure_file_handlers()
     LOGGER.debug(f"{inspect.stack()[1].function} | {message}")
 
 
 def set_log_level(level: int) -> None:
     """Set the logging level."""
+    _ensure_file_handlers()
     for handler in LOGGER.handlers:
         if handler.name != "debugger_handler":
             handler.setLevel(level)

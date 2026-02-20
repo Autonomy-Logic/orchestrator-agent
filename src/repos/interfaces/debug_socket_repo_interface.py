@@ -1,0 +1,9 @@
+from typing import Protocol
+
+
+class DebugSocketRepoInterface(Protocol):
+    """Abstract interface for Socket.IO debug connections to runtime containers."""
+
+    def connect(self, url: str, token: str, timeout: float = 5.0) -> dict: ...
+    def send_command(self, hex_command: str, timeout: float = 5.0) -> dict: ...
+    def disconnect(self) -> None: ...

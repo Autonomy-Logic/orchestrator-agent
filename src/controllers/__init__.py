@@ -44,7 +44,11 @@ async def main_websocket_task(server_url: str, dns_ttl: int = 30):
 
         # Initialize WebRTC controller (signaling topics)
         session_manager = WebRTCSessionManager()
-        init_webrtc_controller(client, session_manager, ctx.client_registry, ctx.http_client)
+        init_webrtc_controller(
+            client, session_manager, ctx.client_registry, ctx.http_client,
+            http_client_factory=ctx.http_client_factory,
+            debug_socket_factory=ctx.debug_socket_factory,
+        )
 
         # Start network event listener
         await ctx.network_event_listener.start()
@@ -54,16 +58,20 @@ async def main_websocket_task(server_url: str, dns_ttl: int = 30):
         await start_webrtc_controller(session_manager)
         log_info("WebRTC controller started")
 
+        # Start debug session manager (HTTP fallback for debug commands)
+        await ctx.debug_session_manager.start()
+
         await client.connect(
             f"https://{server_url}",
         )
         log_info(f"Connected to WebSocket server at {server_url}")
         await client.wait()
     finally:
-        # Cleanup WebRTC controller on disconnect
+        # Cleanup controllers on disconnect
         log_info("Cleaning up controllers...")
+        await ctx.debug_session_manager.stop()
         await stop_webrtc_controller(session_manager)
-        log_info("WebRTC controller stopped")
+        log_info("Controllers stopped")
 
         # Cleanup: close HTTP session to release resources
         if client is not None:
@@ -87,11 +95,12 @@ def run_websocket_with_reconnection(server_url: str, run_task):
         run_task: Function to run the async task (e.g., asyncio.run)
     """
     reconnect_attempt = 0
+    ctx = get_context()
 
     while True:
         try:
             # DNS health check before attempting connection
-            if not perform_dns_health_check(server_url, reconnect_attempt):
+            if not perform_dns_health_check(server_url, reconnect_attempt, socket_repo=ctx.socket_repo):
                 delay = calculate_backoff(reconnect_attempt)
                 log_warning(f"Waiting {delay:.1f}s before next attempt...")
                 sleep(delay)

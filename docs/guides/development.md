@@ -94,7 +94,32 @@ The repository includes a VS Code dev container configuration for consistent dev
 
 ### Testing
 
-Currently, the project does not have automated tests. Manual testing is required:
+The project includes an automated test suite using pytest:
+
+```bash
+# Run all tests (unit + architecture)
+pytest
+
+# Run unit tests only
+pytest tests/unit/
+
+# Run architecture dependency tests only
+pytest tests/architecture/
+
+# Run with coverage report
+scripts/run-tests.sh --coverage
+
+# Run specific test file
+pytest tests/unit/use_cases/test_run_debug_command.py
+```
+
+**Test categories:**
+- **Unit tests** (`tests/unit/`): Cover entities, repos, tools, and use cases with mocked dependencies
+- **Architecture tests** (`tests/architecture/`): Validate clean architecture dependency rules (inner layers never import outer layers)
+
+**CI integration:** Tests run automatically on pull requests via GitHub Actions (see [CI/CD](../operations/ci-cd.md)).
+
+For manual integration testing (requires mTLS certs and Docker):
 
 1. Start the agent locally
 2. Verify WebSocket connection to cloud

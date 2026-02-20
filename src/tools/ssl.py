@@ -8,12 +8,20 @@ from .logger import log_error
 client_cert = os.path.expanduser("~/.mtls/client.crt")
 client_key = os.path.expanduser("~/.mtls/client.key")
 
-ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
-ssl_context.load_cert_chain(certfile=client_cert, keyfile=client_key)
+_ssl_context = None
+_agent_id = None
 
-ssl_context.check_hostname = True
-ssl_context.verify_mode = ssl.CERT_REQUIRED
+
+def _get_ssl_context():
+    """Lazily create and cache the SSL context."""
+    global _ssl_context
+    if _ssl_context is None:
+        _ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+        _ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+        _ssl_context.load_cert_chain(certfile=client_cert, keyfile=client_key)
+        _ssl_context.check_hostname = True
+        _ssl_context.verify_mode = ssl.CERT_REQUIRED
+    return _ssl_context
 
 
 def get_ssl_session(ttl_dns_cache: int = 30):
@@ -28,7 +36,7 @@ def get_ssl_session(ttl_dns_cache: int = 30):
         ClientSession configured with mTLS and DNS caching
     """
     connector = TCPConnector(
-        ssl=ssl_context,
+        ssl=_get_ssl_context(),
         ttl_dns_cache=ttl_dns_cache,
         use_dns_cache=True,
         force_close=True,  # Don't reuse connections (helps after network change)
@@ -60,15 +68,15 @@ def _extract_agent_id() -> str:
         return "UNKNOWN"
 
 
-_AGENT_ID = _extract_agent_id()
-
-
 def get_agent_id() -> str:
     """
     Get the cached agent ID extracted from the client certificate CN field.
-    The agent ID is extracted once at module load time for efficiency.
+    The agent ID is extracted lazily on first access and cached.
 
     Returns:
         str: Agent ID from the certificate CN field, or "UNKNOWN" if not found
     """
-    return _AGENT_ID
+    global _agent_id
+    if _agent_id is None:
+        _agent_id = _extract_agent_id()
+    return _agent_id

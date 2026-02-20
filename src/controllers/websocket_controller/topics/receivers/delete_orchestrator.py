@@ -65,6 +65,7 @@ def init(client, ctx):
                     vnic_repo=ctx.vnic_repo,
                     operations_state=ctx.operations_state,
                     devices_usage_buffer=ctx.devices_usage_buffer,
+                    socket_repo=ctx.socket_repo,
                 )
             except Exception as e:
                 log_error(f"Self-destruct failed: {e}")

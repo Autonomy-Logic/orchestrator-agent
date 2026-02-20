@@ -2,7 +2,7 @@ import asyncio
 
 from use_cases.runtime_commands.run_command import execute_for_device
 from . import topic, validate_message, with_response
-from tools.logger import *
+from tools.logger import log_info, log_error
 from tools.contract_validation import (
     StringType,
     NumberType,
@@ -68,8 +68,24 @@ def init(client, ctx):
     @with_response(NAME)
     async def callback(message):
         device_id = message.get("device_id")
+        api = message.get("api")
 
-        log_info(f"Received run_command for device {device_id}: {message.get('method')} {message.get('api')}")
+        # Route debug commands to the debug session manager
+        if api == "debug":
+            debug_message = message.get("data", {})
+            log_info(f"Debug command for {device_id}: {debug_message.get('type')}")
+            try:
+                debug_response = await asyncio.to_thread(
+                    ctx.debug_session_manager.handle_debug_message,
+                    device_id,
+                    debug_message,
+                )
+                return {"status": "success", "debug_response": debug_response}
+            except Exception as e:
+                log_error(f"Debug command failed for {device_id}: {e}")
+                return {"status": "error", "debug_response": {"type": "debug_error", "error": str(e)}}
+
+        log_info(f"Received run_command for device {device_id}: {message.get('method')} {api}")
 
         result = await asyncio.to_thread(
             execute_for_device, device_id, message,

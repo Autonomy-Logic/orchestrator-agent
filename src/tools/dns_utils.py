@@ -8,6 +8,7 @@ import socket
 import random
 from time import sleep
 from tools.logger import log_debug, log_warning, log_info
+from repos.interfaces import SocketRepoInterface
 
 # DNS health check configuration
 DNS_HEALTH_CHECK_TIMEOUT = 5.0  # DNS health check timeout in seconds
@@ -35,7 +36,7 @@ def parse_server_address(server_url: str) -> tuple[str, int]:
     return host, port
 
 
-def wait_for_dns(host: str, port: int, max_retries: int = DNS_HEALTH_CHECK_RETRIES) -> bool:
+def wait_for_dns(host: str, port: int, max_retries: int = DNS_HEALTH_CHECK_RETRIES, *, socket_repo: SocketRepoInterface) -> bool:
     """
     Wait until DNS resolution succeeds for the given host.
 
@@ -46,21 +47,14 @@ def wait_for_dns(host: str, port: int, max_retries: int = DNS_HEALTH_CHECK_RETRI
         host: Hostname to resolve
         port: Port number (for getaddrinfo)
         max_retries: Maximum number of DNS resolution attempts
+        socket_repo: Socket repository for DNS resolution
 
     Returns:
         True if DNS resolution succeeded, False if all retries failed
     """
     for attempt in range(max_retries):
         try:
-            # Force fresh DNS lookup by not using any caching hints
-            socket.setdefaulttimeout(DNS_HEALTH_CHECK_TIMEOUT)
-            result = socket.getaddrinfo(
-                host, port,
-                socket.AF_UNSPEC,
-                socket.SOCK_STREAM,
-                0,
-                socket.AI_ADDRCONFIG  # Only return addresses reachable from this host
-            )
+            result = socket_repo.resolve_dns(host, port, DNS_HEALTH_CHECK_TIMEOUT)
             if result:
                 log_debug(f"DNS health check passed for {host}:{port}")
                 return True
@@ -118,13 +112,14 @@ def is_dns_error(error: Exception) -> bool:
     return any(indicator in error_str for indicator in dns_error_indicators)
 
 
-def perform_dns_health_check(server_url: str, reconnect_attempt: int) -> bool:
+def perform_dns_health_check(server_url: str, reconnect_attempt: int, *, socket_repo: SocketRepoInterface) -> bool:
     """
     Perform DNS health check before reconnection attempt.
 
     Args:
         server_url: Server URL in host:port format
         reconnect_attempt: Current reconnection attempt number
+        socket_repo: Socket repository for DNS resolution
 
     Returns:
         True if DNS check passed or not needed, False if DNS failed
@@ -135,7 +130,7 @@ def perform_dns_health_check(server_url: str, reconnect_attempt: int) -> bool:
     host, port = parse_server_address(server_url)
     log_info(f"Performing DNS health check for {host}...")
 
-    if wait_for_dns(host, port):
+    if wait_for_dns(host, port, socket_repo=socket_repo):
         return True
 
     log_warning(

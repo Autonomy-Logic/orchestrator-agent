@@ -110,6 +110,12 @@ class WebRTCSessionManager:
                     channel_handler.close()
                 except Exception as e:
                     log_debug(f"Error closing channel handler: {e}")
+            debug_handler = existing_session.get("debug_channel_handler")
+            if debug_handler:
+                try:
+                    debug_handler.close()
+                except Exception as e:
+                    log_debug(f"Error closing debug channel handler: {e}")
             try:
                 await existing_session["pc"].close()
                 log_info(f"Closed replaced session {session_id}")
@@ -125,6 +131,8 @@ class WebRTCSessionManager:
                 "device_id": device_id,
                 "data_channel": None,
                 "channel_handler": None,
+                "debug_channel": None,
+                "debug_channel_handler": None,
                 "state": SessionState.CREATED,
                 "created_at": now,
                 "last_activity": now,
@@ -198,6 +206,14 @@ class WebRTCSessionManager:
                 channel_handler.close()
             except Exception as e:
                 log_debug(f"Error closing channel handler: {e}")
+
+        # Close debug channel handler if exists
+        debug_handler = session.get("debug_channel_handler")
+        if debug_handler:
+            try:
+                debug_handler.close()
+            except Exception as e:
+                log_debug(f"Error closing debug channel handler: {e}")
 
         # Close peer connection
         try:
@@ -282,6 +298,29 @@ class WebRTCSessionManager:
         """Get the data channel handler for a session."""
         session = self._sessions.get(session_id)
         return session.get("channel_handler") if session else None
+
+    def set_debug_channel(self, session_id: str, channel) -> bool:
+        """Associate a debug data channel with a session."""
+        session = self._sessions.get(session_id)
+        if session:
+            session["debug_channel"] = channel
+            session["last_activity"] = datetime.now()
+            return True
+        return False
+
+    def set_debug_channel_handler(self, session_id: str, handler) -> bool:
+        """Associate a debug channel handler with a session."""
+        session = self._sessions.get(session_id)
+        if session:
+            session["debug_channel_handler"] = handler
+            session["last_activity"] = datetime.now()
+            return True
+        return False
+
+    def get_debug_channel_handler(self, session_id: str):
+        """Get the debug channel handler for a session."""
+        session = self._sessions.get(session_id)
+        return session.get("debug_channel_handler") if session else None
 
     def on_session_closed(self, callback: Callable):
         """Register a callback for when sessions are closed."""

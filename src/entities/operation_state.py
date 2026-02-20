@@ -6,12 +6,29 @@ from typing import Optional
 class OperationState:
     """Represents the state of an ongoing container operation."""
 
+    VALID_STATUSES = frozenset({"creating", "deleting", "error"})
+    VALID_OPERATIONS = frozenset({"create", "delete", "unknown"})
+
     status: str
     operation: str
     step: Optional[str] = None
     error: Optional[str] = None
     started_at: Optional[str] = None
     updated_at: Optional[str] = None
+
+    def validate(self) -> None:
+        """Raise ValueError if business invariants are violated."""
+        if self.status not in self.VALID_STATUSES:
+            raise ValueError(f"status must be one of {self.VALID_STATUSES}, got '{self.status}'")
+        if self.operation not in self.VALID_OPERATIONS:
+            raise ValueError(f"operation must be one of {self.VALID_OPERATIONS}, got '{self.operation}'")
+
+    @classmethod
+    def create(cls, status: str, operation: str, **kwargs) -> "OperationState":
+        """Construct and validate a new OperationState."""
+        instance = cls(status=status, operation=operation, **kwargs)
+        instance.validate()
+        return instance
 
     def to_dict(self) -> dict:
         """Convert to a JSON-serializable dict."""

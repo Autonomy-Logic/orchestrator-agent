@@ -8,17 +8,8 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
-COPY requirements.txt .
+COPY requirements.txt requirements-dev.txt ./
 RUN python3 -m pip install --upgrade pip && \
-    python3 -m pip install -r requirements.txt
-
-# Ensures the .ssh directory has the correct permissions
-RUN mkdir -p /root/.ssh && \
-    chmod 700 /root/.ssh
-
-# Ensures the .mtls directory has the correct permissions
-RUN mkdir -p /root/.mtls && \
-    chmod 700 /root/.mtls
+    python3 -m pip install -r requirements-dev.txt
 
 RUN mkdir -p /var/orchestrator/{logs,debug,data}

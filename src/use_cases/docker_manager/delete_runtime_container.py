@@ -12,6 +12,7 @@ def _delete_runtime_container_sync(
     serial_repo,
     operations_state,
     devices_usage_buffer,
+    socket_repo,
 ):
     """
     Synchronous implementation of runtime container deletion.
@@ -68,7 +69,7 @@ def _delete_runtime_container_sync(
             log_warning(f"Error deleting serial configurations for {container_name}: {e}")
 
         operations_state.set_step(container_name, "removing_networks")
-        remove_internal_network(container_name, container_runtime=container_runtime)
+        remove_internal_network(container_name, container_runtime=container_runtime, socket_repo=socket_repo)
 
         log_info(
             f"Runtime container {container_name} and associated resources deleted successfully"
@@ -95,6 +96,7 @@ async def delete_runtime_container(
     network_commander,
     operations_state,
     devices_usage_buffer,
+    socket_repo,
 ):
     """
     Delete a runtime container and all associated resources.
@@ -114,7 +116,7 @@ async def delete_runtime_container(
     # Clean up Proxy ARP bridges via netmon before deleting container
     # This must be done before container removal to ensure routes are properly cleaned
     try:
-        all_vnic_configs = vnic_repo.load_configs()
+        all_vnic_configs = vnic_repo.load_all_configs()
         vnic_configs = all_vnic_configs.get(container_name, [])
         for vnic_config in vnic_configs:
             proxy_arp_config = vnic_config.get("_proxy_arp_config")
@@ -141,6 +143,7 @@ async def delete_runtime_container(
         serial_repo=serial_repo,
         operations_state=operations_state,
         devices_usage_buffer=devices_usage_buffer,
+        socket_repo=socket_repo,
     )
 
 
@@ -170,6 +173,7 @@ async def start_deletion(container_name, *, ctx):
         network_commander=ctx.network_event_listener,
         operations_state=ctx.operations_state,
         devices_usage_buffer=ctx.devices_usage_buffer,
+        socket_repo=ctx.socket_repo,
     ))
 
     return {
