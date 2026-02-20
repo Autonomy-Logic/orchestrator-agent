@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 from use_cases.docker_manager.selfdestruct import (
     start_self_destruct,

@@ -1,7 +1,6 @@
 import os
 import tempfile
-import ssl as stdlib_ssl
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization

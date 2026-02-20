@@ -519,16 +519,6 @@ class TestResyncDhcpForExistingContainers:
                 }
             },
         }
-        # After reconnect, reload returns empty MAC (no fallback_mac)
-        def reload_side_effect():
-            container.attrs = {
-                "State": {"Pid": 1234},
-                "NetworkSettings": {
-                    "Networks": {
-                        "macvlan_eth0_net": {"MacAddress": ""}
-                    }
-                },
-            }
         # First reload keeps mismatch, subsequent clear MAC
         reload_count = {"n": 0}
         def reload_side_effect_multi():

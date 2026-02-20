@@ -1,4 +1,3 @@
-import pytest
 from unittest.mock import MagicMock
 
 from use_cases.docker_manager.get_device_status import (

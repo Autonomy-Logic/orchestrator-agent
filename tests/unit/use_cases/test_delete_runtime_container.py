@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch, call
+from unittest.mock import MagicMock, AsyncMock, patch
 
 from use_cases.docker_manager.delete_runtime_container import (
     _delete_runtime_container_sync,
