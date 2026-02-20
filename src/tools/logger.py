@@ -32,30 +32,34 @@ def _ensure_file_handlers():
     global _file_handlers_initialized
     if _file_handlers_initialized:
         return
-    _file_handlers_initialized = True
 
-    os.makedirs("/var/orchestrator/logs", exist_ok=True)
-    os.makedirs("/var/orchestrator/debug", exist_ok=True)
+    try:
+        os.makedirs("/var/orchestrator/logs", exist_ok=True)
+        os.makedirs("/var/orchestrator/debug", exist_ok=True)
 
-    ## Configure debug logging file
-    debugger_handler = logging.FileHandler(
-        f"/var/orchestrator/debug/orchestrator-debug-{datetime.now().strftime('%Y-%m-%d')}.log",
-        mode="w",
-    )
-    debugger_handler.setLevel(logging.DEBUG)
-    debugger_handler.setFormatter(log_format)
-    debugger_handler.set_name("debugger_handler")
-    LOGGER.addHandler(debugger_handler)
+        ## Configure debug logging file
+        debugger_handler = logging.FileHandler(
+            f"/var/orchestrator/debug/orchestrator-debug-{datetime.now().strftime('%Y-%m-%d')}.log",
+            mode="w",
+        )
+        debugger_handler.setLevel(logging.DEBUG)
+        debugger_handler.setFormatter(log_format)
+        debugger_handler.set_name("debugger_handler")
+        LOGGER.addHandler(debugger_handler)
 
-    ## Configure regular logging file
-    regular_handler = logging.FileHandler(
-        f"/var/orchestrator/logs/orchestrator-logs-{datetime.now().strftime('%Y-%m-%d')}.log",
-        mode="w",
-    )
-    regular_handler.setLevel(level)
-    regular_handler.setFormatter(log_format)
-    regular_handler.set_name("regular_handler")
-    LOGGER.addHandler(regular_handler)
+        ## Configure regular logging file
+        regular_handler = logging.FileHandler(
+            f"/var/orchestrator/logs/orchestrator-logs-{datetime.now().strftime('%Y-%m-%d')}.log",
+            mode="w",
+        )
+        regular_handler.setLevel(level)
+        regular_handler.setFormatter(log_format)
+        regular_handler.set_name("regular_handler")
+        LOGGER.addHandler(regular_handler)
+
+        _file_handlers_initialized = True
+    except OSError:
+        pass  # Fall back to stream-only logging
 
 
 def log_critical(message: str) -> None:

@@ -1,5 +1,4 @@
 import time
-import pytest
 
 from tools.utils import matches_device_id, parse_period
 

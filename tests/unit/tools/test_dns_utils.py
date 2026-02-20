@@ -1,5 +1,5 @@
 import socket
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from tools.dns_utils import (
     parse_server_address,

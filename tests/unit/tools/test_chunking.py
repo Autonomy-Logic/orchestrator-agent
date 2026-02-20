@@ -1,6 +1,5 @@
 import json
 import time
-from unittest.mock import patch
 
 from tools.chunking import (
     split_into_chunks,

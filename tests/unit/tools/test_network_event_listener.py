@@ -186,7 +186,7 @@ class TestDelegatedApi:
         listener = _make_listener()
         listener.netmon_client.start_dhcp = AsyncMock(return_value={"success": True})
 
-        result = await listener.start_dhcp("plc1", "v1", "02:00:00:00:00:01", 1234)
+        await listener.start_dhcp("plc1", "v1", "02:00:00:00:00:01", 1234)
 
         listener.netmon_client.start_dhcp.assert_called_once_with("plc1", "v1", "02:00:00:00:00:01", 1234)
 
@@ -377,7 +377,7 @@ class TestLifecycle:
         try:
             await listener.listener_task
         except asyncio.CancelledError:
-            pass
+            pass  # Expected: we just cancelled this task above
 
     @pytest.mark.asyncio
     async def test_start_when_running_but_task_done_restarts(self):
@@ -469,7 +469,6 @@ class TestListenLoop:
         listener.running = True
 
         call_count = [0]
-        original_sleep = asyncio.sleep
 
         async def mock_sleep(duration):
             call_count[0] += 1
@@ -578,7 +577,7 @@ class TestListenLoop:
                 if hasattr(coro, 'close'):
                     coro.close()
             except Exception:
-                pass
+                pass  # Coroutine may already be closed; safe to ignore
             if wait_for_call[0] == 1:
                 raise asyncio.TimeoutError()
             return b""  # close connection
@@ -619,7 +618,7 @@ class TestListenLoop:
                 if hasattr(coro, 'close'):
                     coro.close()
             except Exception:
-                pass
+                pass  # Coroutine may already be closed; safe to ignore
             raise RuntimeError("unexpected error")
 
         mock_reader = MagicMock()

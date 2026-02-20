@@ -1,6 +1,5 @@
 """Shared fixtures for the orchestrator-agent test suite."""
 
-import os
 import pytest
 
 from tools.json_file import JsonConfigStore

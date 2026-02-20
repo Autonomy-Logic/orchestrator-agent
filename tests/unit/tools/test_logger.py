@@ -84,6 +84,22 @@ class TestEnsureFileHandlers:
                     LOGGER.addHandler(h)
             logger_mod._file_handlers_initialized = True
 
+    @patch("tools.logger.os.makedirs", side_effect=OSError("read-only filesystem"))
+    def test_falls_back_to_stream_only_on_os_error(self, mock_makedirs):
+        """_ensure_file_handlers falls back to stream-only if setup fails."""
+        logger_mod._file_handlers_initialized = False
+        handler_count_before = len(LOGGER.handlers)
+
+        try:
+            _ensure_file_handlers()
+
+            # Flag stays False so next call will retry
+            assert logger_mod._file_handlers_initialized is False
+            # No new handlers were added
+            assert len(LOGGER.handlers) == handler_count_before
+        finally:
+            logger_mod._file_handlers_initialized = True
+
     def test_noop_when_already_initialized(self):
         """_ensure_file_handlers returns immediately when already initialized."""
         logger_mod._file_handlers_initialized = True
