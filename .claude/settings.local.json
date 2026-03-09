@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(wc:*)",
+      "Bash(xargs cat:*)",
+      "Bash(export PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\")",
+      "Bash(source:*)",
+      "Bash(git fetch:*)",
+      "Bash(git push:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh auth status:*)",
+      "Bash(gh auth login:*)",
+      "Bash(gh pr list:*)",
+      "Bash(git rebase:*)",
+      "Bash(gh pr review:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh run view:*)",
+      "Bash(git merge:*)",
+      "Bash(git add:*)",
+      "Bash(brew install:*)",
+      "Bash(export PATH=\"/opt/homebrew/bin:/usr/bin:/bin:$PATH\")",
+      "Bash(tree:*)",
+      "Bash(python3 -m py_compile:*)",
+      "Bash(gh pr view:*)",
+      "Bash(npm run lint:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nfix: add STUN servers to WebRTC peer connection for NAT traversal\n\nConfigure RTCPeerConnection with the same STUN servers used by the\nbrowser \\(stun.l.google.com\\). This enables the orchestrator-agent to\ngenerate server reflexive \\(srflx\\) ICE candidates with public IPs,\nfixing ICE connection failures when browser and orchestrator are\non the same network.\n\nPreviously, the orchestrator only generated host candidates \\(local IPs\\),\nwhich couldn''t be reached by the browser due to VM network isolation.\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git checkout:*)",
+      "Bash(pnpm run lint)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nfix: add STUN servers to WebRTC peer connection for NAT traversal\n\nConfigure ICE servers matching openplc-web to enable WebRTC connections\nthrough NAT. Uses Google and Cloudflare STUN servers.\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
+    ]
+  }
+}
