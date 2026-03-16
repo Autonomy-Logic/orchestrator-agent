@@ -2,7 +2,6 @@ from . import get_self_container
 from entities import DedicatedNicConfig
 from tools.logger import *
 from tools.network_utils import get_macvlan_network_key
-from datetime import datetime
 import asyncio
 import random
 
@@ -762,11 +761,7 @@ async def create_runtime_container(
         log_info(f"Moving dedicated NIC {nic_to_move} to container {container_name}")
 
         # Save config before the move so resync can detect/retry on crash
-        nic_config = DedicatedNicConfig.create(
-            host_interface=nic_to_move,
-            container_interface=nic_to_move,
-            moved_at=datetime.now(datetime.timezone.utc).isoformat(),
-        )
+        nic_config = DedicatedNicConfig.create(nic_to_move)
         dedicated_nic_repo.save_config(container_name, nic_config.to_dict())
 
         move_result = await network_commander.move_nic_to_container(nic_to_move, container_pid)

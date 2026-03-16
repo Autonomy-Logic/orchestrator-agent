@@ -21,6 +21,38 @@ class DedicatedNICManager:
         self._running = False
         self._events_generator = None
 
+    async def _move_nic_to_running_container(self, container_name, host_interface, *, check_present=False):
+        """
+        Get a running container's PID and move the NIC into its namespace.
+
+        Args:
+            check_present: If True, skip move if NIC is already in the container.
+
+        Returns True if NIC was moved (or already present), False on failure.
+        """
+        container = self.container_runtime.get_container(container_name)
+        container.reload()
+        pid = container.attrs.get("State", {}).get("Pid", 0)
+
+        if pid <= 0 or container.status != "running":
+            log_debug(f"Container {container_name} not running, skipping NIC move for {host_interface}")
+            return False
+
+        if check_present:
+            check_result = await self.netmon_client.check_nic_in_container(host_interface, pid)
+            if check_result.get("present"):
+                log_debug(f"NIC {host_interface} already present in {container_name}")
+                return True
+
+        log_info(f"Moving NIC {host_interface} to container {container_name} (PID {pid})")
+        result = await self.netmon_client.move_nic_to_container(host_interface, pid)
+        if result.get("success"):
+            log_info(f"NIC {host_interface} moved to {container_name}")
+            return True
+
+        log_warning(f"Failed to move NIC {host_interface} to {container_name}: {result.get('error')}")
+        return False
+
     async def resync_nics_for_existing_containers(self):
         """
         Called on orchestrator startup. Re-moves NICs for all running containers
@@ -38,56 +70,19 @@ class DedicatedNICManager:
         orphaned = []
         for container_name, raw_config in all_configs.items():
             nic_config = DedicatedNicConfig.from_dict(raw_config)
-            host_interface = nic_config.host_interface
 
             try:
-                container = self.container_runtime.get_container(container_name)
-                container.reload()
-                pid = container.attrs.get("State", {}).get("Pid", 0)
-
-                if pid <= 0 or container.status != "running":
-                    log_debug(
-                        f"Container {container_name} not running, "
-                        f"skipping NIC resync for {host_interface}"
-                    )
-                    continue
-
-                # Check if NIC is already in the container
-                check_result = await self.netmon_client.check_nic_in_container(
-                    host_interface, pid
+                await self._move_nic_to_running_container(
+                    container_name, nic_config.host_interface, check_present=True,
                 )
-                if check_result.get("present"):
-                    log_debug(
-                        f"NIC {host_interface} already present in {container_name}"
-                    )
-                    continue
-
-                # NIC not in container -- move it
-                log_info(
-                    f"Re-moving NIC {host_interface} to container {container_name} "
-                    f"(PID {pid})"
-                )
-                result = await self.netmon_client.move_nic_to_container(
-                    host_interface, pid
-                )
-                if result.get("success"):
-                    log_info(f"NIC {host_interface} re-moved to {container_name}")
-                else:
-                    log_warning(
-                        f"Failed to re-move NIC {host_interface} to {container_name}: "
-                        f"{result.get('error')}"
-                    )
-
             except self.container_runtime.NotFoundError:
                 log_warning(
                     f"Container {container_name} no longer exists, "
-                    f"cleaning up orphaned NIC config for {host_interface}"
+                    f"cleaning up orphaned NIC config for {nic_config.host_interface}"
                 )
                 orphaned.append(container_name)
             except Exception as e:
-                log_error(
-                    f"Error resyncing NIC {host_interface} for {container_name}: {e}"
-                )
+                log_error(f"Error resyncing NIC for {container_name}: {e}")
 
         for container_name in orphaned:
             self.dedicated_nic_repo.delete_config(container_name)
@@ -100,7 +95,7 @@ class DedicatedNICManager:
         re-moved into the new namespace (container restart creates a new PID/namespace).
 
         The Docker SDK events iterator is synchronous and blocking, so we run it in
-        a thread via asyncio.to_thread and use an asyncio.Queue to forward events
+        a thread via run_in_executor and use an asyncio.Queue to forward events
         back to the async event loop without blocking it.
         """
         self._running = True
@@ -148,44 +143,17 @@ class DedicatedNICManager:
                     continue
 
                 nic_config = DedicatedNicConfig.from_dict(raw_config)
-                host_interface = nic_config.host_interface
-                log_info(
-                    f"Container {container_name} started, "
-                    f"re-assigning dedicated NIC {host_interface}"
-                )
+                log_info(f"Container {container_name} started, re-assigning dedicated NIC {nic_config.host_interface}")
 
                 # Brief delay for container PID to be fully assigned
                 await asyncio.sleep(1)
 
                 try:
-                    container = self.container_runtime.get_container(container_name)
-                    container.reload()
-                    pid = container.attrs.get("State", {}).get("Pid", 0)
-
-                    if pid > 0:
-                        result = await self.netmon_client.move_nic_to_container(
-                            host_interface, pid
-                        )
-                        if result.get("success"):
-                            log_info(
-                                f"NIC {host_interface} re-assigned to "
-                                f"{container_name} (PID {pid})"
-                            )
-                        else:
-                            log_warning(
-                                f"Failed to re-assign NIC {host_interface}: "
-                                f"{result.get('error')}"
-                            )
-                    else:
-                        log_warning(
-                            f"Container {container_name} has PID 0, "
-                            f"cannot re-assign NIC"
-                        )
-                except Exception as e:
-                    log_error(
-                        f"Error re-assigning NIC {host_interface} "
-                        f"to {container_name}: {e}"
+                    await self._move_nic_to_running_container(
+                        container_name, nic_config.host_interface,
                     )
+                except Exception as e:
+                    log_error(f"Error re-assigning NIC to {container_name}: {e}")
         finally:
             self._running = False
             poll_future.cancel()
