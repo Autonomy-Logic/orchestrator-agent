@@ -81,7 +81,8 @@ def build_interface_info_from_cache(
 
 
 def get_host_interfaces_data(
-    include_virtual: bool = False, detailed: bool = True, *, interface_cache
+    include_virtual: bool = False, detailed: bool = True,
+    *, interface_cache, dedicated_nic_repo=None,
 ) -> Dict[str, Any]:
     """
     Get network interfaces on the host from the interface cache.
@@ -125,6 +126,18 @@ def get_host_interfaces_data(
 
         interfaces: List[dict] = []
 
+        # Build lookup of which NICs are dedicated to containers
+        dedicated_nics = {}
+        if dedicated_nic_repo:
+            try:
+                all_nic_configs = dedicated_nic_repo.load_all_configs()
+                for container_name, nic_config in all_nic_configs.items():
+                    host_iface = nic_config.get("host_interface")
+                    if host_iface:
+                        dedicated_nics[host_iface] = container_name
+            except Exception as e:
+                log_warning(f"Could not load dedicated NIC configs: {e}")
+
         cache_snapshot = all_interfaces
 
         for interface_name, cache_data in cache_snapshot.items():
@@ -135,6 +148,10 @@ def get_host_interfaces_data(
             interface_info = build_interface_info_from_cache(
                 interface_name, cache_data, detailed
             )
+
+            # Add dedicated_to field if this NIC is assigned to a container
+            if interface_name in dedicated_nics:
+                interface_info["dedicated_to"] = dedicated_nics[interface_name]
 
             if interface_info["ipv4_addresses"] or include_virtual:
                 interfaces.append(interface_info)

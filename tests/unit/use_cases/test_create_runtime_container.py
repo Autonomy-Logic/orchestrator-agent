@@ -170,13 +170,14 @@ class TestCreateRuntimeContainerSync:
         ops = MagicMock()
         buffer = MagicMock()
         socket_repo = MagicMock()
-        return runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo
+        dedicated_nic_repo = MagicMock()
+        return runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo, dedicated_nic_repo
 
     @patch("use_cases.docker_manager.create_runtime_container._validate_mac_addresses")
     @patch("use_cases.docker_manager.create_runtime_container._validate_vnic_configs")
     def test_name_already_registered(self, mock_vnic_val, mock_mac_val):
         """client_registry.contains=True → None, sets error."""
-        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo = self._make_deps()
+        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo, dedicated_nic_repo = self._make_deps()
         registry.contains.return_value = True
 
         result = _create_runtime_container_sync(
@@ -199,7 +200,7 @@ class TestCreateRuntimeContainerSync:
     @patch("use_cases.docker_manager.create_runtime_container._validate_vnic_configs")
     def test_vnic_validation_fails(self, mock_vnic_val, mock_mac_val):
         """Invalid vNICs → None, sets error."""
-        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo = self._make_deps()
+        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo, dedicated_nic_repo = self._make_deps()
         registry.contains.return_value = False
         mock_vnic_val.return_value = (False, "duplicate network")
 
@@ -222,7 +223,7 @@ class TestCreateRuntimeContainerSync:
     @patch("use_cases.docker_manager.create_runtime_container._validate_vnic_configs")
     def test_mac_validation_fails(self, mock_vnic_val, mock_mac_val):
         """MAC validation fails → None, sets error."""
-        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo = self._make_deps()
+        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo, dedicated_nic_repo = self._make_deps()
         registry.contains.return_value = False
         mock_vnic_val.return_value = (True, "")
         mock_mac_val.return_value = (False, "MAC already in use")
@@ -247,7 +248,7 @@ class TestCreateRuntimeContainerSync:
     @patch("use_cases.docker_manager.create_runtime_container._validate_vnic_configs")
     def test_full_creation_with_ethernet_api144(self, mock_vnic_val, mock_mac_val, mock_get_self):
         """Full container creation with ethernet vNIC and API >= 1.44."""
-        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo = self._make_deps()
+        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo, dedicated_nic_repo = self._make_deps()
         registry.contains.return_value = False
         mock_vnic_val.return_value = (True, "")
         mock_mac_val.return_value = (True, "")
@@ -318,7 +319,7 @@ class TestCreateRuntimeContainerSync:
     @patch("use_cases.docker_manager.create_runtime_container._validate_vnic_configs")
     def test_image_not_found_uses_local(self, mock_vnic_val, mock_mac_val, mock_get_self):
         """Image pull NotFoundError + local image exists → fallback."""
-        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo = self._make_deps()
+        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo, dedicated_nic_repo = self._make_deps()
         registry.contains.return_value = False
         mock_vnic_val.return_value = (True, "")
         mock_mac_val.return_value = (True, "")
@@ -371,7 +372,7 @@ class TestCreateRuntimeContainerSync:
     @patch("use_cases.docker_manager.create_runtime_container._validate_vnic_configs")
     def test_image_not_found_no_local_returns_none(self, mock_vnic_val, mock_mac_val):
         """Image pull NotFoundError + no local image → error."""
-        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo = self._make_deps()
+        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo, dedicated_nic_repo = self._make_deps()
         registry.contains.return_value = False
         mock_vnic_val.return_value = (True, "")
         mock_mac_val.return_value = (True, "")
@@ -397,7 +398,7 @@ class TestCreateRuntimeContainerSync:
     @patch("use_cases.docker_manager.create_runtime_container._validate_vnic_configs")
     def test_image_pull_generic_failure_continues(self, mock_vnic_val, mock_mac_val):
         """Generic image pull failure logs warning and continues."""
-        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo = self._make_deps()
+        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo, dedicated_nic_repo = self._make_deps()
         registry.contains.return_value = False
         mock_vnic_val.return_value = (True, "")
         mock_mac_val.return_value = (True, "")
@@ -447,7 +448,7 @@ class TestCreateRuntimeContainerSync:
     @patch("use_cases.docker_manager.create_runtime_container._validate_vnic_configs")
     def test_api_below_144_connects_after_creation(self, mock_vnic_val, mock_mac_val, mock_get_self):
         """API < 1.44 connects MACVLAN after creation."""
-        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo = self._make_deps()
+        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo, dedicated_nic_repo = self._make_deps()
         registry.contains.return_value = False
         mock_vnic_val.return_value = (True, "")
         mock_mac_val.return_value = (True, "")
@@ -496,7 +497,7 @@ class TestCreateRuntimeContainerSync:
     @patch("use_cases.docker_manager.create_runtime_container._validate_vnic_configs")
     def test_api_below_144_macvlan_connect_fails(self, mock_vnic_val, mock_mac_val):
         """API < 1.44 MACVLAN connect failure removes container and re-raises."""
-        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo = self._make_deps()
+        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo, dedicated_nic_repo = self._make_deps()
         registry.contains.return_value = False
         mock_vnic_val.return_value = (True, "")
         mock_mac_val.return_value = (True, "")
@@ -536,7 +537,7 @@ class TestCreateRuntimeContainerSync:
     @patch("use_cases.docker_manager.create_runtime_container._validate_vnic_configs")
     def test_self_container_already_connected(self, mock_vnic_val, mock_mac_val, mock_get_self):
         """Self container 'already exists' APIError is handled gracefully."""
-        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo = self._make_deps()
+        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo, dedicated_nic_repo = self._make_deps()
         registry.contains.return_value = False
         mock_vnic_val.return_value = (True, "")
         mock_mac_val.return_value = (True, "")
@@ -589,7 +590,7 @@ class TestCreateRuntimeContainerSync:
     @patch("use_cases.docker_manager.create_runtime_container._validate_vnic_configs")
     def test_wifi_vnic_collected(self, mock_vnic_val, mock_mac_val, mock_get_self):
         """WiFi vNIC is collected for post-creation configuration."""
-        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo = self._make_deps()
+        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo, dedicated_nic_repo = self._make_deps()
         registry.contains.return_value = False
         mock_vnic_val.return_value = (True, "")
         mock_mac_val.return_value = (True, "")
@@ -636,7 +637,7 @@ class TestCreateRuntimeContainerSync:
     @patch("use_cases.docker_manager.create_runtime_container._validate_vnic_configs")
     def test_serial_configs_saved(self, mock_vnic_val, mock_mac_val, mock_get_self):
         """Serial configs are saved when provided."""
-        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo = self._make_deps()
+        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo, dedicated_nic_repo = self._make_deps()
         registry.contains.return_value = False
         mock_vnic_val.return_value = (True, "")
         mock_mac_val.return_value = (True, "")
@@ -689,7 +690,7 @@ class TestCreateRuntimeContainerSync:
     @patch("use_cases.docker_manager.create_runtime_container._validate_vnic_configs")
     def test_user_provided_mac_address(self, mock_vnic_val, mock_mac_val, mock_get_self):
         """User-provided MAC address is used instead of auto-generated."""
-        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo = self._make_deps()
+        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo, dedicated_nic_repo = self._make_deps()
         registry.contains.return_value = False
         mock_vnic_val.return_value = (True, "")
         mock_mac_val.return_value = (True, "")
@@ -748,7 +749,7 @@ class TestCreateRuntimeContainerSync:
     @patch("use_cases.docker_manager.create_runtime_container._validate_vnic_configs")
     def test_self_container_api_error_other(self, mock_vnic_val, mock_mac_val, mock_get_self):
         """APIError not 'already exists' logs warning."""
-        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo = self._make_deps()
+        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo, dedicated_nic_repo = self._make_deps()
         registry.contains.return_value = False
         mock_vnic_val.return_value = (True, "")
         mock_mac_val.return_value = (True, "")
@@ -803,7 +804,7 @@ class TestCreateRuntimeContainerSync:
     @patch("use_cases.docker_manager.create_runtime_container._validate_vnic_configs")
     def test_generic_exception_connecting_internal(self, mock_vnic_val, mock_mac_val, mock_get_self):
         """Generic exception connecting to internal network is handled."""
-        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo = self._make_deps()
+        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo, dedicated_nic_repo = self._make_deps()
         registry.contains.return_value = False
         mock_vnic_val.return_value = (True, "")
         mock_mac_val.return_value = (True, "")
@@ -853,7 +854,7 @@ class TestCreateRuntimeContainerSync:
     @patch("use_cases.docker_manager.create_runtime_container._validate_vnic_configs")
     def test_internal_network_not_in_settings(self, mock_vnic_val, mock_mac_val, mock_get_self):
         """Internal network not in network settings logs warning."""
-        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo = self._make_deps()
+        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo, dedicated_nic_repo = self._make_deps()
         registry.contains.return_value = False
         mock_vnic_val.return_value = (True, "")
         mock_mac_val.return_value = (True, "")
@@ -904,7 +905,7 @@ class TestCreateRuntimeContainerSync:
     @patch("use_cases.docker_manager.create_runtime_container._validate_vnic_configs")
     def test_exception_during_creation_sets_error(self, mock_vnic_val, mock_mac_val):
         """Exception during container creation sets error state."""
-        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo = self._make_deps()
+        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo, dedicated_nic_repo = self._make_deps()
         registry.contains.return_value = False
         mock_vnic_val.return_value = (True, "")
         mock_mac_val.return_value = (True, "")
@@ -930,7 +931,7 @@ class TestCreateRuntimeContainerSync:
     @patch("use_cases.docker_manager.create_runtime_container._validate_vnic_configs")
     def test_static_ip_with_macvlan(self, mock_vnic_val, mock_mac_val, mock_get_self):
         """Static IP mode with MACVLAN passes IP to endpoint config."""
-        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo = self._make_deps()
+        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo, dedicated_nic_repo = self._make_deps()
         registry.contains.return_value = False
         mock_vnic_val.return_value = (True, "")
         mock_mac_val.return_value = (True, "")
@@ -982,7 +983,7 @@ class TestCreateRuntimeContainerSync:
     @patch("use_cases.docker_manager.create_runtime_container._validate_vnic_configs")
     def test_runtime_version_tag(self, mock_vnic_val, mock_mac_val, mock_get_self):
         """Custom runtime_version tag is used in image name."""
-        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo = self._make_deps()
+        runtime, vnic_repo, serial_repo, registry, cache, ops, buffer, socket_repo, dedicated_nic_repo = self._make_deps()
         registry.contains.return_value = False
         mock_vnic_val.return_value = (True, "")
         mock_mac_val.return_value = (True, "")

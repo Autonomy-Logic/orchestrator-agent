@@ -141,6 +141,35 @@ class NetmonClientRepo:
         log_info("Requesting cleanup of all Proxy ARP interfaces via netmon")
         return await self.send_command(command)
 
+    async def move_nic_to_container(self, host_interface: str, container_pid: int) -> dict:
+        """Request netmon to move a physical NIC into a container's network namespace."""
+        command = {
+            "command": "move_nic_to_container",
+            "host_interface": host_interface,
+            "container_pid": container_pid,
+        }
+        log_info(f"Requesting NIC move: {host_interface} -> container PID {container_pid}")
+        return await self.send_command(command)
+
+    async def return_nic_to_host(self, host_interface: str, container_pid: int) -> dict:
+        """Request netmon to return a physical NIC from a container back to the host."""
+        command = {
+            "command": "return_nic_to_host",
+            "host_interface": host_interface,
+            "container_pid": container_pid,
+        }
+        log_info(f"Requesting NIC return: {host_interface} <- container PID {container_pid}")
+        return await self.send_command(command)
+
+    async def check_nic_in_container(self, host_interface: str, container_pid: int) -> dict:
+        """Check whether a NIC is present inside a container's network namespace."""
+        command = {
+            "command": "check_nic_in_container",
+            "host_interface": host_interface,
+            "container_pid": container_pid,
+        }
+        return await self.send_command(command)
+
     def get_dhcp_ip(self, container_name: str, vnic_name: str) -> Optional[str]:
         """Get the DHCP-assigned IP for a container's vNIC."""
         key = f"{container_name}:{vnic_name}"
