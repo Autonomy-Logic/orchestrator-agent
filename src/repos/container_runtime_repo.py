@@ -216,6 +216,9 @@ class ContainerRuntimeRepo(ContainerRuntimeRepoInterface):
                 log_error(f"Failed to create internal network {network_name}: {e}")
                 raise
 
+    def docker_events(self, **kwargs) -> Any:
+        return self._client.events(**kwargs)
+
     def get_existing_mac_addresses_on_interface(
         self, parent_interface: str
     ) -> Dict[str, str]:

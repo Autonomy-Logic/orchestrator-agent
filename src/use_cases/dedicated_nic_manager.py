@@ -105,10 +105,9 @@ class DedicatedNICManager:
         def _poll_docker_events():
             """Run in a thread — blocks on Docker event stream, pushes to queue."""
             try:
-                self._events_generator = self.container_runtime.client.events(
+                self._events_generator = self.container_runtime.docker_events(
                     filters={"event": ["start"]},
                     decode=True,
-                    timeout=30,
                 )
                 for event in self._events_generator:
                     if not self._running:

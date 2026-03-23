@@ -1523,8 +1523,15 @@ class NetworkMonitor:
         os.chmod(self.socket_path, 0o666)
         logger.info(f"Unix socket created at {self.socket_path}")
 
-    def get_interface_info(self, ifname: str) -> Optional[Dict]:
-        """Get detailed information about a network interface"""
+    def get_interface_info(self, ifname: str, require_ipv4: bool = True) -> Optional[Dict]:
+        """Get detailed information about a network interface.
+
+        Args:
+            ifname: Interface name (e.g., "eth0", "enp4s0")
+            require_ipv4: If True (default), return None when the interface has
+                no IPv4 addresses. Set to False to include interfaces without IP
+                (e.g., Ethernet ports intended for raw-frame protocols like EtherCAT).
+        """
         try:
             links = self.ipr.link_lookup(ifname=ifname)
             if not links:
@@ -1540,30 +1547,29 @@ class NetworkMonitor:
                 return None
 
             addrs = self.ipr.get_addr(index=idx, family=socket.AF_INET)
-            if not addrs:
-                return None
 
             ipv4_addresses = []
-            for addr in addrs:
-                ip = addr.get_attr("IFA_ADDRESS")
-                prefixlen = addr["prefixlen"]
-                if ip:
-                    try:
-                        network = ipaddress.ip_network(
-                            f"{ip}/{prefixlen}", strict=False
-                        )
-                        ipv4_addresses.append(
-                            {
-                                "address": ip,
-                                "prefixlen": prefixlen,
-                                "subnet": str(network.with_prefixlen),
-                                "network_address": str(network.network_address),
-                            }
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to parse IP {ip}/{prefixlen}: {e}")
+            if addrs:
+                for addr in addrs:
+                    ip = addr.get_attr("IFA_ADDRESS")
+                    prefixlen = addr["prefixlen"]
+                    if ip:
+                        try:
+                            network = ipaddress.ip_network(
+                                f"{ip}/{prefixlen}", strict=False
+                            )
+                            ipv4_addresses.append(
+                                {
+                                    "address": ip,
+                                    "prefixlen": prefixlen,
+                                    "subnet": str(network.with_prefixlen),
+                                    "network_address": str(network.network_address),
+                                }
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to parse IP {ip}/{prefixlen}: {e}")
 
-            if not ipv4_addresses:
+            if require_ipv4 and not ipv4_addresses:
                 return None
 
             gateway = self.get_default_gateway(ifname)
@@ -1603,7 +1609,12 @@ class NetworkMonitor:
             return None
 
     def discover_all_interfaces(self) -> List[Dict]:
-        """Discover all active network interfaces with IPv4 addresses"""
+        """Discover all active physical network interfaces.
+
+        Includes interfaces without IPv4 addresses so that Ethernet ports
+        intended for raw-frame protocols (EtherCAT, PROFINET) can be shown
+        in the UI as candidates for dedicated NIC assignment.
+        """
         interfaces = []
         try:
             links = self.ipr.get_links()
@@ -1613,12 +1624,21 @@ class NetworkMonitor:
                 if ifname in ["lo", "docker0"] or ifname.startswith("veth"):
                     continue
 
-                info = self.get_interface_info(ifname)
+                # First try with IPv4 requirement (normal interfaces)
+                info = self.get_interface_info(ifname, require_ipv4=True)
                 if info:
                     interfaces.append(info)
                     logger.info(
                         f"Discovered interface: {ifname} with {len(info['ipv4_addresses'])} IPv4 address(es)"
                     )
+                else:
+                    # Include UP interfaces without IPv4 (e.g., for dedicated NIC / EtherCAT)
+                    info = self.get_interface_info(ifname, require_ipv4=False)
+                    if info:
+                        interfaces.append(info)
+                        logger.info(
+                            f"Discovered interface: {ifname} (no IPv4, available for dedicated use)"
+                        )
 
         except Exception as e:
             logger.error(f"Failed to discover interfaces: {e}")

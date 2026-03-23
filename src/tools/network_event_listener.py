@@ -154,6 +154,11 @@ class NetworkEventListener:
         try:
             event_type = event_data.get("type")
 
+            # Route command responses (no "type" field) to netmon client
+            if event_type is None:
+                self.netmon_client.deliver_response(event_data)
+                return
+
             if event_type == "network_discovery":
                 log_info("Received network discovery event")
                 interfaces = event_data.get("data", {}).get("interfaces", [])
@@ -168,29 +173,20 @@ class NetworkEventListener:
                     if not interface_name:
                         continue
 
-                    if ipv4_addresses:
-                        subnet = ipv4_addresses[0].get("subnet")
+                    subnet = ipv4_addresses[0].get("subnet") if ipv4_addresses else None
 
-                        self.interface_cache.set_interface(interface_name, {
-                            "subnet": subnet,
-                            "gateway": gateway,
-                            "type": iface_type,
-                            "addresses": ipv4_addresses,
-                        })
+                    self.interface_cache.set_interface(interface_name, {
+                        "subnet": subnet,
+                        "gateway": gateway,
+                        "type": iface_type,
+                        "addresses": ipv4_addresses,
+                    })
 
-                        log_debug(
-                            f"Cached interface {interface_name}: "
-                            f"subnet={subnet}, gateway={gateway}, type={iface_type}, "
-                            f"{len(ipv4_addresses)} IPv4 address(es)"
-                        )
-                    else:
-                        log_debug(
-                            f"Interface {interface_name} has no IPv4 addresses, skipping cache"
-                        )
-                        self.interface_cache.remove_interface(interface_name)
-                        log_debug(
-                            f"Removed {interface_name} from cache (no addresses)"
-                        )
+                    log_debug(
+                        f"Cached interface {interface_name}: "
+                        f"subnet={subnet}, gateway={gateway}, type={iface_type}, "
+                        f"{len(ipv4_addresses)} IPv4 address(es)"
+                    )
 
             elif event_type == "dhcp_update":
                 log_info("Received DHCP update event")
@@ -231,11 +227,23 @@ class NetworkEventListener:
 
                     asyncio.create_task(self._process_pending_changes(interface))
                 else:
-                    log_debug(
-                        f"Interface {interface} has no IPv4 addresses after change, skipping cache update"
-                    )
-                    self.interface_cache.remove_interface(interface)
-                    log_debug(f"Removed {interface} from cache (no addresses)")
+                    status = iface_data.get("status")
+                    if status in ("removed", "down"):
+                        # Interface was physically removed or went down
+                        self.interface_cache.remove_interface(interface)
+                        log_debug(f"Removed {interface} from cache (status: {status})")
+                    else:
+                        # Interface still exists but lost IPv4 — keep in cache
+                        # so Ethernet ports without IP remain visible for dedicated NIC use
+                        self.interface_cache.set_interface(interface, {
+                            "subnet": None,
+                            "gateway": None,
+                            "type": iface_type,
+                            "addresses": [],
+                        })
+                        log_debug(
+                            f"Updated cache for {interface}: no IPv4 (kept for dedicated NIC eligibility)"
+                        )
 
             elif event_type == "device_discovery":
                 log_info("Received device discovery event")

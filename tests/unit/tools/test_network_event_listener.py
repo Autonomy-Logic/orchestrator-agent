@@ -60,20 +60,25 @@ class TestHandleEvent:
         })
 
     @pytest.mark.asyncio
-    async def test_network_discovery_no_addresses(self):
-        """Interface with no IPv4 addresses removed from cache."""
+    async def test_network_discovery_no_addresses_still_cached(self):
+        """Interface with no IPv4 addresses is still cached (for dedicated NIC eligibility)."""
         listener = _make_listener()
 
         await listener._handle_event({
             "type": "network_discovery",
             "data": {
                 "interfaces": [
-                    {"interface": "eth0", "ipv4_addresses": [], "gateway": None}
+                    {"interface": "enp4s0", "ipv4_addresses": [], "gateway": None, "type": "ethernet"}
                 ]
             },
         })
 
-        listener.interface_cache.remove_interface.assert_called_once_with("eth0")
+        listener.interface_cache.set_interface.assert_called_once_with("enp4s0", {
+            "subnet": None,
+            "gateway": None,
+            "type": "ethernet",
+            "addresses": [],
+        })
 
     @pytest.mark.asyncio
     async def test_network_discovery_skips_no_name(self):
@@ -130,16 +135,38 @@ class TestHandleEvent:
         listener.interface_cache.set_interface.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_network_change_no_addresses(self):
-        """network_change with empty addresses removes from cache."""
+    async def test_network_change_no_addresses_removed_status(self):
+        """network_change with status=removed removes from cache."""
         listener = _make_listener()
+        listener.interface_cache.get_all_interfaces.return_value = {}
 
         await listener._handle_event({
             "type": "network_change",
-            "data": {"interface": "eth0", "ipv4_addresses": []},
+            "data": {"interface": "eth0", "ipv4_addresses": [], "status": "removed"},
         })
 
         listener.interface_cache.remove_interface.assert_called_once_with("eth0")
+
+    @pytest.mark.asyncio
+    async def test_network_change_no_addresses_keeps_in_cache(self):
+        """network_change with empty addresses but no removed/down status keeps interface."""
+        listener = _make_listener()
+        listener.interface_cache.get_all_interfaces.return_value = {
+            "enp4s0": {"type": "ethernet"},
+        }
+
+        await listener._handle_event({
+            "type": "network_change",
+            "data": {"interface": "enp4s0", "ipv4_addresses": []},
+        })
+
+        listener.interface_cache.remove_interface.assert_not_called()
+        listener.interface_cache.set_interface.assert_called_once_with("enp4s0", {
+            "subnet": None,
+            "gateway": None,
+            "type": "ethernet",
+            "addresses": [],
+        })
 
     @pytest.mark.asyncio
     async def test_device_discovery(self):
@@ -168,6 +195,26 @@ class TestHandleEvent:
 
         # Should not raise
         await listener._handle_event({"type": "unknown_event", "data": {}})
+
+    @pytest.mark.asyncio
+    async def test_command_response_routed_to_netmon_client(self):
+        """Message without 'type' field is a command response, delivered to netmon_client."""
+        listener = _make_listener()
+        response = {"success": True, "message": "NIC moved"}
+
+        await listener._handle_event(response)
+
+        listener.netmon_client.deliver_response.assert_called_once_with(response)
+
+    @pytest.mark.asyncio
+    async def test_command_error_response_routed(self):
+        """Error responses from netmon also routed to netmon_client."""
+        listener = _make_listener()
+        response = {"success": False, "error": "Interface not found"}
+
+        await listener._handle_event(response)
+
+        listener.netmon_client.deliver_response.assert_called_once_with(response)
 
 
 class TestDelegatedApi:

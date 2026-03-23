@@ -319,7 +319,8 @@ def _create_and_start_container(
     capabilities = ["SYS_NICE", "MKNOD"]
     if dedicated_interface:
         # NET_RAW: Required for raw Ethernet frame access (e.g., EtherCAT via SOEM)
-        capabilities.append("NET_RAW")
+        # NET_ADMIN: Required for setting promiscuous mode on the NIC (ioctl SIOCSIFFLAGS)
+        capabilities.extend(["NET_RAW", "NET_ADMIN"])
 
     create_kwargs = {
         "image": image_name,
@@ -741,11 +742,11 @@ async def create_runtime_container(
                     # DHCP mode - just request DHCP, netmon handles bridge setup
                     # when the lease arrives via its lease monitor
                     log_info(f"Requesting DHCP for WiFi vNIC {vnic_name} via Proxy ARP")
-                    result = await network_commander.request_wifi_dhcp(
+                    dhcp_result = await network_commander.request_wifi_dhcp(
                         container_name, vnic_name, parent_interface, container_pid
                     )
-                    if not result.get("success"):
-                        log_warning(f"WiFi DHCP request failed for {vnic_name}: {result.get('error')}")
+                    if not dhcp_result.get("success"):
+                        log_warning(f"WiFi DHCP request failed for {vnic_name}: {dhcp_result.get('error')}")
                     # Proxy ARP config will be saved via _handle_dhcp_update when IP arrives
             except Exception as e:
                 log_warning(f"Failed to configure WiFi vNIC {vnic_name}: {e}")
