@@ -177,6 +177,27 @@ class NetworkReconnectionManager:
         network_mode = vnic_config.get("network_mode", "dhcp")
         proxy_arp_config = vnic_config.get("_proxy_arp_config", {})
 
+        # Skip reconnection if subnet and gateway haven't changed.
+        # WiFi DHCP renewals on the host trigger network_change events even when the
+        # lease renews with the same IP/subnet/gateway. Tearing down and rebuilding
+        # the Proxy ARP bridge in this case is destructive and unnecessary.
+        old_gateway = proxy_arp_config.get("gateway")
+        old_parent = proxy_arp_config.get("parent_interface")
+        if old_parent == interface and old_gateway == new_gateway:
+            # Same interface, same gateway — check subnet too
+            old_ip = proxy_arp_config.get("ip_address")
+            if old_ip:
+                from ipaddress import ip_address as parse_ip, ip_network
+                try:
+                    if parse_ip(old_ip) in ip_network(new_subnet, strict=False):
+                        log_info(
+                            f"WiFi vNIC {container_name}:{vnic_name} still on same network "
+                            f"(subnet={new_subnet}, gateway={new_gateway}), skipping reconnect"
+                        )
+                        return
+                except ValueError:
+                    pass  # Malformed IP/subnet, proceed with reconnect
+
         container_pid = container.attrs.get("State", {}).get("Pid", 0)
         if container_pid <= 0:
             log_warning(f"Container {container_name} has invalid PID, cannot reconfigure WiFi vNIC")
