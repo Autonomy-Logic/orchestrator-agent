@@ -1624,18 +1624,15 @@ class NetworkMonitor:
                 if ifname in ["lo", "docker0"] or ifname.startswith("veth"):
                     continue
 
-                # First try with IPv4 requirement (normal interfaces)
-                info = self.get_interface_info(ifname, require_ipv4=True)
+                info = self.get_interface_info(ifname, require_ipv4=False)
                 if info:
+                    has_ipv4 = bool(info.get("ipv4_addresses"))
                     interfaces.append(info)
-                    logger.info(
-                        f"Discovered interface: {ifname} with {len(info['ipv4_addresses'])} IPv4 address(es)"
-                    )
-                else:
-                    # Include UP interfaces without IPv4 (e.g., for dedicated NIC / EtherCAT)
-                    info = self.get_interface_info(ifname, require_ipv4=False)
-                    if info:
-                        interfaces.append(info)
+                    if has_ipv4:
+                        logger.info(
+                            f"Discovered interface: {ifname} with {len(info['ipv4_addresses'])} IPv4 address(es)"
+                        )
+                    else:
                         logger.info(
                             f"Discovered interface: {ifname} (no IPv4, available for dedicated use)"
                         )

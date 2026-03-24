@@ -121,6 +121,8 @@ def _return_all_dedicated_nics(container_runtime, dedicated_nic_repo):
         except Exception as e:
             log_warning(f"Error returning dedicated NIC {host_interface} for {container_name}: {e}")
 
+        # Always delete config: self-destruct is a one-way operation and the
+        # container namespace will be destroyed anyway, returning the NIC to host.
         dedicated_nic_repo.delete_config(container_name)
 
 

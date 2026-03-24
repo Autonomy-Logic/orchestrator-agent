@@ -159,6 +159,13 @@ class DedicatedNICManager:
 
         log_info("Dedicated NIC Docker event listener stopped")
 
+    async def start(self):
+        """Resync existing NICs and start the Docker event listener."""
+        await self.resync_nics_for_existing_containers()
+        self._event_listener_task = asyncio.create_task(
+            self.start_docker_event_listener()
+        )
+
     async def stop(self):
         """Cancel the event listener task."""
         self._running = False

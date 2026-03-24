@@ -1,3 +1,4 @@
+from ipaddress import ip_address as parse_ip, ip_network
 from typing import Optional
 from tools.logger import log_info, log_debug, log_warning, log_error
 class NetworkReconnectionManager:
@@ -187,7 +188,6 @@ class NetworkReconnectionManager:
             # Same interface, same gateway — check subnet too
             old_ip = proxy_arp_config.get("ip_address")
             if old_ip:
-                from ipaddress import ip_address as parse_ip, ip_network
                 try:
                     if parse_ip(old_ip) in ip_network(new_subnet, strict=False):
                         log_info(
