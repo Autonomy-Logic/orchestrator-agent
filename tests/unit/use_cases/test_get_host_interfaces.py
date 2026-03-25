@@ -239,6 +239,23 @@ class TestGetHostInterfacesData:
         assert enp4s0["dedicated_to"] == "my_container"
         assert enp4s0["ip_address"] == "10.0.0.5"
 
+    def test_dedicated_nic_repo_exception_handled(self):
+        """Exception loading dedicated NIC configs is handled gracefully."""
+        cache = MagicMock()
+        cache.get_all_interfaces.return_value = {
+            "eth0": {"addresses": [{"address": "192.168.1.10"}]},
+        }
+        nic_repo = MagicMock()
+        nic_repo.load_all_configs.side_effect = RuntimeError("disk error")
+
+        result = get_host_interfaces_data(
+            detailed=False, interface_cache=cache, dedicated_nic_repo=nic_repo,
+        )
+
+        assert result["status"] == "success"
+        assert len(result["interfaces"]) == 1
+        assert result["interfaces"][0]["name"] == "eth0"
+
     def test_dedicated_nic_not_duplicated_if_in_cache(self):
         """A dedicated NIC that is still in cache should not appear twice."""
         cache = MagicMock()

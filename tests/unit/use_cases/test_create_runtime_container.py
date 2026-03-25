@@ -5,6 +5,8 @@ from use_cases.docker_manager.create_runtime_container import (
     _generate_mac_address,
     _validate_vnic_configs,
     _validate_mac_addresses,
+    _validate_dedicated_interface,
+    _create_and_start_container,
     _create_runtime_container_sync,
     create_runtime_container,
     start_creation,
@@ -1372,6 +1374,77 @@ class TestCreateRuntimeContainerAsync:
         )
 
 
+class TestDedicatedNicAsync:
+    @pytest.mark.asyncio
+    @patch("use_cases.docker_manager.create_runtime_container.asyncio")
+    async def test_dedicated_nic_moved_successfully(self, mock_asyncio):
+        """Dedicated NIC is moved to container namespace after creation."""
+        commander = AsyncMock()
+        commander.move_nic_to_container.return_value = {"success": True}
+        ops = MagicMock()
+        nic_repo = MagicMock()
+
+        mock_asyncio.to_thread = AsyncMock(return_value={
+            "dhcp_vnics": [],
+            "wifi_vnics_to_configure": [],
+            "vnic_configs": [],
+            "dedicated_interface": "enp3s0",
+            "container_pid": 42,
+        })
+
+        await create_runtime_container(
+            "plc1", [],
+            container_runtime=MagicMock(),
+            vnic_repo=MagicMock(),
+            serial_repo=MagicMock(),
+            client_registry=MagicMock(),
+            interface_cache=MagicMock(),
+            network_commander=commander,
+            operations_state=ops,
+            devices_usage_buffer=MagicMock(),
+            socket_repo=MagicMock(),
+            dedicated_nic_repo=nic_repo,
+        )
+
+        commander.move_nic_to_container.assert_called_once_with("enp3s0", 42)
+        nic_repo.save_config.assert_called_once()
+        nic_repo.delete_config.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("use_cases.docker_manager.create_runtime_container.asyncio")
+    async def test_dedicated_nic_move_failure_rolls_back(self, mock_asyncio):
+        """Failed NIC move deletes the optimistically saved config."""
+        commander = AsyncMock()
+        commander.move_nic_to_container.return_value = {"success": False, "error": "NIC not found"}
+        ops = MagicMock()
+        nic_repo = MagicMock()
+
+        mock_asyncio.to_thread = AsyncMock(return_value={
+            "dhcp_vnics": [],
+            "wifi_vnics_to_configure": [],
+            "vnic_configs": [],
+            "dedicated_interface": "enp3s0",
+            "container_pid": 42,
+        })
+
+        await create_runtime_container(
+            "plc1", [],
+            container_runtime=MagicMock(),
+            vnic_repo=MagicMock(),
+            serial_repo=MagicMock(),
+            client_registry=MagicMock(),
+            interface_cache=MagicMock(),
+            network_commander=commander,
+            operations_state=ops,
+            devices_usage_buffer=MagicMock(),
+            socket_repo=MagicMock(),
+            dedicated_nic_repo=nic_repo,
+        )
+
+        nic_repo.save_config.assert_called_once()
+        nic_repo.delete_config.assert_called_once_with("plc1")
+
+
 class TestStartCreation:
     @pytest.mark.asyncio
     @patch("tools.operations_state.begin_operation")
@@ -1415,3 +1488,132 @@ class TestStartCreation:
 
         assert started is True
         assert result["status"] == "creating"
+
+    @pytest.mark.asyncio
+    @patch("tools.operations_state.begin_operation")
+    @patch("use_cases.docker_manager.create_runtime_container.create_runtime_container")
+    @patch("use_cases.docker_manager.create_runtime_container.asyncio")
+    async def test_start_creation_with_dedicated_interface(self, mock_asyncio, mock_create, mock_begin):
+        """Dedicated interface is logged when provided."""
+        mock_begin.return_value = (None, True)
+        ctx = MagicMock()
+
+        result, started = await start_creation(
+            "plc1", [], dedicated_interface="enp3s0", ctx=ctx,
+        )
+
+        assert started is True
+        assert result["status"] == "creating"
+
+
+class TestValidateDedicatedInterface:
+    def test_interface_not_found(self):
+        """Interface not in cache → fails."""
+        cache = MagicMock()
+        cache.get_all_interfaces.return_value = {"eth0": {}}
+        nic_repo = MagicMock()
+        nic_repo.get_container_for_nic.return_value = None
+
+        ok, err = _validate_dedicated_interface("enp3s0", [], dedicated_nic_repo=nic_repo, interface_cache=cache)
+
+        assert ok is False
+        assert "not found" in err
+
+    def test_wifi_interface_rejected(self):
+        """WiFi interface → fails."""
+        cache = MagicMock()
+        cache.get_all_interfaces.return_value = {"wlan0": {"type": "wifi"}}
+        nic_repo = MagicMock()
+        nic_repo.get_container_for_nic.return_value = None
+
+        ok, err = _validate_dedicated_interface("wlan0", [], dedicated_nic_repo=nic_repo, interface_cache=cache)
+
+        assert ok is False
+        assert "WiFi" in err
+
+    def test_already_dedicated(self):
+        """Interface already dedicated to another container → fails."""
+        cache = MagicMock()
+        cache.get_all_interfaces.return_value = {"enp3s0": {"type": "ethernet"}}
+        nic_repo = MagicMock()
+        nic_repo.get_container_for_nic.return_value = "other_plc"
+
+        ok, err = _validate_dedicated_interface("enp3s0", [], dedicated_nic_repo=nic_repo, interface_cache=cache)
+
+        assert ok is False
+        assert "already dedicated" in err
+
+    def test_used_as_vnic_parent(self):
+        """Interface used as vNIC parent → fails."""
+        cache = MagicMock()
+        cache.get_all_interfaces.return_value = {"enp3s0": {"type": "ethernet"}}
+        nic_repo = MagicMock()
+        nic_repo.get_container_for_nic.return_value = None
+
+        vnic_configs = [{"parent_interface": "enp3s0"}]
+        ok, err = _validate_dedicated_interface("enp3s0", vnic_configs, dedicated_nic_repo=nic_repo, interface_cache=cache)
+
+        assert ok is False
+        assert "vNIC parent" in err
+
+    def test_valid_ethernet(self):
+        """Valid Ethernet interface → passes."""
+        cache = MagicMock()
+        cache.get_all_interfaces.return_value = {"enp3s0": {"type": "ethernet"}}
+        nic_repo = MagicMock()
+        nic_repo.get_container_for_nic.return_value = None
+
+        ok, err = _validate_dedicated_interface("enp3s0", [], dedicated_nic_repo=nic_repo, interface_cache=cache)
+
+        assert ok is True
+        assert err == ""
+
+
+class TestCreateAndStartContainerCapabilities:
+    def test_dedicated_interface_adds_net_raw_and_net_admin(self):
+        """Container with dedicated_interface gets NET_RAW and NET_ADMIN capabilities."""
+        runtime = MagicMock()
+        internal_network = MagicMock()
+        created_container = MagicMock()
+        runtime.create_container.return_value = created_container
+
+        _create_and_start_container(
+            "plc1", "image:latest", internal_network, ["8.8.8.8"],
+            False, None, {},
+            dedicated_interface="enp3s0",
+            container_runtime=runtime,
+        )
+
+        create_call = runtime.create_container.call_args
+        cap_add = create_call[1]["cap_add"]
+        assert "NET_RAW" in cap_add
+        assert "NET_ADMIN" in cap_add
+        assert "SYS_NICE" in cap_add
+        assert "MKNOD" in cap_add
+
+
+class TestDedicatedNicInSync:
+    @patch("use_cases.docker_manager.create_runtime_container._validate_mac_addresses")
+    @patch("use_cases.docker_manager.create_runtime_container._validate_vnic_configs")
+    @patch("use_cases.docker_manager.create_runtime_container._validate_dedicated_interface")
+    def test_dedicated_validation_fails_returns_none(self, mock_ded_val, mock_vnic_val, mock_mac_val):
+        """Dedicated NIC validation failure returns None."""
+        runtime = MagicMock()
+        registry = MagicMock()
+        cache = MagicMock()
+        ops = MagicMock()
+        registry.contains.return_value = False
+        mock_vnic_val.return_value = (True, "")
+        mock_mac_val.return_value = (True, "")
+        mock_ded_val.return_value = (False, "NIC not found")
+
+        result = _create_runtime_container_sync(
+            "plc1", [], None, None, "enp3s0",
+            container_runtime=runtime, vnic_repo=MagicMock(), serial_repo=MagicMock(),
+            client_registry=registry, interface_cache=cache,
+            operations_state=ops, devices_usage_buffer=MagicMock(), socket_repo=MagicMock(),
+            dedicated_nic_repo=MagicMock(),
+        )
+
+        assert result is None
+        ops.set_error.assert_called_once()
