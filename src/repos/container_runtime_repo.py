@@ -219,6 +219,22 @@ class ContainerRuntimeRepo(ContainerRuntimeRepoInterface):
     def docker_events(self, **kwargs) -> Any:
         return self._client.events(**kwargs)
 
+    def get_running_pid(self, container_name: str) -> Optional[int]:
+        """
+        Return the PID of a running container, or None if not running.
+
+        Reloads container state from Docker to get the current PID.
+        """
+        try:
+            container = self._client.containers.get(container_name)
+            container.reload()
+            pid = container.attrs.get("State", {}).get("Pid", 0)
+            if pid > 0 and container.status == "running":
+                return pid
+            return None
+        except docker.errors.NotFound:
+            return None
+
     def get_existing_mac_addresses_on_interface(
         self, parent_interface: str
     ) -> Dict[str, str]:

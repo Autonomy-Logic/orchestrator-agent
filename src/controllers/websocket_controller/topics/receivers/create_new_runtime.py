@@ -3,6 +3,7 @@ from tools.logger import *
 from tools.contract_validation import (
     StringType,
     NonEmptyStringType,
+    InterfaceNameType,
     ListType,
     OptionalType,
     BASE_MESSAGE,
@@ -29,7 +30,7 @@ MESSAGE_TYPE = {
     "vnic_configs": ListType(VNIC_CONFIG_TYPE),
     "serial_configs": OptionalType(ListType(SERIAL_CONFIG_TYPE)),
     "runtime_version": OptionalType(StringType),
-    "dedicated_interface": OptionalType(StringType),
+    "dedicated_interface": OptionalType(InterfaceNameType),
 }
 
 

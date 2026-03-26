@@ -2,7 +2,13 @@ from typing import Protocol, Optional, Callable, Dict, List
 
 
 class NetmonClientRepoInterface(Protocol):
-    """Abstract interface for Unix socket communication with the netmon sidecar."""
+    """
+    Low-level interface for Unix socket communication with the netmon sidecar.
+
+    Covers DHCP and Proxy ARP operations. For dedicated NIC operations
+    (move/return/check), use NetworkCommanderRepoInterface which aggregates
+    netmon commands with device management capabilities.
+    """
 
     async def send_command(self, command: dict) -> dict: ...
     async def start_dhcp(
@@ -37,15 +43,6 @@ class NetmonClientRepoInterface(Protocol):
         veth_host: Optional[str] = None,
     ) -> dict: ...
     async def cleanup_all_proxy_arp(self) -> dict: ...
-    async def move_nic_to_container(
-        self, host_interface: str, container_pid: int
-    ) -> dict: ...
-    async def return_nic_to_host(
-        self, host_interface: str, container_pid: int
-    ) -> dict: ...
-    async def check_nic_in_container(
-        self, host_interface: str, container_pid: int
-    ) -> dict: ...
     def get_dhcp_ip(
         self, container_name: str, vnic_name: str
     ) -> Optional[str]: ...

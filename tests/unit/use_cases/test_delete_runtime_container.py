@@ -163,15 +163,13 @@ class TestDeleteRuntimeContainerAsync:
     @patch("use_cases.docker_manager.delete_runtime_container.asyncio")
     async def test_dedicated_nic_returned_when_running(self, mock_asyncio, mock_sync):
         """Dedicated NIC returned to host when container is running."""
+        from entities import DedicatedNicConfig
         runtime, registry, vnic_repo, serial_repo, ops, buffer, socket_repo = _make_deps()
         commander = AsyncMock()
         nic_repo = MagicMock()
-        nic_repo.load_config.return_value = {"host_interface": "enp3s0"}
+        nic_repo.load_config.return_value = DedicatedNicConfig.create("enp3s0")
 
-        container = MagicMock()
-        container.attrs = {"State": {"Pid": 42}}
-        container.status = "running"
-        runtime.get_container.return_value = container
+        runtime.get_running_pid.return_value = 42
 
         mock_asyncio.to_thread = AsyncMock()
         vnic_repo.load_all_configs.return_value = {}
@@ -197,15 +195,13 @@ class TestDeleteRuntimeContainerAsync:
     @patch("use_cases.docker_manager.delete_runtime_container.asyncio")
     async def test_dedicated_nic_not_running(self, mock_asyncio, mock_sync):
         """Dedicated NIC: container not running → logs warning, config still deleted."""
+        from entities import DedicatedNicConfig
         runtime, registry, vnic_repo, serial_repo, ops, buffer, socket_repo = _make_deps()
         commander = AsyncMock()
         nic_repo = MagicMock()
-        nic_repo.load_config.return_value = {"host_interface": "enp3s0"}
+        nic_repo.load_config.return_value = DedicatedNicConfig.create("enp3s0")
 
-        container = MagicMock()
-        container.attrs = {"State": {"Pid": 0}}
-        container.status = "exited"
-        runtime.get_container.return_value = container
+        runtime.get_running_pid.return_value = None
 
         mock_asyncio.to_thread = AsyncMock()
         vnic_repo.load_all_configs.return_value = {}
@@ -290,16 +286,14 @@ class TestDeleteRuntimeContainerAsync:
     @patch("use_cases.docker_manager.delete_runtime_container.asyncio")
     async def test_dedicated_nic_return_exception(self, mock_asyncio, mock_sync):
         """Exception during NIC return → logged, config still deleted."""
+        from entities import DedicatedNicConfig
         runtime, registry, vnic_repo, serial_repo, ops, buffer, socket_repo = _make_deps()
         commander = AsyncMock()
         commander.return_nic_to_host.side_effect = RuntimeError("netmon error")
         nic_repo = MagicMock()
-        nic_repo.load_config.return_value = {"host_interface": "enp3s0"}
+        nic_repo.load_config.return_value = DedicatedNicConfig.create("enp3s0")
 
-        container = MagicMock()
-        container.attrs = {"State": {"Pid": 42}}
-        container.status = "running"
-        runtime.get_container.return_value = container
+        runtime.get_running_pid.return_value = 42
 
         mock_asyncio.to_thread = AsyncMock()
         vnic_repo.load_all_configs.return_value = {}
@@ -352,6 +346,7 @@ class TestDeleteRuntimeContainerAsync:
             operations_state=ops,
             devices_usage_buffer=buffer,
             socket_repo=MagicMock(),
+            dedicated_nic_repo=MagicMock(load_config=MagicMock(return_value=None)),
         )
 
         commander.cleanup_proxy_arp_bridge.assert_called_once_with(
@@ -380,6 +375,7 @@ class TestDeleteRuntimeContainerAsync:
             operations_state=ops,
             devices_usage_buffer=buffer,
             socket_repo=MagicMock(),
+            dedicated_nic_repo=MagicMock(load_config=MagicMock(return_value=None)),
         )
 
     @pytest.mark.asyncio
@@ -416,6 +412,7 @@ class TestDeleteRuntimeContainerAsync:
             operations_state=ops,
             devices_usage_buffer=buffer,
             socket_repo=MagicMock(),
+            dedicated_nic_repo=MagicMock(load_config=MagicMock(return_value=None)),
         )
 
 

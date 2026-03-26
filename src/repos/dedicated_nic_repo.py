@@ -1,5 +1,6 @@
-from typing import Optional
+from typing import Dict, Optional
 
+from entities import DedicatedNicConfig
 from repos.interfaces import DedicatedNicRepoInterface
 from tools.json_file import JsonConfigStore
 from tools.logger import log_debug, log_error
@@ -13,9 +14,9 @@ class DedicatedNicRepo(DedicatedNicRepoInterface):
     def __init__(self):
         self._store = JsonConfigStore(DEDICATED_NIC_CONFIG_FILE)
 
-    def save_config(self, container_name: str, config: dict) -> None:
+    def save_config(self, container_name: str, config: DedicatedNicConfig) -> None:
         try:
-            self._store.modify(lambda data: data.__setitem__(container_name, config))
+            self._store.modify(lambda data: data.__setitem__(container_name, config.to_dict()))
             log_debug(
                 f"Saved dedicated NIC config for container {container_name}"
             )
@@ -24,17 +25,24 @@ class DedicatedNicRepo(DedicatedNicRepoInterface):
                 f"Failed to save dedicated NIC config for {container_name}: {e}"
             )
 
-    def load_config(self, container_name: str) -> Optional[dict]:
+    def load_config(self, container_name: str) -> Optional[DedicatedNicConfig]:
         try:
             all_configs = self._store.read_all()
-            return all_configs.get(container_name)
+            raw = all_configs.get(container_name)
+            if raw is None:
+                return None
+            return DedicatedNicConfig.from_dict(raw)
         except Exception as e:
             log_error(f"Failed to load dedicated NIC config for {container_name}: {e}")
             return None
 
-    def load_all_configs(self) -> dict:
+    def load_all_configs(self) -> Dict[str, DedicatedNicConfig]:
         try:
-            return self._store.read_all()
+            raw_configs = self._store.read_all()
+            return {
+                name: DedicatedNicConfig.from_dict(raw)
+                for name, raw in raw_configs.items()
+            }
         except Exception as e:
             log_error(f"Failed to load dedicated NIC configurations: {e}")
             return {}

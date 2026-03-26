@@ -1,4 +1,3 @@
-from entities import DedicatedNicConfig
 from tools.logger import log_debug, log_info, log_warning, log_error
 from typing import Dict, Any, List
 
@@ -132,8 +131,7 @@ def get_host_interfaces_data(
         if dedicated_nic_repo:
             try:
                 all_nic_configs = dedicated_nic_repo.load_all_configs()
-                for container_name, raw_config in all_nic_configs.items():
-                    nic_config = DedicatedNicConfig.from_dict(raw_config)
+                for container_name, nic_config in all_nic_configs.items():
                     dedicated_nics[nic_config.host_interface] = container_name
             except Exception as e:
                 log_warning(f"Could not load dedicated NIC configs: {e}")

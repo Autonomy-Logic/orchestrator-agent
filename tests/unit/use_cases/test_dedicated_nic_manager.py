@@ -2,6 +2,7 @@ import asyncio
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
+from entities import DedicatedNicConfig
 from use_cases.dedicated_nic_manager import DedicatedNICManager
 
 
@@ -22,15 +23,16 @@ def _make_manager():
     return DedicatedNICManager(netmon_client, container_runtime, dedicated_nic_repo)
 
 
+def _nic_config(iface="enp3s0"):
+    return DedicatedNicConfig.create(iface)
+
+
 class TestMoveNicToRunningContainer:
     @pytest.mark.asyncio
     async def test_returns_false_when_pid_is_zero(self):
         """Container with pid=0 returns False."""
         mgr = _make_manager()
-        container = MagicMock()
-        container.attrs = {"State": {"Pid": 0}}
-        container.status = "running"
-        mgr.container_runtime.get_container.return_value = container
+        mgr.container_runtime.get_running_pid.return_value = None
 
         result = await mgr._move_nic_to_running_container("c1", "eth0")
 
@@ -41,10 +43,7 @@ class TestMoveNicToRunningContainer:
     async def test_returns_false_when_not_running(self):
         """Container with status != running returns False."""
         mgr = _make_manager()
-        container = MagicMock()
-        container.attrs = {"State": {"Pid": 100}}
-        container.status = "exited"
-        mgr.container_runtime.get_container.return_value = container
+        mgr.container_runtime.get_running_pid.return_value = None
 
         result = await mgr._move_nic_to_running_container("c1", "eth0")
 
@@ -54,10 +53,7 @@ class TestMoveNicToRunningContainer:
     async def test_check_present_true_nic_already_in_container(self):
         """When check_present=True and NIC is already present, returns True without moving."""
         mgr = _make_manager()
-        container = MagicMock()
-        container.attrs = {"State": {"Pid": 100}}
-        container.status = "running"
-        mgr.container_runtime.get_container.return_value = container
+        mgr.container_runtime.get_running_pid.return_value = 100
         mgr.netmon_client.check_nic_in_container.return_value = {"present": True}
 
         result = await mgr._move_nic_to_running_container("c1", "eth0", check_present=True)
@@ -70,10 +66,7 @@ class TestMoveNicToRunningContainer:
     async def test_check_present_true_nic_not_present_moves(self):
         """When check_present=True and NIC is not present, moves it."""
         mgr = _make_manager()
-        container = MagicMock()
-        container.attrs = {"State": {"Pid": 100}}
-        container.status = "running"
-        mgr.container_runtime.get_container.return_value = container
+        mgr.container_runtime.get_running_pid.return_value = 100
         mgr.netmon_client.check_nic_in_container.return_value = {"present": False}
         mgr.netmon_client.move_nic_to_container.return_value = {"success": True}
 
@@ -86,10 +79,7 @@ class TestMoveNicToRunningContainer:
     async def test_move_succeeds(self):
         """Default check_present=False, move succeeds returns True."""
         mgr = _make_manager()
-        container = MagicMock()
-        container.attrs = {"State": {"Pid": 100}}
-        container.status = "running"
-        mgr.container_runtime.get_container.return_value = container
+        mgr.container_runtime.get_running_pid.return_value = 100
         mgr.netmon_client.move_nic_to_container.return_value = {"success": True}
 
         result = await mgr._move_nic_to_running_container("c1", "eth0")
@@ -101,10 +91,7 @@ class TestMoveNicToRunningContainer:
     async def test_move_fails(self):
         """Move returns success=False, returns False."""
         mgr = _make_manager()
-        container = MagicMock()
-        container.attrs = {"State": {"Pid": 100}}
-        container.status = "running"
-        mgr.container_runtime.get_container.return_value = container
+        mgr.container_runtime.get_running_pid.return_value = 100
         mgr.netmon_client.move_nic_to_container.return_value = {"success": False}
 
         result = await mgr._move_nic_to_running_container("c1", "eth0")
@@ -121,7 +108,7 @@ class TestResyncNicsForExistingContainers:
 
         await mgr.resync_nics_for_existing_containers()
 
-        mgr.container_runtime.get_container.assert_not_called()
+        mgr.container_runtime.get_running_pid.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_none_configs_returns_early(self):
@@ -131,19 +118,16 @@ class TestResyncNicsForExistingContainers:
 
         await mgr.resync_nics_for_existing_containers()
 
-        mgr.container_runtime.get_container.assert_not_called()
+        mgr.container_runtime.get_running_pid.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_running_container_moves_nic(self):
         """Running container gets its NIC moved."""
         mgr = _make_manager()
         mgr.dedicated_nic_repo.load_all_configs.return_value = {
-            "runtime1": {"host_interface": "enp3s0"},
+            "runtime1": _nic_config("enp3s0"),
         }
-        container = MagicMock()
-        container.attrs = {"State": {"Pid": 42}}
-        container.status = "running"
-        mgr.container_runtime.get_container.return_value = container
+        mgr.container_runtime.get_running_pid.return_value = 42
         mgr.netmon_client.check_nic_in_container.return_value = {"present": False}
         mgr.netmon_client.move_nic_to_container.return_value = {"success": True}
 
@@ -157,9 +141,9 @@ class TestResyncNicsForExistingContainers:
         """Container not found removes its config."""
         mgr = _make_manager()
         mgr.dedicated_nic_repo.load_all_configs.return_value = {
-            "orphan": {"host_interface": "enp3s0"},
+            "orphan": _nic_config("enp3s0"),
         }
-        mgr.container_runtime.get_container.side_effect = _NotFoundError("gone")
+        mgr.container_runtime.get_running_pid.side_effect = _NotFoundError("gone")
 
         await mgr.resync_nics_for_existing_containers()
 
@@ -170,8 +154,8 @@ class TestResyncNicsForExistingContainers:
         """Generic exception is swallowed and processing continues."""
         mgr = _make_manager()
         mgr.dedicated_nic_repo.load_all_configs.return_value = {
-            "bad": {"host_interface": "enp3s0"},
-            "good": {"host_interface": "enp4s0"},
+            "bad": _nic_config("enp3s0"),
+            "good": _nic_config("enp4s0"),
         }
 
         call_count = 0
@@ -210,7 +194,7 @@ def _make_wait_for_with_events(mgr, events):
 
 async def _run_event_listener(mgr, events):
     """Run start_docker_event_listener with injected events."""
-    with patch("use_cases.dedicated_nic_manager.asyncio.get_event_loop") as mock_loop:
+    with patch("use_cases.dedicated_nic_manager.asyncio.get_running_loop") as mock_loop:
         mock_loop.return_value.run_in_executor.return_value = asyncio.Future()
         mock_loop.return_value.run_in_executor.return_value.set_result(None)
         patched_wait = _make_wait_for_with_events(mgr, events)
@@ -224,12 +208,8 @@ class TestStartDockerEventListener:
     async def test_event_with_matching_config_moves_nic(self, mock_sleep):
         """Docker start event with matching config triggers NIC move."""
         mgr = _make_manager()
-        mgr.dedicated_nic_repo.load_config.return_value = {"host_interface": "enp3s0"}
-
-        container = MagicMock()
-        container.attrs = {"State": {"Pid": 55}}
-        container.status = "running"
-        mgr.container_runtime.get_container.return_value = container
+        mgr.dedicated_nic_repo.load_config.return_value = _nic_config("enp3s0")
+        mgr.container_runtime.get_running_pid.return_value = 55
         mgr.netmon_client.move_nic_to_container.return_value = {"success": True}
 
         event = {"Actor": {"Attributes": {"name": "runtime1"}}}
@@ -258,7 +238,7 @@ class TestStartDockerEventListener:
         event = {"Actor": {"Attributes": {"name": "runtime1"}}}
         await _run_event_listener(mgr, [event])
 
-        mgr.container_runtime.get_container.assert_not_called()
+        mgr.container_runtime.get_running_pid.assert_not_called()
 
     @pytest.mark.asyncio
     @patch("use_cases.dedicated_nic_manager.asyncio.sleep", new_callable=AsyncMock)
@@ -274,8 +254,8 @@ class TestStartDockerEventListener:
     async def test_exception_during_move_continues(self, mock_sleep):
         """Exception during NIC move is swallowed and loop continues."""
         mgr = _make_manager()
-        mgr.dedicated_nic_repo.load_config.return_value = {"host_interface": "enp3s0"}
-        mgr.container_runtime.get_container.side_effect = RuntimeError("boom")
+        mgr.dedicated_nic_repo.load_config.return_value = _nic_config("enp3s0")
+        mgr.container_runtime.get_running_pid.side_effect = RuntimeError("boom")
 
         event = {"Actor": {"Attributes": {"name": "runtime1"}}}
         await _run_event_listener(mgr, [event])
@@ -291,12 +271,8 @@ class TestPollDockerEvents:
     async def test_poll_pushes_events_to_queue(self, mock_sleep):
         """Docker events are pushed to the queue by the polling thread."""
         mgr = _make_manager()
-        mgr.dedicated_nic_repo.load_config.return_value = {"host_interface": "enp3s0"}
-
-        container = MagicMock()
-        container.attrs = {"State": {"Pid": 55}}
-        container.status = "running"
-        mgr.container_runtime.get_container.return_value = container
+        mgr.dedicated_nic_repo.load_config.return_value = _nic_config("enp3s0")
+        mgr.container_runtime.get_running_pid.return_value = 55
         mgr.netmon_client.move_nic_to_container.return_value = {"success": True}
 
         event = {"Actor": {"Attributes": {"name": "runtime1"}}}

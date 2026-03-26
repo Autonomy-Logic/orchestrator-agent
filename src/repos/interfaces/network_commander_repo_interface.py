@@ -2,7 +2,15 @@ from typing import Protocol, Optional, Callable, List
 
 
 class NetworkCommanderRepoInterface(Protocol):
-    """Abstract interface for communication with the network monitor sidecar."""
+    """
+    High-level interface for network operations used by use cases.
+
+    Aggregates netmon socket commands (DHCP, Proxy ARP, dedicated NIC)
+    with device management capabilities. Implemented by NetworkEventListener
+    which delegates netmon commands to NetmonClientRepo.
+
+    Use cases should depend on this interface rather than NetmonClientRepoInterface.
+    """
 
     async def send_command(self, command: dict) -> dict: ...
     async def start_dhcp(

@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock
 
+from entities import DedicatedNicConfig
 from use_cases.network_monitor.get_host_interfaces import (
     should_include_interface,
     build_interface_info_from_cache,
@@ -201,7 +202,7 @@ class TestGetHostInterfacesData:
         }
         nic_repo = MagicMock()
         nic_repo.load_all_configs.return_value = {
-            "my_container": {"host_interface": "enp4s0"},
+            "my_container": DedicatedNicConfig.create("enp4s0"),
         }
 
         result = get_host_interfaces_data(
@@ -227,7 +228,7 @@ class TestGetHostInterfacesData:
         }
         nic_repo = MagicMock()
         nic_repo.load_all_configs.return_value = {
-            "my_container": {"host_interface": "enp4s0"},
+            "my_container": DedicatedNicConfig.create("enp4s0"),
         }
 
         result = get_host_interfaces_data(
@@ -264,7 +265,7 @@ class TestGetHostInterfacesData:
         }
         nic_repo = MagicMock()
         nic_repo.load_all_configs.return_value = {
-            "my_container": {"host_interface": "enp4s0"},
+            "my_container": DedicatedNicConfig.create("enp4s0"),
         }
 
         result = get_host_interfaces_data(

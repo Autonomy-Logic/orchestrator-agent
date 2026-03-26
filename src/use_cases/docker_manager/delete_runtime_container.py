@@ -1,5 +1,4 @@
 from . import stop_and_remove_container, remove_internal_network
-from entities import DedicatedNicConfig
 from tools.logger import *
 import asyncio
 
@@ -98,7 +97,7 @@ async def delete_runtime_container(
     operations_state,
     devices_usage_buffer,
     socket_repo,
-    dedicated_nic_repo=None,
+    dedicated_nic_repo,
 ):
     """
     Delete a runtime container and all associated resources.
@@ -120,21 +119,18 @@ async def delete_runtime_container(
     """
     # Return dedicated NIC to host namespace (must happen before container stop)
     try:
-        raw_config = dedicated_nic_repo.load_config(container_name) if dedicated_nic_repo else None
-        if raw_config:
-            nic_config = DedicatedNicConfig.from_dict(raw_config)
+        nic_config = dedicated_nic_repo.load_config(container_name)
+        if nic_config:
             host_interface = nic_config.host_interface
             log_info(f"Returning dedicated NIC {host_interface} to host for {container_name}")
             try:
-                container = container_runtime.get_container(container_name)
-                container.reload()
-                pid = container.attrs.get("State", {}).get("Pid", 0)
-                if pid > 0 and container.status == "running":
+                pid = container_runtime.get_running_pid(container_name)
+                if pid:
                     await network_commander.return_nic_to_host(host_interface, pid)
                     log_info(f"Dedicated NIC {host_interface} returned to host")
                 else:
                     log_warning(
-                        f"Container {container_name} not running (PID={pid}), "
+                        f"Container {container_name} not running, "
                         f"NIC {host_interface} may already be on host"
                     )
             except Exception as e:

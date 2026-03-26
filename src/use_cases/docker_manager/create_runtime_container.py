@@ -763,7 +763,7 @@ async def create_runtime_container(
 
         # Save config before the move so resync can detect/retry on crash
         nic_config = DedicatedNicConfig.create(nic_to_move)
-        dedicated_nic_repo.save_config(container_name, nic_config.to_dict())
+        dedicated_nic_repo.save_config(container_name, nic_config)
 
         move_result = await network_commander.move_nic_to_container(nic_to_move, container_pid)
         if move_result.get("success"):

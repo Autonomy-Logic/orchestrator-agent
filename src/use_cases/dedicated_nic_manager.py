@@ -1,5 +1,4 @@
 import asyncio
-from entities import DedicatedNicConfig
 from tools.logger import log_info, log_debug, log_warning, log_error
 
 
@@ -18,6 +17,7 @@ class DedicatedNICManager:
         self.container_runtime = container_runtime
         self.dedicated_nic_repo = dedicated_nic_repo
         self._event_listener_task = None
+        self._event_queue = None
         self._running = False
         self._events_generator = None
 
@@ -30,11 +30,9 @@ class DedicatedNICManager:
 
         Returns True if NIC was moved (or already present), False on failure.
         """
-        container = self.container_runtime.get_container(container_name)
-        container.reload()
-        pid = container.attrs.get("State", {}).get("Pid", 0)
+        pid = self.container_runtime.get_running_pid(container_name)
 
-        if pid <= 0 or container.status != "running":
+        if not pid:
             log_debug(f"Container {container_name} not running, skipping NIC move for {host_interface}")
             return False
 
@@ -68,9 +66,7 @@ class DedicatedNICManager:
         log_info(f"Resyncing dedicated NICs for {len(all_configs)} container(s)")
 
         orphaned = []
-        for container_name, raw_config in all_configs.items():
-            nic_config = DedicatedNicConfig.from_dict(raw_config)
-
+        for container_name, nic_config in all_configs.items():
             try:
                 await self._move_nic_to_running_container(
                     container_name, nic_config.host_interface, check_present=True,
@@ -99,7 +95,7 @@ class DedicatedNICManager:
         back to the async event loop without blocking it.
         """
         self._running = True
-        self._event_queue = asyncio.Queue()
+        self._event_queue = asyncio.Queue()  # recreate for each listener session
         log_info("Dedicated NIC Docker event listener started")
 
         def _poll_docker_events():
@@ -119,7 +115,7 @@ class DedicatedNICManager:
             finally:
                 self._events_generator = None
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         poll_future = loop.run_in_executor(None, _poll_docker_events)
 
         try:
@@ -137,11 +133,9 @@ class DedicatedNICManager:
                 if not container_name:
                     continue
 
-                raw_config = self.dedicated_nic_repo.load_config(container_name)
-                if not raw_config:
+                nic_config = self.dedicated_nic_repo.load_config(container_name)
+                if not nic_config:
                     continue
-
-                nic_config = DedicatedNicConfig.from_dict(raw_config)
                 log_info(f"Container {container_name} started, re-assigning dedicated NIC {nic_config.host_interface}")
 
                 # Brief delay for container PID to be fully assigned

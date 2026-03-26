@@ -22,6 +22,7 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 import ipaddress
+import re
 
 try:
     from pyroute2 import IPRoute, NetlinkError
@@ -54,6 +55,7 @@ SOCKET_PATH = "/var/orchestrator/netmon.sock"
 LOG_FILE = "/var/log/autonomy-netmon.log"
 DHCP_LEASE_DIR = "/var/orchestrator/dhcp"
 DEBOUNCE_SECONDS = 3
+VALID_INTERFACE_NAME = re.compile(r"^[a-zA-Z0-9_.-]+$")
 
 
 def get_interface_type(ifname: str) -> str:
@@ -1899,6 +1901,8 @@ class NetworkMonitor:
 
             if not host_interface:
                 return {"success": False, "error": "Missing host_interface"}
+            if len(host_interface) > 15 or not VALID_INTERFACE_NAME.match(host_interface):
+                return {"success": False, "error": f"Invalid interface name: {host_interface}"}
             if container_pid is None:
                 return {"success": False, "error": "Missing container_pid"}
 
@@ -1952,6 +1956,8 @@ class NetworkMonitor:
 
             if not host_interface:
                 return {"success": False, "error": "Missing host_interface"}
+            if len(host_interface) > 15 or not VALID_INTERFACE_NAME.match(host_interface):
+                return {"success": False, "error": f"Invalid interface name: {host_interface}"}
             if container_pid is None:
                 return {"success": False, "error": "Missing container_pid"}
 
@@ -2000,6 +2006,8 @@ class NetworkMonitor:
 
             if not host_interface:
                 return {"success": False, "error": "Missing host_interface"}
+            if len(host_interface) > 15 or not VALID_INTERFACE_NAME.match(host_interface):
+                return {"success": False, "error": f"Invalid interface name: {host_interface}"}
             if container_pid is None:
                 return {"success": False, "error": "Missing container_pid"}
 
