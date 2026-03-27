@@ -39,7 +39,8 @@ class DataChannelHandler:
             {"type": "command_response", "correlation_id": 12345, "status": "success", "http_response": {...}}
     """
 
-    def __init__(self, data_channel, session_id: str, session_manager=None, client_registry=None, http_client=None):
+    def __init__(self, data_channel, session_id: str, session_manager=None, client_registry=None, http_client=None,
+                 *, debug_session_manager=None):
         """
         Initialize data channel handler.
 
@@ -49,12 +50,14 @@ class DataChannelHandler:
             session_manager: WebRTCSessionManager instance (optional)
             client_registry: ClientRepo instance for device lookups
             http_client: HTTPClientRepo instance for command execution
+            debug_session_manager: DebugSessionManager for routing api='debug' commands
         """
         self.channel = data_channel
         self.session_id = session_id
         self.session_manager = session_manager
         self.client_registry = client_registry
         self.http_client = http_client
+        self._debug_session_manager = debug_session_manager
         self._closed = False
         self._ready = False
         self._ping_task: Optional[asyncio.Task] = None
@@ -177,17 +180,36 @@ class DataChannelHandler:
         """
         Handle run_command message - execute HTTP command on runtime container.
 
-        Uses the shared execute_for_device use case.
+        Routes api='debug' to the DebugSessionManager, all other commands
+        to the shared execute_for_device use case.
 
         Args:
             message: Command message with device_id, method, api, etc.
         """
         correlation_id = message.get("correlation_id")
         device_id = message.get("device_id")
+        api = message.get("api")
 
-        log_info(f"WebRTC run_command for device {device_id}: {message.get('method')} {message.get('api')}")
+        log_info(f"WebRTC run_command for device {device_id}: {message.get('method')} {api}")
 
         try:
+            # Route debug commands to the debug session manager
+            if api == "debug" and self._debug_session_manager:
+                debug_message = message.get("data", {})
+                log_info(f"WebRTC debug command for {device_id}: {debug_message.get('type')}")
+                debug_response = await asyncio.to_thread(
+                    self._debug_session_manager.handle_debug_message,
+                    device_id,
+                    debug_message,
+                )
+                self._send_message({
+                    "type": "command_response",
+                    "correlation_id": correlation_id,
+                    "status": "success",
+                    "debug_response": debug_response,
+                })
+                return
+
             result = await asyncio.to_thread(
                 execute_for_device, device_id, message, client_registry=self.client_registry, http_client=self.http_client
             )

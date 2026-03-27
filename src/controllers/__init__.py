@@ -48,6 +48,7 @@ async def main_websocket_task(server_url: str, dns_ttl: int = 30):
             client, session_manager, ctx.client_registry, ctx.http_client,
             http_client_factory=ctx.http_client_factory,
             debug_socket_factory=ctx.debug_socket_factory,
+            debug_session_manager=ctx.debug_session_manager,
         )
 
         # Start network event listener

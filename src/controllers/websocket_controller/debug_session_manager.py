@@ -80,6 +80,8 @@ class DebugSessionManager:
                 return self._handle_start(device_id, debug_message)
             elif msg_type == "debug_stop":
                 return self._handle_stop(device_id)
+            elif msg_type == "debug_command":
+                return self._handle_raw_command(device_id, debug_message)
             elif msg_type in ("debug_get_md5", "debug_get_list", "debug_set", "debug_info"):
                 return self._handle_command(device_id, debug_message)
             else:
@@ -87,6 +89,30 @@ class DebugSessionManager:
         except Exception as e:
             log_error(f"DebugSessionManager error for {device_id}: {e}")
             return {"type": "debug_error", "error": str(e)}
+
+    def forward_raw_command(self, device_id, hex_command):
+        """Forward a raw hex Modbus PDU to the runtime and return the raw hex response.
+
+        Used by DebugChannelHandler for binary WebRTC debug commands.
+
+        Args:
+            device_id: The runtime container name.
+            hex_command: Space-separated hex string (e.g. "44 00 03 00 00 00 01 00 02").
+
+        Returns:
+            {"success": True, "data": "44 7E ..."} or
+            {"success": False, "error": "..."}
+        """
+        with self._lock:
+            session = self._sessions.get(device_id)
+            if not session or not session["connected"]:
+                return {"success": False, "error": "No active debug session"}
+            session["last_activity"] = datetime.now(timezone.utc)
+            debug_socket = session["debug_socket"]
+            command_lock = session["command_lock"]
+
+        with command_lock:
+            return debug_socket.send_command(hex_command, timeout=5.0)
 
     # ------------------------------------------------------------------
     # Handlers (run in worker thread via to_thread)
@@ -206,6 +232,19 @@ class DebugSessionManager:
                 return {"type": "debug_set_response", "success": True}
             elif command_type == "info":
                 return {"type": "debug_info_response", "variable_count": data.get("variable_count", 0)}
+        else:
+            return {"type": "debug_error", "error": result.get("error", "Unknown error")}
+
+    def _handle_raw_command(self, device_id, message):
+        """Forward a raw hex Modbus PDU command via the HTTP/run_command path."""
+        hex_command = message.get("command", "")
+        if not hex_command:
+            return {"type": "debug_error", "error": "Missing 'command' field"}
+
+        result = self.forward_raw_command(device_id, hex_command)
+
+        if result.get("success"):
+            return {"type": "debug_command_response", "data": result.get("data", "")}
         else:
             return {"type": "debug_error", "error": result.get("error", "Unknown error")}
 

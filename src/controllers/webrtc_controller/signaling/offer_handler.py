@@ -29,7 +29,8 @@ MESSAGE_CONTRACT = {
 
 
 def init(client, session_manager, client_registry, http_client,
-         *, http_client_factory=None, debug_socket_factory=None):
+         *, http_client_factory=None, debug_socket_factory=None,
+         debug_session_manager=None):
     """
     Initialize the WebRTC offer handler.
 
@@ -40,6 +41,7 @@ def init(client, session_manager, client_registry, http_client,
         http_client: HTTPClientRepo instance for command execution
         http_client_factory: Callable returning a new HTTPClientRepo (for debug sessions)
         debug_socket_factory: Callable returning a new DebugSocketRepo (for debug sessions)
+        debug_session_manager: DebugSessionManager for debug session lifecycle
     """
     log_info(f"Registering topic: {NAME}")
 
@@ -145,21 +147,23 @@ def init(client, session_manager, client_registry, http_client,
                 if label == "data":
                     session_manager.set_data_channel(session_id, channel)
                     log_info(f"Creating DataChannelHandler for session {session_id}")
-                    handler = DataChannelHandler(channel, session_id, session_manager, client_registry, http_client)
+                    handler = DataChannelHandler(
+                        channel, session_id, session_manager, client_registry, http_client,
+                        debug_session_manager=debug_session_manager,
+                    )
                     session_manager.set_channel_handler(session_id, handler)
                     log_info(f"DataChannelHandler created successfully")
                 elif label == "debug":
                     session_manager.set_debug_channel(session_id, channel)
-                    if http_client_factory is None or debug_socket_factory is None:
+                    if debug_session_manager is None:
                         log_warning(f"Debug channel received for session {session_id} but "
-                                    f"http_client_factory or debug_socket_factory is None, "
+                                    f"debug_session_manager is None, "
                                     f"skipping DebugChannelHandler creation")
                     else:
                         log_info(f"Creating DebugChannelHandler for session {session_id}")
                         handler = DebugChannelHandler(
-                            channel, session_id, session_manager, client_registry,
-                            http_client_factory=http_client_factory,
-                            debug_socket_factory=debug_socket_factory,
+                            channel, session_id, session_manager, device_id,
+                            debug_session_manager=debug_session_manager,
                         )
                         session_manager.set_debug_channel_handler(session_id, handler)
                         log_info(f"DebugChannelHandler created successfully")
