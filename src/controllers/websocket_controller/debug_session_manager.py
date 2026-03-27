@@ -111,12 +111,8 @@ class DebugSessionManager:
             debug_socket = session["debug_socket"]
             command_lock = session["command_lock"]
 
-        # Normalize to space-separated uppercase hex (runtime expects this format)
-        clean = hex_command.replace(" ", "").upper()
-        normalized = " ".join(clean[i:i+2] for i in range(0, len(clean), 2))
-
         with command_lock:
-            return debug_socket.send_command(normalized, timeout=5.0)
+            return debug_socket.send_command(hex_command, timeout=5.0)
 
     # ------------------------------------------------------------------
     # Handlers (run in worker thread via to_thread)
