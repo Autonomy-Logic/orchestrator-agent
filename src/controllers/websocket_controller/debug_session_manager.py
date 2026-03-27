@@ -97,7 +97,7 @@ class DebugSessionManager:
 
         Args:
             device_id: The runtime container name.
-            hex_command: Space-separated hex string (e.g. "44 00 03 00 00 00 01 00 02").
+            hex_command: Hex string in any format (compact or space-separated).
 
         Returns:
             {"success": True, "data": "44 7E ..."} or
@@ -111,25 +111,31 @@ class DebugSessionManager:
             debug_socket = session["debug_socket"]
             command_lock = session["command_lock"]
 
+        # Normalize to space-separated uppercase hex (runtime expects this format)
+        clean = hex_command.replace(" ", "").upper()
+        normalized = " ".join(clean[i:i+2] for i in range(0, len(clean), 2))
+
         with command_lock:
-            return debug_socket.send_command(hex_command, timeout=5.0)
+            return debug_socket.send_command(normalized, timeout=5.0)
 
     # ------------------------------------------------------------------
     # Handlers (run in worker thread via to_thread)
     # ------------------------------------------------------------------
 
     def _handle_start(self, device_id, message):
-        """Authenticate with runtime and establish persistent Socket.IO connection."""
+        """Establish persistent Socket.IO debug connection using the provided JWT token."""
         # Disconnect existing session for this device if any
         with self._lock:
             if device_id in self._sessions:
                 self._disconnect_session(device_id)
 
-        username = message.get("username", "dev")
-        password = message.get("password", "dev")
+        token = message.get("token")
         port = message.get("port", 8443)
 
-        log_info(f"HTTP debug session requested for device {device_id}")
+        if not token:
+            return {"type": "debug_error", "error": "No token provided in debug_start"}
+
+        log_info(f"Debug session requested for device {device_id}")
 
         # Look up device IP
         client = self._client_registry.get_client(device_id)
@@ -137,30 +143,7 @@ class DebugSessionManager:
             return {"type": "debug_error", "error": f"Device {device_id} not found"}
 
         device_ip = client["ip"]
-        log_info(f"Starting HTTP debug session for {device_id} at {device_ip}:{port}")
-
-        # Step 1: Authenticate
-        http_client = self._http_client_factory()
-        auth_response = http_client.make_request(
-            "POST",
-            device_ip,
-            port,
-            "api/login",
-            {"json": {"username": username, "password": password}},
-        )
-
-        if not auth_response.get("ok"):
-            return {
-                "type": "debug_error",
-                "error": f"Authentication failed: HTTP {auth_response.get('status_code')}",
-            }
-
-        body = auth_response.get("body", {})
-        token = body.get("access_token") if isinstance(body, dict) else None
-        if not token:
-            return {"type": "debug_error", "error": "No access_token in login response"}
-
-        log_info("HTTP debug session: authentication successful")
+        log_info(f"Starting debug session for {device_id} at {device_ip}:{port}")
 
         # Step 2: Connect Socket.IO
         url = f"https://{device_ip}:{port}"
