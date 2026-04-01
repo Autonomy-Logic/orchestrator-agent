@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock
 
+from entities import DedicatedNicConfig
 from use_cases.network_monitor.get_host_interfaces import (
     should_include_interface,
     build_interface_info_from_cache,
@@ -144,11 +145,11 @@ class TestGetHostInterfacesData:
         assert "eth0" in names
         assert "docker0" in names
 
-    def test_interface_no_ipv4_skipped(self):
-        """Interface with no IPv4 addresses and include_virtual=False is skipped."""
+    def test_interface_no_ipv4_skipped_when_not_ethernet(self):
+        """Non-ethernet interface with no IPv4 addresses is skipped."""
         cache = MagicMock()
         cache.get_all_interfaces.return_value = {
-            "eth0": {"addresses": []},
+            "wlan0": {"addresses": [], "type": "wifi"},
         }
 
         result = get_host_interfaces_data(
@@ -157,6 +158,30 @@ class TestGetHostInterfacesData:
 
         assert result["status"] == "success"
         assert len(result["interfaces"]) == 0
+
+    def test_ethernet_no_ipv4_included_as_dedicated_only(self):
+        """Ethernet interface without IPv4 is included with dedicated_only=True."""
+        cache = MagicMock()
+        cache.get_all_interfaces.return_value = {
+            "eth0": {"addresses": [{"address": "192.168.1.10"}]},
+            "enp4s0": {"addresses": [], "type": "ethernet"},
+        }
+
+        result = get_host_interfaces_data(
+            include_virtual=False, detailed=False, interface_cache=cache
+        )
+
+        assert result["status"] == "success"
+        names = [i["name"] for i in result["interfaces"]]
+        assert "enp4s0" in names
+        assert "eth0" in names
+
+        enp4s0 = next(i for i in result["interfaces"] if i["name"] == "enp4s0")
+        assert enp4s0["dedicated_only"] is True
+        assert enp4s0["ip_address"] is None
+
+        eth0 = next(i for i in result["interfaces"] if i["name"] == "eth0")
+        assert "dedicated_only" not in eth0
 
     def test_exception_returns_error(self):
         """Exception in get_host_interfaces_data returns error dict."""
@@ -167,3 +192,86 @@ class TestGetHostInterfacesData:
 
         assert result["status"] == "error"
         assert "Failed to retrieve" in result["error"]
+
+    def test_dedicated_nic_moved_to_container_still_listed(self):
+        """A dedicated NIC moved to a container namespace (no longer in cache) still appears."""
+        cache = MagicMock()
+        cache.get_all_interfaces.return_value = {
+            "eth0": {"addresses": [{"address": "192.168.1.10"}]},
+            # enp4s0 is NOT in cache — it was moved to a container
+        }
+        nic_repo = MagicMock()
+        nic_repo.load_all_configs.return_value = {
+            "my_container": DedicatedNicConfig.create("enp4s0"),
+        }
+
+        result = get_host_interfaces_data(
+            detailed=False, interface_cache=cache, dedicated_nic_repo=nic_repo,
+        )
+
+        assert result["status"] == "success"
+        names = [i["name"] for i in result["interfaces"]]
+        assert "enp4s0" in names
+        assert "eth0" in names
+
+        enp4s0 = next(i for i in result["interfaces"] if i["name"] == "enp4s0")
+        assert enp4s0["dedicated_to"] == "my_container"
+        assert enp4s0["ip_address"] is None
+        assert enp4s0["ipv4_addresses"] == []
+
+    def test_dedicated_nic_in_cache_gets_dedicated_to_field(self):
+        """A dedicated NIC still in cache (not yet moved) gets the dedicated_to field."""
+        cache = MagicMock()
+        cache.get_all_interfaces.return_value = {
+            "eth0": {"addresses": [{"address": "192.168.1.10"}]},
+            "enp4s0": {"addresses": [{"address": "10.0.0.5"}]},
+        }
+        nic_repo = MagicMock()
+        nic_repo.load_all_configs.return_value = {
+            "my_container": DedicatedNicConfig.create("enp4s0"),
+        }
+
+        result = get_host_interfaces_data(
+            detailed=False, interface_cache=cache, dedicated_nic_repo=nic_repo,
+        )
+
+        assert result["status"] == "success"
+        enp4s0 = next(i for i in result["interfaces"] if i["name"] == "enp4s0")
+        assert enp4s0["dedicated_to"] == "my_container"
+        assert enp4s0["ip_address"] == "10.0.0.5"
+
+    def test_dedicated_nic_repo_exception_handled(self):
+        """Exception loading dedicated NIC configs is handled gracefully."""
+        cache = MagicMock()
+        cache.get_all_interfaces.return_value = {
+            "eth0": {"addresses": [{"address": "192.168.1.10"}]},
+        }
+        nic_repo = MagicMock()
+        nic_repo.load_all_configs.side_effect = RuntimeError("disk error")
+
+        result = get_host_interfaces_data(
+            detailed=False, interface_cache=cache, dedicated_nic_repo=nic_repo,
+        )
+
+        assert result["status"] == "success"
+        assert len(result["interfaces"]) == 1
+        assert result["interfaces"][0]["name"] == "eth0"
+
+    def test_dedicated_nic_not_duplicated_if_in_cache(self):
+        """A dedicated NIC that is still in cache should not appear twice."""
+        cache = MagicMock()
+        cache.get_all_interfaces.return_value = {
+            "enp4s0": {"addresses": [{"address": "10.0.0.5"}]},
+        }
+        nic_repo = MagicMock()
+        nic_repo.load_all_configs.return_value = {
+            "my_container": DedicatedNicConfig.create("enp4s0"),
+        }
+
+        result = get_host_interfaces_data(
+            detailed=False, interface_cache=cache, dedicated_nic_repo=nic_repo,
+        )
+
+        assert result["status"] == "success"
+        enp4s0_entries = [i for i in result["interfaces"] if i["name"] == "enp4s0"]
+        assert len(enp4s0_entries) == 1

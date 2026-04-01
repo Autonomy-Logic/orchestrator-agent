@@ -22,6 +22,7 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 import ipaddress
+import re
 
 try:
     from pyroute2 import IPRoute, NetlinkError
@@ -54,6 +55,7 @@ SOCKET_PATH = "/var/orchestrator/netmon.sock"
 LOG_FILE = "/var/log/autonomy-netmon.log"
 DHCP_LEASE_DIR = "/var/orchestrator/dhcp"
 DEBOUNCE_SECONDS = 3
+VALID_INTERFACE_NAME = re.compile(r"^[a-zA-Z0-9_.-]+$")
 
 
 def get_interface_type(ifname: str) -> str:
@@ -1523,8 +1525,15 @@ class NetworkMonitor:
         os.chmod(self.socket_path, 0o666)
         logger.info(f"Unix socket created at {self.socket_path}")
 
-    def get_interface_info(self, ifname: str) -> Optional[Dict]:
-        """Get detailed information about a network interface"""
+    def get_interface_info(self, ifname: str, require_ipv4: bool = True) -> Optional[Dict]:
+        """Get detailed information about a network interface.
+
+        Args:
+            ifname: Interface name (e.g., "eth0", "enp4s0")
+            require_ipv4: If True (default), return None when the interface has
+                no IPv4 addresses. Set to False to include interfaces without IP
+                (e.g., Ethernet ports intended for raw-frame protocols like EtherCAT).
+        """
         try:
             links = self.ipr.link_lookup(ifname=ifname)
             if not links:
@@ -1540,30 +1549,29 @@ class NetworkMonitor:
                 return None
 
             addrs = self.ipr.get_addr(index=idx, family=socket.AF_INET)
-            if not addrs:
-                return None
 
             ipv4_addresses = []
-            for addr in addrs:
-                ip = addr.get_attr("IFA_ADDRESS")
-                prefixlen = addr["prefixlen"]
-                if ip:
-                    try:
-                        network = ipaddress.ip_network(
-                            f"{ip}/{prefixlen}", strict=False
-                        )
-                        ipv4_addresses.append(
-                            {
-                                "address": ip,
-                                "prefixlen": prefixlen,
-                                "subnet": str(network.with_prefixlen),
-                                "network_address": str(network.network_address),
-                            }
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to parse IP {ip}/{prefixlen}: {e}")
+            if addrs:
+                for addr in addrs:
+                    ip = addr.get_attr("IFA_ADDRESS")
+                    prefixlen = addr["prefixlen"]
+                    if ip:
+                        try:
+                            network = ipaddress.ip_network(
+                                f"{ip}/{prefixlen}", strict=False
+                            )
+                            ipv4_addresses.append(
+                                {
+                                    "address": ip,
+                                    "prefixlen": prefixlen,
+                                    "subnet": str(network.with_prefixlen),
+                                    "network_address": str(network.network_address),
+                                }
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to parse IP {ip}/{prefixlen}: {e}")
 
-            if not ipv4_addresses:
+            if require_ipv4 and not ipv4_addresses:
                 return None
 
             gateway = self.get_default_gateway(ifname)
@@ -1603,7 +1611,12 @@ class NetworkMonitor:
             return None
 
     def discover_all_interfaces(self) -> List[Dict]:
-        """Discover all active network interfaces with IPv4 addresses"""
+        """Discover all active physical network interfaces.
+
+        Includes interfaces without IPv4 addresses so that Ethernet ports
+        intended for raw-frame protocols (EtherCAT, PROFINET) can be shown
+        in the UI as candidates for dedicated NIC assignment.
+        """
         interfaces = []
         try:
             links = self.ipr.get_links()
@@ -1613,12 +1626,18 @@ class NetworkMonitor:
                 if ifname in ["lo", "docker0"] or ifname.startswith("veth"):
                     continue
 
-                info = self.get_interface_info(ifname)
+                info = self.get_interface_info(ifname, require_ipv4=False)
                 if info:
+                    has_ipv4 = bool(info.get("ipv4_addresses"))
                     interfaces.append(info)
-                    logger.info(
-                        f"Discovered interface: {ifname} with {len(info['ipv4_addresses'])} IPv4 address(es)"
-                    )
+                    if has_ipv4:
+                        logger.info(
+                            f"Discovered interface: {ifname} with {len(info['ipv4_addresses'])} IPv4 address(es)"
+                        )
+                    else:
+                        logger.info(
+                            f"Discovered interface: {ifname} (no IPv4, available for dedicated use)"
+                        )
 
         except Exception as e:
             logger.error(f"Failed to discover interfaces: {e}")
@@ -1875,6 +1894,140 @@ class NetworkMonitor:
 
         elif cmd_type == "cleanup_all_proxy_arp":
             return cleanup_all_proxy_arp()
+
+        elif cmd_type == "move_nic_to_container":
+            host_interface = command.get("host_interface")
+            container_pid = command.get("container_pid")
+
+            if not host_interface:
+                return {"success": False, "error": "Missing host_interface"}
+            if len(host_interface) > 15 or not VALID_INTERFACE_NAME.match(host_interface):
+                return {"success": False, "error": f"Invalid interface name: {host_interface}"}
+            if container_pid is None:
+                return {"success": False, "error": "Missing container_pid"}
+
+            try:
+                container_pid = int(container_pid)
+            except (ValueError, TypeError):
+                return {"success": False, "error": f"Invalid container_pid: {container_pid}"}
+
+            logger.info(f"move_nic_to_container: interface={host_interface}, pid={container_pid}")
+
+            try:
+                # Verify interface exists on host
+                subprocess.run(
+                    ["ip", "link", "show", host_interface],
+                    check=True, capture_output=True,
+                )
+
+                # Bring interface down before moving
+                subprocess.run(
+                    ["ip", "link", "set", host_interface, "down"],
+                    check=True, capture_output=True,
+                )
+
+                # Move to container namespace
+                subprocess.run(
+                    ["ip", "link", "set", host_interface, "netns", str(container_pid)],
+                    check=True, capture_output=True,
+                )
+
+                # Bring up inside container
+                subprocess.run(
+                    ["nsenter", "-t", str(container_pid), "-n",
+                     "ip", "link", "set", host_interface, "up"],
+                    check=True, capture_output=True,
+                )
+
+                logger.info(f"NIC {host_interface} moved to container PID {container_pid}")
+                return {"success": True}
+
+            except subprocess.CalledProcessError as e:
+                error_msg = e.stderr.decode().strip() if e.stderr else str(e)
+                logger.error(f"Failed to move NIC {host_interface}: {error_msg}")
+                return {"success": False, "error": f"Failed to move NIC: {error_msg}"}
+            except Exception as e:
+                logger.error(f"Unexpected error moving NIC {host_interface}: {e}")
+                return {"success": False, "error": str(e)}
+
+        elif cmd_type == "return_nic_to_host":
+            host_interface = command.get("host_interface")
+            container_pid = command.get("container_pid")
+
+            if not host_interface:
+                return {"success": False, "error": "Missing host_interface"}
+            if len(host_interface) > 15 or not VALID_INTERFACE_NAME.match(host_interface):
+                return {"success": False, "error": f"Invalid interface name: {host_interface}"}
+            if container_pid is None:
+                return {"success": False, "error": "Missing container_pid"}
+
+            try:
+                container_pid = int(container_pid)
+            except (ValueError, TypeError):
+                return {"success": False, "error": f"Invalid container_pid: {container_pid}"}
+
+            logger.info(f"return_nic_to_host: interface={host_interface}, pid={container_pid}")
+
+            try:
+                # Bring down inside container (best-effort, may already be down)
+                subprocess.run(
+                    ["nsenter", "-t", str(container_pid), "-n",
+                     "ip", "link", "set", host_interface, "down"],
+                    check=False, capture_output=True,
+                )
+
+                # Move back to host namespace (PID 1 = host init)
+                subprocess.run(
+                    ["nsenter", "-t", str(container_pid), "-n",
+                     "ip", "link", "set", host_interface, "netns", "1"],
+                    check=True, capture_output=True,
+                )
+
+                # Bring up on host
+                subprocess.run(
+                    ["ip", "link", "set", host_interface, "up"],
+                    check=True, capture_output=True,
+                )
+
+                logger.info(f"NIC {host_interface} returned to host from container PID {container_pid}")
+                return {"success": True}
+
+            except subprocess.CalledProcessError as e:
+                error_msg = e.stderr.decode().strip() if e.stderr else str(e)
+                logger.error(f"Failed to return NIC {host_interface}: {error_msg}")
+                return {"success": False, "error": f"Failed to return NIC: {error_msg}"}
+            except Exception as e:
+                logger.error(f"Unexpected error returning NIC {host_interface}: {e}")
+                return {"success": False, "error": str(e)}
+
+        elif cmd_type == "check_nic_in_container":
+            host_interface = command.get("host_interface")
+            container_pid = command.get("container_pid")
+
+            if not host_interface:
+                return {"success": False, "error": "Missing host_interface"}
+            if len(host_interface) > 15 or not VALID_INTERFACE_NAME.match(host_interface):
+                return {"success": False, "error": f"Invalid interface name: {host_interface}"}
+            if container_pid is None:
+                return {"success": False, "error": "Missing container_pid"}
+
+            try:
+                container_pid = int(container_pid)
+            except (ValueError, TypeError):
+                return {"success": False, "error": f"Invalid container_pid: {container_pid}"}
+
+            try:
+                result = subprocess.run(
+                    ["nsenter", "-t", str(container_pid), "-n",
+                     "ip", "link", "show", host_interface],
+                    capture_output=True,
+                )
+                present = result.returncode == 0
+                return {"success": True, "present": present}
+
+            except Exception as e:
+                logger.error(f"Error checking NIC {host_interface} in container: {e}")
+                return {"success": False, "error": str(e)}
 
         else:
             return {"success": False, "error": f"Unknown command: {cmd_type}"}
