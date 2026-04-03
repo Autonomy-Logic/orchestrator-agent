@@ -81,7 +81,8 @@ def build_interface_info_from_cache(
 
 
 def get_host_interfaces_data(
-    include_virtual: bool = False, detailed: bool = True, *, interface_cache
+    include_virtual: bool = False, detailed: bool = True,
+    *, interface_cache, dedicated_nic_repo=None,
 ) -> Dict[str, Any]:
     """
     Get network interfaces on the host from the interface cache.
@@ -125,6 +126,16 @@ def get_host_interfaces_data(
 
         interfaces: List[dict] = []
 
+        # Build lookup of which NICs are dedicated to containers
+        dedicated_nics = {}
+        if dedicated_nic_repo:
+            try:
+                all_nic_configs = dedicated_nic_repo.load_all_configs()
+                for container_name, nic_config in all_nic_configs.items():
+                    dedicated_nics[nic_config.host_interface] = container_name
+            except Exception as e:
+                log_warning(f"Could not load dedicated NIC configs: {e}")
+
         cache_snapshot = all_interfaces
 
         for interface_name, cache_data in cache_snapshot.items():
@@ -136,7 +147,13 @@ def get_host_interfaces_data(
                 interface_name, cache_data, detailed
             )
 
-            if interface_info["ipv4_addresses"] or include_virtual:
+            # Add dedicated_to field if this NIC is assigned to a container
+            if interface_name in dedicated_nics:
+                interface_info["dedicated_to"] = dedicated_nics[interface_name]
+
+            has_ip = bool(interface_info["ipv4_addresses"])
+
+            if has_ip or include_virtual:
                 interfaces.append(interface_info)
                 log_debug(
                     f"Added interface {interface_name}: "
@@ -144,8 +161,33 @@ def get_host_interfaces_data(
                     f"subnet={interface_info.get('subnet')}, "
                     f"gateway={interface_info.get('gateway')}"
                 )
+            elif cache_data.get("type") == "ethernet":
+                # Include Ethernet interfaces without IP — they are valid
+                # candidates for dedicated NIC assignment (EtherCAT, PROFINET)
+                # but not for vNIC parent (which requires IP for MACVLAN/DHCP).
+                interface_info["dedicated_only"] = True
+                interfaces.append(interface_info)
+                log_debug(
+                    f"Added interface {interface_name} (no IPv4, dedicated_only)"
+                )
             else:
                 log_debug(f"Skipping interface {interface_name} (no IPv4 addresses)")
+
+        # Add dedicated NICs that are no longer visible on the host
+        # (moved into a container's network namespace)
+        listed_names = {iface["name"] for iface in interfaces}
+        for nic_name, container_name in dedicated_nics.items():
+            if nic_name not in listed_names:
+                interfaces.append({
+                    "name": nic_name,
+                    "ip_address": None,
+                    "ipv4_addresses": [],
+                    "mac_address": None,
+                    "dedicated_to": container_name,
+                })
+                log_debug(
+                    f"Added dedicated NIC {nic_name} (moved to container {container_name})"
+                )
 
         interfaces.sort(key=lambda x: x["name"])
 

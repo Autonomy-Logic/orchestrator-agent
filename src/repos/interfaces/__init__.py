@@ -8,6 +8,7 @@ from .network_interface_cache_repo_interface import NetworkInterfaceCacheRepoInt
 from .netmon_client_repo_interface import NetmonClientRepoInterface
 from .socket_repo_interface import SocketRepoInterface
 from .debug_socket_repo_interface import DebugSocketRepoInterface
+from .dedicated_nic_repo_interface import DedicatedNicRepoInterface
 
 __all__ = [
     "ContainerRuntimeRepoInterface",
@@ -20,4 +21,5 @@ __all__ = [
     "NetmonClientRepoInterface",
     "SocketRepoInterface",
     "DebugSocketRepoInterface",
+    "DedicatedNicRepoInterface",
 ]

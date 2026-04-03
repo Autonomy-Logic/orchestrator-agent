@@ -97,22 +97,48 @@ async def delete_runtime_container(
     operations_state,
     devices_usage_buffer,
     socket_repo,
+    dedicated_nic_repo,
 ):
     """
     Delete a runtime container and all associated resources.
 
-    Proxy ARP cleanup is done first via netmon (async), then blocking Docker
-    operations are offloaded to a background thread.
+    Dedicated NIC return and Proxy ARP cleanup are done first via netmon (async),
+    then blocking Docker operations are offloaded to a background thread.
 
     Args:
         container_name: Name of the runtime container to delete
-        container_runtime: Optional ContainerRuntimeRepo adapter (defaults to singleton)
-        client_registry: Optional ClientRepo adapter (defaults to singleton)
-        vnic_repo: Optional VNICRepo adapter (defaults to singleton)
-        serial_repo: Optional SerialRepo adapter (defaults to singleton)
-        network_commander: Optional NetworkCommanderRepo adapter (defaults to singleton)
-        operations_state: Optional OperationsStateTracker (defaults to singleton)
+        container_runtime: ContainerRuntimeRepo adapter
+        client_registry: ClientRepo adapter
+        vnic_repo: VNICRepo adapter
+        serial_repo: SerialRepo adapter
+        network_commander: NetworkCommanderRepo adapter
+        operations_state: OperationsStateTracker
+        devices_usage_buffer: DevicesUsageBuffer
+        socket_repo: SocketRepo adapter
+        dedicated_nic_repo: DedicatedNicRepo adapter
     """
+    # Return dedicated NIC to host namespace (must happen before container stop)
+    try:
+        nic_config = dedicated_nic_repo.load_config(container_name)
+        if nic_config:
+            host_interface = nic_config.host_interface
+            log_info(f"Returning dedicated NIC {host_interface} to host for {container_name}")
+            try:
+                pid = container_runtime.get_running_pid(container_name)
+                if pid:
+                    await network_commander.return_nic_to_host(host_interface, pid)
+                    log_info(f"Dedicated NIC {host_interface} returned to host")
+                else:
+                    log_warning(
+                        f"Container {container_name} not running, "
+                        f"NIC {host_interface} may already be on host"
+                    )
+            except Exception as e:
+                log_warning(f"Error returning dedicated NIC {host_interface}: {e}")
+            dedicated_nic_repo.delete_config(container_name)
+    except Exception as e:
+        log_warning(f"Error during dedicated NIC cleanup for {container_name}: {e}")
+
     # Clean up Proxy ARP bridges via netmon before deleting container
     # This must be done before container removal to ensure routes are properly cleaned
     try:
@@ -174,6 +200,7 @@ async def start_deletion(container_name, *, ctx):
         operations_state=ctx.operations_state,
         devices_usage_buffer=ctx.devices_usage_buffer,
         socket_repo=ctx.socket_repo,
+        dedicated_nic_repo=ctx.dedicated_nic_repo,
     ))
 
     return {
