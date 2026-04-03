@@ -43,7 +43,27 @@ class NetmonClientRepo:
             log_warning("Command response queue full, discarding response")
 
     async def send_command(self, command: dict) -> dict:
-        """Send a command to netmon and wait for the actual response."""
+        """Send a fire-and-forget command to netmon (no response expected)."""
+        if not self.writer:
+            log_error("Not connected to network monitor")
+            return {"success": False, "error": "Not connected to network monitor"}
+
+        try:
+            command_json = json.dumps(command) + "\n"
+            self.writer.write(command_json.encode("utf-8"))
+            await self.writer.drain()
+            log_debug(f"Sent command to netmon: {command.get('command')}")
+            return {"success": True, "message": "Command sent"}
+        except Exception as e:
+            log_error(f"Failed to send command to netmon: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def send_command_and_wait(self, command: dict) -> dict:
+        """Send a command to netmon and wait for the response.
+
+        Used for commands that require confirmation (e.g., dedicated NIC operations).
+        Responses are delivered via deliver_response() from the event listener.
+        """
         if not self.writer:
             log_error("Not connected to network monitor")
             return {"success": False, "error": "Not connected to network monitor"}
@@ -195,7 +215,7 @@ class NetmonClientRepo:
             "container_pid": container_pid,
         }
         log_info(f"Requesting NIC move: {host_interface} -> container PID {container_pid}")
-        return await self.send_command(command)
+        return await self.send_command_and_wait(command)
 
     async def return_nic_to_host(self, host_interface: str, container_pid: int) -> dict:
         """Request netmon to return a physical NIC from a container back to the host."""
@@ -205,7 +225,7 @@ class NetmonClientRepo:
             "container_pid": container_pid,
         }
         log_info(f"Requesting NIC return: {host_interface} <- container PID {container_pid}")
-        return await self.send_command(command)
+        return await self.send_command_and_wait(command)
 
     async def check_nic_in_container(self, host_interface: str, container_pid: int) -> dict:
         """Check whether a NIC is present inside a container's network namespace."""
@@ -214,7 +234,7 @@ class NetmonClientRepo:
             "host_interface": host_interface,
             "container_pid": container_pid,
         }
-        return await self.send_command(command)
+        return await self.send_command_and_wait(command)
 
     def get_dhcp_ip(self, container_name: str, vnic_name: str) -> Optional[str]:
         """Get the DHCP-assigned IP for a container's vNIC."""

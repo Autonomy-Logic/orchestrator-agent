@@ -279,6 +279,9 @@ class NetworkEventListener:
     async def send_command(self, command: dict) -> dict:
         return await self.netmon_client.send_command(command)
 
+    async def send_command_and_wait(self, command: dict) -> dict:
+        return await self.netmon_client.send_command_and_wait(command)
+
     async def start_dhcp(
         self,
         container_name: str,

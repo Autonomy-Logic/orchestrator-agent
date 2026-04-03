@@ -13,6 +13,7 @@ class NetworkCommanderRepoInterface(Protocol):
     """
 
     async def send_command(self, command: dict) -> dict: ...
+    async def send_command_and_wait(self, command: dict) -> dict: ...
     async def start_dhcp(
         self,
         container_name: str,
