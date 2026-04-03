@@ -1,8 +1,5 @@
-import re
 from datetime import datetime
 from tools.logger import log_error
-
-_VALID_INTERFACE_NAME = re.compile(r"^[a-zA-Z0-9_.-]+$")
 
 
 class BaseType:
@@ -39,19 +36,6 @@ class NonEmptyStringType(BaseType):
             raise TypeError("Value must be a string.")
         if not value.strip():
             raise TypeError("Value must be a non-empty string.")
-
-
-class InterfaceNameType(BaseType):
-
-    @staticmethod
-    def validate(value):
-        if not isinstance(value, str):
-            raise TypeError("Value must be a string.")
-        if not value or len(value) > 15 or not _VALID_INTERFACE_NAME.match(value):
-            raise TypeError(
-                "Value must be a valid Linux interface name "
-                "(alphanumeric, dots, dashes, underscores, max 15 chars)."
-            )
 
 
 class DateType(BaseType):

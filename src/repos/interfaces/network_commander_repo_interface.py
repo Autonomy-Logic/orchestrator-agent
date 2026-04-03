@@ -2,15 +2,7 @@ from typing import Protocol, Optional, Callable, List
 
 
 class NetworkCommanderRepoInterface(Protocol):
-    """
-    High-level interface for network operations used by use cases.
-
-    Aggregates netmon socket commands (DHCP, Proxy ARP, dedicated NIC)
-    with device management capabilities. Implemented by NetworkEventListener
-    which delegates netmon commands to NetmonClientRepo.
-
-    Use cases should depend on this interface rather than NetmonClientRepoInterface.
-    """
+    """Abstract interface for communication with the network monitor sidecar."""
 
     async def send_command(self, command: dict) -> dict: ...
     async def start_dhcp(
@@ -45,15 +37,6 @@ class NetworkCommanderRepoInterface(Protocol):
         veth_host: Optional[str] = None,
     ) -> dict: ...
     async def cleanup_all_proxy_arp(self) -> dict: ...
-    async def move_nic_to_container(
-        self, host_interface: str, container_pid: int
-    ) -> dict: ...
-    async def return_nic_to_host(
-        self, host_interface: str, container_pid: int
-    ) -> dict: ...
-    async def check_nic_in_container(
-        self, host_interface: str, container_pid: int
-    ) -> dict: ...
     async def resync_serial_devices(self) -> None: ...
     def get_dhcp_ip(
         self, container_name: str, vnic_name: str

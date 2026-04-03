@@ -9,7 +9,6 @@ from .interfaces import (
     NetmonClientRepoInterface,
     SocketRepoInterface,
     DebugSocketRepoInterface,
-    DedicatedNicRepoInterface,
 )
 from .container_runtime_repo import ContainerRuntimeRepo
 from .vnic_repo import VNICRepo
@@ -20,7 +19,6 @@ from .network_interface_cache_repo import NetworkInterfaceCacheRepo
 from .netmon_client_repo import NetmonClientRepo
 from .socket_repo import SocketRepo
 from .debug_socket_repo import DebugSocketRepo
-from .dedicated_nic_repo import DedicatedNicRepo
 
 __all__ = [
     # Interfaces
@@ -34,7 +32,6 @@ __all__ = [
     "NetmonClientRepoInterface",
     "SocketRepoInterface",
     "DebugSocketRepoInterface",
-    "DedicatedNicRepoInterface",
     # Implementations
     "ContainerRuntimeRepo",
     "VNICRepo",
@@ -45,5 +42,4 @@ __all__ = [
     "NetmonClientRepo",
     "SocketRepo",
     "DebugSocketRepo",
-    "DedicatedNicRepo",
 ]
