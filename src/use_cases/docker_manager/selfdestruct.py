@@ -7,7 +7,6 @@ import socket
 NETMON_CONTAINER_NAME = "autonomy_netmon"
 SHARED_VOLUME_NAME = "orchestrator-shared"
 ORCHESTRATOR_STATUS_ID = "__orchestrator__"
-NETMON_SOCKET_PATH = "/var/orchestrator/netmon.sock"
 
 # Pattern to match internal networks created by orchestrator (UUID_internal)
 # UUID format: 8-4-4-4-12 hex characters
@@ -20,36 +19,6 @@ INTERNAL_NETWORK_PATTERN = re.compile(
 # Format: macvlan_{interface}_{subnet}_{mask}
 MACVLAN_NETWORK_PATTERN = re.compile(r"^macvlan_[a-zA-Z0-9]+_\d+\.\d+\.\d+\.\d+_\d+$")
 
-
-
-def _send_netmon_command_sync(command: dict) -> dict:
-    """
-    Send a command to netmon via synchronous Unix socket and return the parsed response.
-
-    Used during self-destruct where the async event loop may not be available.
-    Returns the parsed JSON response dict, or an error dict on failure.
-    """
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.settimeout(10)
-            sock.connect(NETMON_SOCKET_PATH)
-            payload = json.dumps(command) + "\n"
-            sock.sendall(payload.encode("utf-8"))
-
-            response_data = b""
-            while True:
-                chunk = sock.recv(4096)
-                if not chunk:
-                    break
-                response_data += chunk
-                if b"\n" in response_data:
-                    break
-
-        if response_data:
-            return json.loads(response_data.decode("utf-8").strip())
-        return {"success": False, "error": "No response from netmon"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
 
 
 def _delete_runtime_container_for_selfdestruct(container_name, container_runtime, vnic_repo, devices_usage_buffer, socket_repo):
@@ -84,49 +53,6 @@ def _delete_runtime_container_for_selfdestruct(container_name, container_runtime
     remove_internal_network(container_name, container_runtime=container_runtime, socket_repo=socket_repo, disconnect_all=True)
 
 
-def _return_all_dedicated_nics(container_runtime, dedicated_nic_repo):
-    """
-    Return all dedicated NICs to the host namespace before deleting containers.
-
-    Must run while containers are still running so the NIC can be moved out
-    of their network namespace. Best-effort — does NOT raise on failure
-    (the NIC will return to the host automatically when the container's
-    namespace is destroyed).
-    """
-    all_configs = dedicated_nic_repo.load_all_configs()
-    if not all_configs:
-        return
-
-    log_info(f"Returning {len(all_configs)} dedicated NIC(s) to host...")
-
-    for container_name, nic_config in all_configs.items():
-        host_interface = nic_config.host_interface
-
-        try:
-            pid = container_runtime.get_running_pid(container_name)
-
-            if pid:
-                response = _send_netmon_command_sync({
-                    "command": "return_nic_to_host",
-                    "host_interface": host_interface,
-                    "container_pid": pid,
-                })
-                if response.get("success"):
-                    log_info(f"Dedicated NIC {host_interface} returned to host from {container_name}")
-                else:
-                    log_warning(f"Failed to return NIC {host_interface}: {response.get('error')}")
-            else:
-                log_info(f"Container {container_name} not running, NIC {host_interface} may already be on host")
-        except container_runtime.NotFoundError:
-            log_info(f"Container {container_name} not found, NIC {host_interface} may already be on host")
-        except Exception as e:
-            log_warning(f"Error returning dedicated NIC {host_interface} for {container_name}: {e}")
-
-        # Always delete config: self-destruct is a one-way operation and the
-        # container namespace will be destroyed anyway, returning the NIC to host.
-        dedicated_nic_repo.delete_config(container_name)
-
-
 def _delete_all_runtime_containers(container_runtime, client_registry, vnic_repo, devices_usage_buffer, socket_repo):
     """
     Delete all managed runtime containers.
@@ -156,14 +82,40 @@ def _cleanup_proxy_arp_veths():
 
     This is a best-effort cleanup that does NOT raise on failure.
     """
+    NETMON_SOCKET_PATH = "/var/orchestrator/netmon.sock"
+
     log_info("Requesting Proxy ARP cleanup from netmon...")
 
-    response = _send_netmon_command_sync({"command": "cleanup_all_proxy_arp"})
-    if response.get("success"):
-        veths_removed = response.get("veths_removed", 0)
-        log_info(f"Proxy ARP cleanup via netmon complete: {veths_removed} veths removed")
-    else:
-        log_warning(f"Proxy ARP cleanup via netmon failed: {response.get('error')}")
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(10)
+            sock.connect(NETMON_SOCKET_PATH)
+
+            command = json.dumps({"command": "cleanup_all_proxy_arp"}) + "\n"
+            sock.sendall(command.encode("utf-8"))
+
+            # Read response
+            response_data = b""
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                response_data += chunk
+                if b"\n" in response_data:
+                    break
+
+        if response_data:
+            response = json.loads(response_data.decode("utf-8").strip())
+            if response.get("success"):
+                veths_removed = response.get("veths_removed", 0)
+                log_info(f"Proxy ARP cleanup via netmon complete: {veths_removed} veths removed")
+            else:
+                log_warning(f"Proxy ARP cleanup via netmon failed: {response.get('error')}")
+        else:
+            log_warning("No response from netmon for Proxy ARP cleanup")
+
+    except Exception as e:
+        log_warning(f"Error requesting Proxy ARP cleanup from netmon: {e}")
 
 
 def _cleanup_orchestrator_networks(container_runtime):
@@ -318,31 +270,34 @@ def start_self_destruct(*, operations_state) -> bool:
     return True
 
 
-def self_destruct(*, container_runtime, client_registry, vnic_repo, operations_state, devices_usage_buffer, socket_repo, dedicated_nic_repo):
+def self_destruct(*, container_runtime, client_registry, vnic_repo, operations_state, devices_usage_buffer, socket_repo):
     """
     Self-destruct the orchestrator by removing all managed resources.
 
     Cleanup order:
-    1. Return all dedicated NICs to host (while containers are still running)
-    2. Delete all managed runtime containers (vPLCs) and their networks
-    3. Clean up orphaned networks (internal and MACVLAN)
-    4. Delete the autonomy-netmon sidecar container
-    5. Delete the orchestrator-shared volume (best-effort)
-    6. Delete the orchestrator-agent container itself (last)
+    1. Delete all managed runtime containers (vPLCs) and their networks
+    2. Clean up orphaned networks (internal and MACVLAN)
+    3. Delete the autonomy-netmon sidecar container
+    4. Delete the orchestrator-shared volume (best-effort)
+    5. Delete the orchestrator-agent container itself (last)
 
-    Updates operations_state with progress steps.
+    Updates operations_state with progress steps:
+    - "starting" -> "deleting_runtimes" -> "cleaning_networks" -> "deleting_netmon"
+      -> "deleting_volume" -> "removing_self"
 
     On failure, sets error state and raises exception.
     The orchestrator-agent container removal is only attempted after all other
     cleanup steps succeed.
+
+    Args:
+        container_runtime: Optional ContainerRuntimeRepo adapter (defaults to singleton)
+        client_registry: Optional ClientRepo adapter (defaults to singleton)
+        vnic_repo: Optional VNICRepo adapter (defaults to singleton)
+        operations_state: Optional OperationsStateTracker (defaults to singleton)
     """
     log_info("Self-destructing orchestrator...")
 
     try:
-        # Return dedicated NICs before stopping containers (NIC must move while container runs)
-        operations_state.set_step(ORCHESTRATOR_STATUS_ID, "returning_dedicated_nics")
-        _return_all_dedicated_nics(container_runtime, dedicated_nic_repo)
-
         operations_state.set_step(ORCHESTRATOR_STATUS_ID, "deleting_runtimes")
         _delete_all_runtime_containers(container_runtime, client_registry, vnic_repo, devices_usage_buffer, socket_repo)
 
