@@ -155,6 +155,7 @@ class DedicatedNICManager:
 
     async def start(self):
         """Resync existing NICs and start the Docker event listener."""
+        await self.stop()
         await self.resync_nics_for_existing_containers()
         self._event_listener_task = asyncio.create_task(
             self.start_docker_event_listener()

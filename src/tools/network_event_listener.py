@@ -94,8 +94,12 @@ class NetworkEventListener:
                     await self.dhcp_manager.resync_dhcp_for_existing_containers()
 
                     # Resync dedicated NICs and start Docker event listener
+                    # Must run as a background task so the listen loop continues
+                    # reading from the socket — dedicated NIC commands use
+                    # send_command_and_wait which needs responses routed through
+                    # this loop via deliver_response().
                     if self.dedicated_nic_manager:
-                        await self.dedicated_nic_manager.start()
+                        asyncio.create_task(self.dedicated_nic_manager.start())
 
                     # Start background retry task for failed DHCP resyncs
                     if self.dhcp_manager.pending_dhcp_resyncs and not self.dhcp_manager.dhcp_retry_task:
