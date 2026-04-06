@@ -229,6 +229,16 @@ class TestDelegatedApi:
         assert result == {"ok": True}
 
     @pytest.mark.asyncio
+    async def test_send_command_and_wait(self):
+        listener = _make_listener()
+        listener.netmon_client.send_command_and_wait = AsyncMock(return_value={"ok": True})
+
+        result = await listener.send_command_and_wait({"cmd": "test"})
+
+        listener.netmon_client.send_command_and_wait.assert_called_once_with({"cmd": "test"})
+        assert result == {"ok": True}
+
+    @pytest.mark.asyncio
     async def test_start_dhcp(self):
         listener = _make_listener()
         listener.netmon_client.start_dhcp = AsyncMock(return_value={"success": True})
