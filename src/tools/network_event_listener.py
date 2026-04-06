@@ -22,7 +22,7 @@ class NetworkEventListener:
 
     def __init__(self, interface_cache=None, netmon_client=None,
                  dhcp_manager=None, reconnection_manager=None,
-                 serial_device_manager=None):
+                 serial_device_manager=None, dedicated_nic_manager=None):
         self.socket_path = SOCKET_PATH
         self.running = False
         self.listener_task = None
@@ -35,6 +35,7 @@ class NetworkEventListener:
         self.dhcp_manager = dhcp_manager
         self.reconnection_manager = reconnection_manager
         self.serial_device_manager = serial_device_manager
+        self.dedicated_nic_manager = dedicated_nic_manager
 
     # ========== Lifecycle ==========
 
@@ -64,6 +65,8 @@ class NetworkEventListener:
             except asyncio.CancelledError:
                 pass
         await self.dhcp_manager.stop()
+        if self.dedicated_nic_manager:
+            await self.dedicated_nic_manager.stop()
         log_info("Network event listener stopped")
 
     async def _listen_loop(self):
@@ -89,6 +92,14 @@ class NetworkEventListener:
 
                     # Resync DHCP for existing containers on startup/reconnect
                     await self.dhcp_manager.resync_dhcp_for_existing_containers()
+
+                    # Resync dedicated NICs and start Docker event listener
+                    # Must run as a background task so the listen loop continues
+                    # reading from the socket — dedicated NIC commands use
+                    # send_command_and_wait which needs responses routed through
+                    # this loop via deliver_response().
+                    if self.dedicated_nic_manager:
+                        asyncio.create_task(self.dedicated_nic_manager.start())
 
                     # Start background retry task for failed DHCP resyncs
                     if self.dhcp_manager.pending_dhcp_resyncs and not self.dhcp_manager.dhcp_retry_task:
@@ -144,6 +155,11 @@ class NetworkEventListener:
         try:
             event_type = event_data.get("type")
 
+            # Route command responses (no "type" field) to netmon client
+            if event_type is None:
+                self.netmon_client.deliver_response(event_data)
+                return
+
             if event_type == "network_discovery":
                 log_info("Received network discovery event")
                 interfaces = event_data.get("data", {}).get("interfaces", [])
@@ -158,29 +174,20 @@ class NetworkEventListener:
                     if not interface_name:
                         continue
 
-                    if ipv4_addresses:
-                        subnet = ipv4_addresses[0].get("subnet")
+                    subnet = ipv4_addresses[0].get("subnet") if ipv4_addresses else None
 
-                        self.interface_cache.set_interface(interface_name, {
-                            "subnet": subnet,
-                            "gateway": gateway,
-                            "type": iface_type,
-                            "addresses": ipv4_addresses,
-                        })
+                    self.interface_cache.set_interface(interface_name, {
+                        "subnet": subnet,
+                        "gateway": gateway,
+                        "type": iface_type,
+                        "addresses": ipv4_addresses,
+                    })
 
-                        log_debug(
-                            f"Cached interface {interface_name}: "
-                            f"subnet={subnet}, gateway={gateway}, type={iface_type}, "
-                            f"{len(ipv4_addresses)} IPv4 address(es)"
-                        )
-                    else:
-                        log_debug(
-                            f"Interface {interface_name} has no IPv4 addresses, skipping cache"
-                        )
-                        self.interface_cache.remove_interface(interface_name)
-                        log_debug(
-                            f"Removed {interface_name} from cache (no addresses)"
-                        )
+                    log_debug(
+                        f"Cached interface {interface_name}: "
+                        f"subnet={subnet}, gateway={gateway}, type={iface_type}, "
+                        f"{len(ipv4_addresses)} IPv4 address(es)"
+                    )
 
             elif event_type == "dhcp_update":
                 log_info("Received DHCP update event")
@@ -221,11 +228,23 @@ class NetworkEventListener:
 
                     asyncio.create_task(self._process_pending_changes(interface))
                 else:
-                    log_debug(
-                        f"Interface {interface} has no IPv4 addresses after change, skipping cache update"
-                    )
-                    self.interface_cache.remove_interface(interface)
-                    log_debug(f"Removed {interface} from cache (no addresses)")
+                    status = iface_data.get("status")
+                    if status in ("removed", "down"):
+                        # Interface was physically removed or went down
+                        self.interface_cache.remove_interface(interface)
+                        log_debug(f"Removed {interface} from cache (status: {status})")
+                    else:
+                        # Interface still exists but lost IPv4 — keep in cache
+                        # so Ethernet ports without IP remain visible for dedicated NIC use
+                        self.interface_cache.set_interface(interface, {
+                            "subnet": None,
+                            "gateway": None,
+                            "type": iface_type,
+                            "addresses": [],
+                        })
+                        log_debug(
+                            f"Updated cache for {interface}: no IPv4 (kept for dedicated NIC eligibility)"
+                        )
 
             elif event_type == "device_discovery":
                 log_info("Received device discovery event")
@@ -263,6 +282,9 @@ class NetworkEventListener:
 
     async def send_command(self, command: dict) -> dict:
         return await self.netmon_client.send_command(command)
+
+    async def send_command_and_wait(self, command: dict) -> dict:
+        return await self.netmon_client.send_command_and_wait(command)
 
     async def start_dhcp(
         self,
@@ -316,6 +338,15 @@ class NetworkEventListener:
 
     async def cleanup_all_proxy_arp(self) -> dict:
         return await self.netmon_client.cleanup_all_proxy_arp()
+
+    async def move_nic_to_container(self, host_interface: str, container_pid: int) -> dict:
+        return await self.netmon_client.move_nic_to_container(host_interface, container_pid)
+
+    async def return_nic_to_host(self, host_interface: str, container_pid: int) -> dict:
+        return await self.netmon_client.return_nic_to_host(host_interface, container_pid)
+
+    async def check_nic_in_container(self, host_interface: str, container_pid: int) -> dict:
+        return await self.netmon_client.check_nic_in_container(host_interface, container_pid)
 
     def get_dhcp_ip(self, container_name: str, vnic_name: str) -> Optional[str]:
         return self.netmon_client.get_dhcp_ip(container_name, vnic_name)

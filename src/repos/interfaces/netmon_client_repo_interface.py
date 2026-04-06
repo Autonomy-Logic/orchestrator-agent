@@ -2,9 +2,16 @@ from typing import Protocol, Optional, Callable, Dict, List
 
 
 class NetmonClientRepoInterface(Protocol):
-    """Abstract interface for Unix socket communication with the netmon sidecar."""
+    """
+    Low-level interface for Unix socket communication with the netmon sidecar.
+
+    Covers DHCP and Proxy ARP operations. For dedicated NIC operations
+    (move/return/check), use NetworkCommanderRepoInterface which aggregates
+    netmon commands with device management capabilities.
+    """
 
     async def send_command(self, command: dict) -> dict: ...
+    async def send_command_and_wait(self, command: dict) -> dict: ...
     async def start_dhcp(
         self,
         container_name: str,

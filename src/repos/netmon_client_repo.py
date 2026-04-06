@@ -3,6 +3,11 @@ import json
 from typing import Dict, List, Optional, Callable
 from tools.logger import log_info, log_debug, log_error, log_warning
 
+# Timeout for waiting for a response from netmon after sending a command.
+# Some commands (move_nic_to_container, setup_proxy_arp_bridge) run subprocess
+# commands that may take several seconds.
+COMMAND_RESPONSE_TIMEOUT = 15
+
 
 class NetmonClientRepo:
     """
@@ -10,15 +15,35 @@ class NetmonClientRepo:
 
     Owns the StreamWriter and provides command methods for DHCP, Proxy ARP,
     and other netmon operations.
+
+    Command-response protocol:
+    - Commands are sent as JSON lines on the shared Unix socket.
+    - Netmon sends back a JSON line response for each command.
+    - The event listener routes responses (messages without a "type" field)
+      to this repo via deliver_response(), while events are handled normally.
+    - A lock serializes commands so each response is matched to its command.
     """
 
     def __init__(self):
         self.writer: Optional[asyncio.StreamWriter] = None
         self.dhcp_ip_cache: Dict[str, Dict[str, str]] = {}
         self.dhcp_update_callbacks: List[Callable] = []
+        self._response_queue: asyncio.Queue = asyncio.Queue(maxsize=1)
+        self._command_lock: asyncio.Lock = asyncio.Lock()
+
+    def deliver_response(self, response: dict) -> None:
+        """Deliver a command response from the event listener.
+
+        Called by NetworkEventListener when it receives a message that is
+        a command response (no "type" field) rather than an event.
+        """
+        try:
+            self._response_queue.put_nowait(response)
+        except asyncio.QueueFull:
+            log_warning("Command response queue full, discarding response")
 
     async def send_command(self, command: dict) -> dict:
-        """Send a command to netmon and wait for response."""
+        """Send a fire-and-forget command to netmon (no response expected)."""
         if not self.writer:
             log_error("Not connected to network monitor")
             return {"success": False, "error": "Not connected to network monitor"}
@@ -32,6 +57,47 @@ class NetmonClientRepo:
         except Exception as e:
             log_error(f"Failed to send command to netmon: {e}")
             return {"success": False, "error": str(e)}
+
+    async def send_command_and_wait(self, command: dict) -> dict:
+        """Send a command to netmon and wait for the response.
+
+        Used for commands that require confirmation (e.g., dedicated NIC operations).
+        Responses are delivered via deliver_response() from the event listener.
+        """
+        if not self.writer:
+            log_error("Not connected to network monitor")
+            return {"success": False, "error": "Not connected to network monitor"}
+
+        async with self._command_lock:
+            # Drain any stale response left from a previous timed-out command
+            while not self._response_queue.empty():
+                try:
+                    self._response_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+
+            try:
+                command_json = json.dumps(command) + "\n"
+                self.writer.write(command_json.encode("utf-8"))
+                await self.writer.drain()
+                log_debug(f"Sent command to netmon: {command.get('command')}")
+            except Exception as e:
+                log_error(f"Failed to send command to netmon: {e}")
+                return {"success": False, "error": str(e)}
+
+            try:
+                response = await asyncio.wait_for(
+                    self._response_queue.get(),
+                    timeout=COMMAND_RESPONSE_TIMEOUT,
+                )
+                log_debug(f"Received response from netmon: {response}")
+                return response
+            except asyncio.TimeoutError:
+                log_warning(
+                    f"Timeout waiting for netmon response to '{command.get('command')}' "
+                    f"after {COMMAND_RESPONSE_TIMEOUT}s"
+                )
+                return {"success": False, "error": "Timeout waiting for netmon response"}
 
     async def start_dhcp(
         self,
@@ -140,6 +206,35 @@ class NetmonClientRepo:
         command = {"command": "cleanup_all_proxy_arp"}
         log_info("Requesting cleanup of all Proxy ARP interfaces via netmon")
         return await self.send_command(command)
+
+    async def move_nic_to_container(self, host_interface: str, container_pid: int) -> dict:
+        """Request netmon to move a physical NIC into a container's network namespace."""
+        command = {
+            "command": "move_nic_to_container",
+            "host_interface": host_interface,
+            "container_pid": container_pid,
+        }
+        log_info(f"Requesting NIC move: {host_interface} -> container PID {container_pid}")
+        return await self.send_command_and_wait(command)
+
+    async def return_nic_to_host(self, host_interface: str, container_pid: int) -> dict:
+        """Request netmon to return a physical NIC from a container back to the host."""
+        command = {
+            "command": "return_nic_to_host",
+            "host_interface": host_interface,
+            "container_pid": container_pid,
+        }
+        log_info(f"Requesting NIC return: {host_interface} <- container PID {container_pid}")
+        return await self.send_command_and_wait(command)
+
+    async def check_nic_in_container(self, host_interface: str, container_pid: int) -> dict:
+        """Check whether a NIC is present inside a container's network namespace."""
+        command = {
+            "command": "check_nic_in_container",
+            "host_interface": host_interface,
+            "container_pid": container_pid,
+        }
+        return await self.send_command_and_wait(command)
 
     def get_dhcp_ip(self, container_name: str, vnic_name: str) -> Optional[str]:
         """Get the DHCP-assigned IP for a container's vNIC."""

@@ -1,4 +1,5 @@
 from . import get_self_container
+from entities import DedicatedNicConfig
 from tools.logger import *
 from tools.network_utils import get_macvlan_network_key
 import asyncio
@@ -124,6 +125,50 @@ def _validate_mac_addresses(vnic_configs: list, *, container_runtime) -> tuple[b
                     f"on container {conflicting_container} (interface: {parent_interface})"
                 )
                 return False, f"MAC address {mac_address} is already in use."
+
+    return True, ""
+
+
+def _validate_dedicated_interface(
+    dedicated_interface, vnic_configs, *, dedicated_nic_repo, interface_cache
+) -> tuple[bool, str]:
+    """
+    Validate that a dedicated physical NIC can be assigned to this container.
+
+    Checks:
+    1. Interface exists on host (in netmon interface cache)
+    2. Interface is Ethernet type (not WiFi)
+    3. Interface is not already dedicated to another container
+    4. Interface is not used as a parent for any vNIC (would conflict)
+    """
+    all_interfaces = interface_cache.get_all_interfaces()
+
+    if dedicated_interface not in all_interfaces:
+        return False, (
+            f"Interface '{dedicated_interface}' not found on host. "
+            f"Available interfaces: {list(all_interfaces.keys())}"
+        )
+
+    iface_info = all_interfaces[dedicated_interface]
+    if iface_info.get("type") == "wifi":
+        return False, (
+            f"Interface '{dedicated_interface}' is a WiFi interface. "
+            f"Dedicated NIC assignment requires a physical Ethernet interface."
+        )
+
+    existing_container = dedicated_nic_repo.get_container_for_nic(dedicated_interface)
+    if existing_container:
+        return False, (
+            f"Interface '{dedicated_interface}' is already dedicated to "
+            f"container '{existing_container}'."
+        )
+
+    for vnic_config in vnic_configs:
+        if vnic_config.get("parent_interface") == dedicated_interface:
+            return False, (
+                f"Interface '{dedicated_interface}' is configured as a vNIC parent. "
+                f"A dedicated NIC cannot also be used for MACVLAN/Proxy ARP networking."
+            )
 
     return True, ""
 
@@ -267,9 +312,16 @@ def _build_endpoint_configs(macvlan_networks, internal_network, *, container_run
 def _create_and_start_container(
     container_name, image_name, internal_network, dns_servers,
     use_networking_config, networking_config, macvlan_endpoint_configs,
+    dedicated_interface=None,
     *, container_runtime,
 ):
     """Build kwargs, create container, connect post-creation networks, start."""
+    capabilities = ["SYS_NICE", "MKNOD"]
+    if dedicated_interface:
+        # NET_RAW: Required for raw Ethernet frame access (e.g., EtherCAT via SOEM)
+        # NET_ADMIN: Required for setting promiscuous mode on the NIC (ioctl SIOCSIFFLAGS)
+        capabilities.extend(["NET_RAW", "NET_ADMIN"])
+
     create_kwargs = {
         "image": image_name,
         "name": container_name,
@@ -279,7 +331,8 @@ def _create_and_start_container(
         # Real-time scheduling capabilities for PLC deterministic execution
         # SYS_NICE: Required for sched_setscheduler(SCHED_FIFO) in the PLC core
         # MKNOD: Required for dynamic serial port passthrough (creating device nodes at runtime)
-        "cap_add": ["SYS_NICE", "MKNOD"],
+        # NET_RAW: Added when a dedicated NIC is assigned for raw frame protocols
+        "cap_add": capabilities,
         # ulimits for real-time scheduling:
         # - rtprio: Maximum real-time priority (99 is highest)
         # - memlock: Unlimited memory locking for future mlockall() support
@@ -449,6 +502,7 @@ def _create_runtime_container_sync(
     vnic_configs: list,
     serial_configs: list = None,
     runtime_version: str = None,
+    dedicated_interface: str = None,
     *,
     container_runtime,
     vnic_repo,
@@ -458,6 +512,7 @@ def _create_runtime_container_sync(
     operations_state,
     devices_usage_buffer,
     socket_repo,
+    dedicated_nic_repo=None,
 ):
     """
     Synchronous implementation of runtime container creation.
@@ -486,6 +541,16 @@ def _create_runtime_container_sync(
         operations_state.set_error(container_name, error_msg, "create")
         return None
 
+    if dedicated_interface:
+        is_valid, error_msg = _validate_dedicated_interface(
+            dedicated_interface, vnic_configs,
+            dedicated_nic_repo=dedicated_nic_repo, interface_cache=interface_cache,
+        )
+        if not is_valid:
+            log_error(f"Dedicated NIC validation failed: {error_msg}")
+            operations_state.set_error(container_name, error_msg, "create")
+            return None
+
     try:
         image_name = _pull_runtime_image(
             container_name, runtime_version,
@@ -510,6 +575,7 @@ def _create_runtime_container_sync(
         container = _create_and_start_container(
             container_name, image_name, internal_network, dns_servers,
             use_networking_config, networking_config, macvlan_endpoint_configs,
+            dedicated_interface=dedicated_interface,
             container_runtime=container_runtime,
         )
 
@@ -538,6 +604,8 @@ def _create_runtime_container_sync(
             "dhcp_vnics": dhcp_vnics,
             "wifi_vnics_to_configure": wifi_vnics_to_configure,
             "vnic_configs": vnic_configs,
+            "dedicated_interface": dedicated_interface,
+            "container_pid": container_pid,
         }
 
     except Exception as e:
@@ -554,6 +622,7 @@ async def create_runtime_container(
     vnic_configs: list,
     serial_configs: list = None,
     runtime_version: str = None,
+    dedicated_interface: str = None,
     *,
     container_runtime,
     vnic_repo,
@@ -564,6 +633,7 @@ async def create_runtime_container(
     operations_state,
     devices_usage_buffer,
     socket_repo,
+    dedicated_nic_repo=None,
 ):
     """
     Create a runtime container with MACVLAN or Proxy ARP Bridge networking for
@@ -573,6 +643,9 @@ async def create_runtime_container(
     - Ethernet interfaces: MACVLAN (unique MAC per container)
     - WiFi interfaces: Proxy ARP Bridge (traffic routes through host's WiFi MAC)
 
+    Optionally assigns a dedicated physical NIC to the container's network namespace
+    for raw frame protocols (e.g., EtherCAT, PROFINET).
+
     This async wrapper offloads all blocking Docker operations to a background thread
     to prevent blocking the asyncio event loop and causing websocket disconnections.
 
@@ -581,6 +654,7 @@ async def create_runtime_container(
         vnic_configs: List of virtual NIC configurations
         serial_configs: List of serial port configurations (optional)
         runtime_version: Version tag for the runtime image (optional, defaults to "latest")
+        dedicated_interface: Host NIC to move into container namespace (optional)
         container_runtime: ContainerRuntimeRepo adapter
         vnic_repo: VNICRepo adapter
         serial_repo: SerialRepo adapter
@@ -590,9 +664,11 @@ async def create_runtime_container(
         operations_state: OperationsStateTracker
         devices_usage_buffer: DevicesUsageBuffer
         socket_repo: SocketRepo adapter
+        dedicated_nic_repo: DedicatedNicRepo adapter
     """
     result = await asyncio.to_thread(
-        _create_runtime_container_sync, container_name, vnic_configs, serial_configs, runtime_version,
+        _create_runtime_container_sync, container_name, vnic_configs,
+        serial_configs, runtime_version, dedicated_interface,
         container_runtime=container_runtime,
         vnic_repo=vnic_repo,
         serial_repo=serial_repo,
@@ -601,6 +677,7 @@ async def create_runtime_container(
         operations_state=operations_state,
         devices_usage_buffer=devices_usage_buffer,
         socket_repo=socket_repo,
+        dedicated_nic_repo=dedicated_nic_repo,
     )
 
     if result is None:
@@ -665,17 +742,39 @@ async def create_runtime_container(
                     # DHCP mode - just request DHCP, netmon handles bridge setup
                     # when the lease arrives via its lease monitor
                     log_info(f"Requesting DHCP for WiFi vNIC {vnic_name} via Proxy ARP")
-                    result = await network_commander.request_wifi_dhcp(
+                    dhcp_result = await network_commander.request_wifi_dhcp(
                         container_name, vnic_name, parent_interface, container_pid
                     )
-                    if not result.get("success"):
-                        log_warning(f"WiFi DHCP request failed for {vnic_name}: {result.get('error')}")
+                    if not dhcp_result.get("success"):
+                        log_warning(f"WiFi DHCP request failed for {vnic_name}: {dhcp_result.get('error')}")
                     # Proxy ARP config will be saved via _handle_dhcp_update when IP arrives
             except Exception as e:
                 log_warning(f"Failed to configure WiFi vNIC {vnic_name}: {e}")
 
         # Save updated vnic_configs (static WiFi vNICs have proxy_arp_config now)
         vnic_repo.save_configs(container_name, updated_vnic_configs)
+
+    # Move dedicated NIC into container namespace for raw frame protocols
+    nic_to_move = result.get("dedicated_interface")
+    container_pid = result.get("container_pid", 0)
+    if nic_to_move and container_pid > 0:
+        operations_state.set_step(container_name, "moving_dedicated_nic")
+        log_info(f"Moving dedicated NIC {nic_to_move} to container {container_name}")
+
+        # Save config before the move so resync can detect/retry on crash
+        nic_config = DedicatedNicConfig.create(nic_to_move)
+        dedicated_nic_repo.save_config(container_name, nic_config)
+
+        move_result = await network_commander.move_nic_to_container(nic_to_move, container_pid)
+        if move_result.get("success"):
+            log_info(f"Dedicated NIC {nic_to_move} moved to container {container_name}")
+        else:
+            # Move failed — remove the optimistically saved config
+            dedicated_nic_repo.delete_config(container_name)
+            log_error(
+                f"Failed to move NIC {nic_to_move} to {container_name}: "
+                f"{move_result.get('error')}"
+            )
 
     # Trigger serial device sync for the newly created container
     # This creates device nodes for any serial devices that are already connected
@@ -687,7 +786,10 @@ async def create_runtime_container(
             log_warning(f"Failed to resync serial devices for {container_name}: {e}")
 
 
-async def start_creation(container_name, vnic_configs, serial_configs=None, runtime_version=None, *, ctx):
+async def start_creation(
+    container_name, vnic_configs, serial_configs=None, runtime_version=None,
+    dedicated_interface=None, *, ctx,
+):
     """
     Validate preconditions and begin container creation as a background task.
 
@@ -705,10 +807,13 @@ async def start_creation(container_name, vnic_configs, serial_configs=None, runt
     log_info(f"Creating runtime container: {container_name}")
     if serial_configs:
         log_info(f"Container {container_name} will have {len(serial_configs)} serial port(s) configured")
+    if dedicated_interface:
+        log_info(f"Container {container_name} will have dedicated NIC: {dedicated_interface}")
 
     asyncio.create_task(
         create_runtime_container(
             container_name, vnic_configs, serial_configs, runtime_version,
+            dedicated_interface,
             container_runtime=ctx.container_runtime,
             vnic_repo=ctx.vnic_repo,
             serial_repo=ctx.serial_repo,
@@ -718,6 +823,7 @@ async def start_creation(container_name, vnic_configs, serial_configs=None, runt
             operations_state=ctx.operations_state,
             devices_usage_buffer=ctx.devices_usage_buffer,
             socket_repo=ctx.socket_repo,
+            dedicated_nic_repo=ctx.dedicated_nic_repo,
         )
     )
 
