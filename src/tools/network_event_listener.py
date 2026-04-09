@@ -202,45 +202,26 @@ class NetworkEventListener:
                 if not interface:
                     return
 
-                if ipv4_addresses:
-                    log_info(
-                        f"Network change detected on {interface}: "
-                        f"{len(ipv4_addresses)} IPv4 address(es), gateway: {gateway}"
-                    )
+                log_info(
+                    f"Network change detected on {interface}: "
+                    f"{len(ipv4_addresses)} IPv4 address(es), gateway: {gateway}"
+                )
 
-                    subnet = ipv4_addresses[0].get("subnet")
-                    self.interface_cache.set_interface(interface, {
-                        "subnet": subnet,
-                        "gateway": gateway,
-                        "type": iface_type,
-                        "addresses": ipv4_addresses,
-                    })
-                    log_debug(
-                        f"Updated cache for interface {interface}: subnet={subnet}, gateway={gateway}, type={iface_type}"
-                    )
+                subnet = ipv4_addresses[0].get("subnet") if ipv4_addresses else None
+                self.interface_cache.set_interface(interface, {
+                    "subnet": subnet,
+                    "gateway": gateway,
+                    "type": iface_type,
+                    "addresses": ipv4_addresses,
+                })
+                log_debug(
+                    f"Updated cache for interface {interface}: subnet={subnet}, gateway={gateway}, type={iface_type}"
+                )
 
-                    self.pending_changes[interface] = iface_data
-                    self.last_event_time[interface] = asyncio.get_event_loop().time()
+                self.pending_changes[interface] = iface_data
+                self.last_event_time[interface] = asyncio.get_event_loop().time()
 
-                    asyncio.create_task(self._process_pending_changes(interface))
-                else:
-                    status = iface_data.get("status")
-                    if status in ("removed", "down"):
-                        # Interface was physically removed or went down
-                        self.interface_cache.remove_interface(interface)
-                        log_debug(f"Removed {interface} from cache (status: {status})")
-                    else:
-                        # Interface still exists but lost IPv4 — keep in cache
-                        # so Ethernet ports without IP remain visible for dedicated NIC use
-                        self.interface_cache.set_interface(interface, {
-                            "subnet": None,
-                            "gateway": None,
-                            "type": iface_type,
-                            "addresses": [],
-                        })
-                        log_debug(
-                            f"Updated cache for {interface}: no IPv4 (kept for dedicated NIC eligibility)"
-                        )
+                asyncio.create_task(self._process_pending_changes(interface))
 
             elif event_type == "device_discovery":
                 log_info("Received device discovery event")

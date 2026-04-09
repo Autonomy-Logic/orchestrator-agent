@@ -1525,14 +1525,13 @@ class NetworkMonitor:
         os.chmod(self.socket_path, 0o666)
         logger.info(f"Unix socket created at {self.socket_path}")
 
-    def get_interface_info(self, ifname: str, require_ipv4: bool = True) -> Optional[Dict]:
+    def get_interface_info(self, ifname: str) -> Optional[Dict]:
         """Get detailed information about a network interface.
 
-        Args:
-            ifname: Interface name (e.g., "eth0", "enp4s0")
-            require_ipv4: If True (default), return None when the interface has
-                no IPv4 addresses. Set to False to include interfaces without IP
-                (e.g., Ethernet ports intended for raw-frame protocols like EtherCAT).
+        Returns interface info even if no IPv4 address is assigned, so that
+        physical ports are visible in the UI regardless of IP configuration
+        (e.g., Ethernet ports intended for dedicated NIC or raw-frame protocols).
+        Only filters out interfaces that are not operationally UP.
         """
         try:
             links = self.ipr.link_lookup(ifname=ifname)
@@ -1551,30 +1550,26 @@ class NetworkMonitor:
             addrs = self.ipr.get_addr(index=idx, family=socket.AF_INET)
 
             ipv4_addresses = []
-            if addrs:
-                for addr in addrs:
-                    ip = addr.get_attr("IFA_ADDRESS")
-                    prefixlen = addr["prefixlen"]
-                    if ip:
-                        try:
-                            network = ipaddress.ip_network(
-                                f"{ip}/{prefixlen}", strict=False
-                            )
-                            ipv4_addresses.append(
-                                {
-                                    "address": ip,
-                                    "prefixlen": prefixlen,
-                                    "subnet": str(network.with_prefixlen),
-                                    "network_address": str(network.network_address),
-                                }
-                            )
-                        except Exception as e:
-                            logger.warning(f"Failed to parse IP {ip}/{prefixlen}: {e}")
+            for addr in (addrs or []):
+                ip = addr.get_attr("IFA_ADDRESS")
+                prefixlen = addr["prefixlen"]
+                if ip:
+                    try:
+                        network = ipaddress.ip_network(
+                            f"{ip}/{prefixlen}", strict=False
+                        )
+                        ipv4_addresses.append(
+                            {
+                                "address": ip,
+                                "prefixlen": prefixlen,
+                                "subnet": str(network.with_prefixlen),
+                                "network_address": str(network.network_address),
+                            }
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to parse IP {ip}/{prefixlen}: {e}")
 
-            if require_ipv4 and not ipv4_addresses:
-                return None
-
-            gateway = self.get_default_gateway(ifname)
+            gateway = self.get_default_gateway(ifname) if ipv4_addresses else None
             iface_type = get_interface_type(ifname)
 
             return {
@@ -1610,12 +1605,20 @@ class NetworkMonitor:
             logger.error(f"Failed to get gateway for {ifname}: {e}")
             return None
 
+    # Prefixes for virtual/internal interfaces that should never appear in the
+    # physical port dropdown. Keep in sync with VIRTUAL_INTERFACE_PREFIXES in
+    # orchestrator-agent's get_host_interfaces.py.
+    SKIP_INTERFACE_PREFIXES = (
+        "lo", "docker", "br-", "veth", "virbr", "tailscale", "zt", "cni",
+        "flannel", "kube-ipvs", "wg", "cilium", "macvtap", "sit", "can",
+    )
+
     def discover_all_interfaces(self) -> List[Dict]:
         """Discover all active physical network interfaces.
 
         Includes interfaces without IPv4 addresses so that Ethernet ports
-        intended for raw-frame protocols (EtherCAT, PROFINET) can be shown
-        in the UI as candidates for dedicated NIC assignment.
+        intended for dedicated NIC or raw-frame protocols (EtherCAT, PROFINET)
+        are visible in the UI.
         """
         interfaces = []
         try:
@@ -1623,10 +1626,10 @@ class NetworkMonitor:
             for link in links:
                 ifname = link.get_attr("IFLA_IFNAME")
 
-                if ifname in ["lo", "docker0"] or ifname.startswith("veth"):
+                if any(ifname.startswith(p) for p in self.SKIP_INTERFACE_PREFIXES):
                     continue
 
-                info = self.get_interface_info(ifname, require_ipv4=False)
+                info = self.get_interface_info(ifname)
                 if info:
                     has_ipv4 = bool(info.get("ipv4_addresses"))
                     interfaces.append(info)
@@ -1732,8 +1735,7 @@ class NetworkMonitor:
                             ifname = links[0].get_attr("IFLA_IFNAME")
                             if (
                                 ifname
-                                and not ifname.startswith("veth")
-                                and ifname not in ["lo", "docker0"]
+                                and not any(ifname.startswith(p) for p in self.SKIP_INTERFACE_PREFIXES)
                             ):
                                 self.pending_changes.add(ifname)
                                 self.last_event_time = time.time()
@@ -2117,6 +2119,37 @@ class NetworkMonitor:
         except Exception as e:
             logger.error(f"Error accepting client: {e}")
 
+    # Periodic re-discovery interval in seconds.
+    # Catches interfaces that were missed during initial discovery (e.g. due
+    # to boot timing: the interface was DOWN or had no IP when netmon first ran,
+    # and the subsequent RTM_NEWADDR event arrived before the netlink reader started).
+    REDISCOVERY_INTERVAL = 30
+
+    def rediscover_interfaces(self):
+        """Re-discover interfaces and send network_change events for any new ones.
+
+        This catches interfaces that were missed during initial discovery due to
+        boot timing races (e.g. static IPs assigned before netmon's netlink reader
+        was ready, or interfaces that were briefly DOWN at startup).
+
+        The orchestrator agent's interface cache is idempotent (set_interface
+        overwrites with same data), so re-sending already-known interfaces is safe.
+        """
+        try:
+            current = self.discover_all_interfaces()
+            for iface in current:
+                ifname = iface.get("interface")
+                if ifname:
+                    event = {"type": "network_change", "data": iface}
+                    self.send_event(event)
+
+            if current:
+                logger.debug(
+                    f"Re-discovery sent updates for {len(current)} interface(s)"
+                )
+        except Exception as e:
+            logger.error(f"Error during periodic re-discovery: {e}")
+
     def run(self):
         """Main event loop"""
         logger.info("Starting Autonomy Network Monitor")
@@ -2128,6 +2161,8 @@ class NetworkMonitor:
 
         self.dhcp_manager.start()
         self.device_monitor.start()
+
+        self._last_rediscovery_time = time.time()
 
         logger.info("Monitoring network and device changes...")
 
@@ -2169,6 +2204,13 @@ class NetworkMonitor:
                         break
 
                 self.process_pending_changes()
+
+                # Periodic re-discovery to catch interfaces missed at boot
+                now = time.time()
+                if now - self._last_rediscovery_time >= self.REDISCOVERY_INTERVAL:
+                    self._last_rediscovery_time = now
+                    if self.clients:
+                        self.rediscover_interfaces()
 
                 # Log if netlink reader is in degraded state (periodic check)
                 if self.netlink_reader.is_degraded():

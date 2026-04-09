@@ -15,6 +15,8 @@ VIRTUAL_INTERFACE_PREFIXES = [
     "wg",
     "cilium",
     "macvtap",
+    "sit",
+    "can",
 ]
 
 
@@ -151,27 +153,20 @@ def get_host_interfaces_data(
             if interface_name in dedicated_nics:
                 interface_info["dedicated_to"] = dedicated_nics[interface_name]
 
-            has_ip = bool(interface_info["ipv4_addresses"])
-
-            if has_ip or include_virtual:
-                interfaces.append(interface_info)
-                log_debug(
-                    f"Added interface {interface_name}: "
-                    f"IP={interface_info['ip_address']}, "
-                    f"subnet={interface_info.get('subnet')}, "
-                    f"gateway={interface_info.get('gateway')}"
-                )
-            elif cache_data.get("type") == "ethernet":
-                # Include Ethernet interfaces without IP — they are valid
-                # candidates for dedicated NIC assignment (EtherCAT, PROFINET)
-                # but not for vNIC parent (which requires IP for MACVLAN/DHCP).
+            # Mark interfaces without IP as dedicated_only -- they can be used
+            # for dedicated NIC assignment (EtherCAT, PROFINET) but not as a
+            # vNIC parent (which requires IP for MACVLAN/DHCP).
+            if not interface_info["ipv4_addresses"] and cache_data.get("type") == "ethernet":
                 interface_info["dedicated_only"] = True
-                interfaces.append(interface_info)
-                log_debug(
-                    f"Added interface {interface_name} (no IPv4, dedicated_only)"
-                )
-            else:
-                log_debug(f"Skipping interface {interface_name} (no IPv4 addresses)")
+
+            interfaces.append(interface_info)
+            log_debug(
+                f"Added interface {interface_name}: "
+                f"IP={interface_info['ip_address']}, "
+                f"subnet={interface_info.get('subnet')}, "
+                f"gateway={interface_info.get('gateway')}, "
+                f"dedicated_only={interface_info.get('dedicated_only', False)}"
+            )
 
         # Add dedicated NICs that are no longer visible on the host
         # (moved into a container's network namespace)
