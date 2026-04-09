@@ -1,10 +1,8 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-from entities import DedicatedNicConfig
 from use_cases.docker_manager.selfdestruct import (
     start_self_destruct,
-    _send_netmon_command_sync,
     _delete_runtime_container_for_selfdestruct,
     _delete_all_runtime_containers,
     _cleanup_proxy_arp_veths,
@@ -12,7 +10,6 @@ from use_cases.docker_manager.selfdestruct import (
     _delete_netmon_container,
     _delete_shared_volume,
     _delete_orchestrator_container,
-    _return_all_dedicated_nics,
     self_destruct,
     ORCHESTRATOR_STATUS_ID,
     NETMON_CONTAINER_NAME,
@@ -28,10 +25,6 @@ def _make_runtime():
     mock_runtime = MagicMock()
     mock_runtime.NotFoundError = _NotFoundError
     return mock_runtime
-
-
-def _nic_config(iface="enp3s0"):
-    return DedicatedNicConfig.create(iface)
 
 
 class TestStartSelfDestruct:
@@ -54,54 +47,6 @@ class TestStartSelfDestruct:
         result = start_self_destruct(operations_state=ops)
 
         assert result is False
-
-
-class TestSendNetmonCommandSync:
-    @patch("use_cases.docker_manager.selfdestruct.socket")
-    def test_successful_command(self, mock_socket_mod):
-        """Successful command returns parsed response."""
-        import json
-        mock_sock = MagicMock()
-        mock_socket_mod.socket.return_value.__enter__ = MagicMock(return_value=mock_sock)
-        mock_socket_mod.socket.return_value.__exit__ = MagicMock(return_value=False)
-        mock_socket_mod.AF_UNIX = 1
-        mock_socket_mod.SOCK_STREAM = 1
-
-        response = json.dumps({"success": True, "data": "ok"}) + "\n"
-        mock_sock.recv.return_value = response.encode("utf-8")
-
-        result = _send_netmon_command_sync({"command": "test"})
-
-        assert result == {"success": True, "data": "ok"}
-        mock_sock.connect.assert_called_once()
-        mock_sock.sendall.assert_called_once()
-
-    @patch("use_cases.docker_manager.selfdestruct.socket")
-    def test_no_response(self, mock_socket_mod):
-        """No response returns error dict."""
-        mock_sock = MagicMock()
-        mock_socket_mod.socket.return_value.__enter__ = MagicMock(return_value=mock_sock)
-        mock_socket_mod.socket.return_value.__exit__ = MagicMock(return_value=False)
-        mock_socket_mod.AF_UNIX = 1
-        mock_socket_mod.SOCK_STREAM = 1
-        mock_sock.recv.return_value = b""
-
-        result = _send_netmon_command_sync({"command": "test"})
-
-        assert result["success"] is False
-        assert "No response" in result["error"]
-
-    @patch("use_cases.docker_manager.selfdestruct.socket")
-    def test_socket_exception(self, mock_socket_mod):
-        """Socket exception returns error dict."""
-        mock_socket_mod.socket.side_effect = RuntimeError("socket error")
-        mock_socket_mod.AF_UNIX = 1
-        mock_socket_mod.SOCK_STREAM = 1
-
-        result = _send_netmon_command_sync({"command": "test"})
-
-        assert result["success"] is False
-        assert "socket error" in result["error"]
 
 
 class TestDeleteRuntimeContainerForSelfdestruct:
@@ -179,23 +124,61 @@ class TestDeleteAllRuntimeContainers:
 
 
 class TestCleanupProxyArpVeths:
-    @patch("use_cases.docker_manager.selfdestruct._send_netmon_command_sync")
-    def test_successful_cleanup(self, mock_send):
-        """Successful cleanup via netmon."""
-        mock_send.return_value = {"success": True, "veths_removed": 3}
+    @patch("use_cases.docker_manager.selfdestruct.socket")
+    def test_successful_cleanup(self, mock_socket_mod):
+        """Successful cleanup via netmon socket."""
+        import json
+        mock_sock = MagicMock()
+        mock_socket_mod.socket.return_value.__enter__ = MagicMock(return_value=mock_sock)
+        mock_socket_mod.socket.return_value.__exit__ = MagicMock(return_value=False)
+        mock_socket_mod.AF_UNIX = 1
+        mock_socket_mod.SOCK_STREAM = 1
+
+        response = json.dumps({"success": True, "veths_removed": 3}) + "\n"
+        mock_sock.recv.return_value = response.encode("utf-8")
 
         _cleanup_proxy_arp_veths()
 
-        mock_send.assert_called_once_with({"command": "cleanup_all_proxy_arp"})
+        mock_sock.connect.assert_called_once()
+        mock_sock.sendall.assert_called_once()
 
-    @patch("use_cases.docker_manager.selfdestruct._send_netmon_command_sync")
-    def test_failed_cleanup(self, mock_send):
+    @patch("use_cases.docker_manager.selfdestruct.socket")
+    def test_failed_cleanup(self, mock_socket_mod):
         """Failed cleanup response is handled."""
-        mock_send.return_value = {"success": False, "error": "no veths"}
+        import json
+        mock_sock = MagicMock()
+        mock_socket_mod.socket.return_value.__enter__ = MagicMock(return_value=mock_sock)
+        mock_socket_mod.socket.return_value.__exit__ = MagicMock(return_value=False)
+        mock_socket_mod.AF_UNIX = 1
+        mock_socket_mod.SOCK_STREAM = 1
+
+        response = json.dumps({"success": False, "error": "no veths"}) + "\n"
+        mock_sock.recv.return_value = response.encode("utf-8")
 
         _cleanup_proxy_arp_veths()
 
-        mock_send.assert_called_once()
+    @patch("use_cases.docker_manager.selfdestruct.socket")
+    def test_no_response(self, mock_socket_mod):
+        """No response from netmon is handled."""
+        mock_sock = MagicMock()
+        mock_socket_mod.socket.return_value.__enter__ = MagicMock(return_value=mock_sock)
+        mock_socket_mod.socket.return_value.__exit__ = MagicMock(return_value=False)
+        mock_socket_mod.AF_UNIX = 1
+        mock_socket_mod.SOCK_STREAM = 1
+
+        mock_sock.recv.return_value = b""
+
+        _cleanup_proxy_arp_veths()
+
+    @patch("use_cases.docker_manager.selfdestruct.socket")
+    def test_socket_exception(self, mock_socket_mod):
+        """Socket exception is handled gracefully."""
+        mock_socket_mod.socket.side_effect = RuntimeError("socket error")
+        mock_socket_mod.AF_UNIX = 1
+        mock_socket_mod.SOCK_STREAM = 1
+
+        # Should not raise
+        _cleanup_proxy_arp_veths()
 
 
 class TestCleanupOrchestratorNetworks:
@@ -376,95 +359,6 @@ class TestDeleteOrchestratorContainer:
             _delete_orchestrator_container(runtime, MagicMock())
 
 
-class TestReturnAllDedicatedNics:
-    def test_no_configs_returns_early(self):
-        """Empty configs → early return."""
-        runtime = _make_runtime()
-        nic_repo = MagicMock()
-        nic_repo.load_all_configs.return_value = {}
-
-        _return_all_dedicated_nics(runtime, nic_repo)
-
-    @patch("use_cases.docker_manager.selfdestruct._send_netmon_command_sync")
-    def test_running_container_success(self, mock_send):
-        """Running container: NIC returned via netmon, config deleted."""
-        runtime = _make_runtime()
-        runtime.get_running_pid.return_value = 42
-        mock_send.return_value = {"success": True}
-
-        nic_repo = MagicMock()
-        nic_repo.load_all_configs.return_value = {
-            "plc1": _nic_config("enp3s0"),
-        }
-
-        _return_all_dedicated_nics(runtime, nic_repo)
-
-        mock_send.assert_called_once_with({
-            "command": "return_nic_to_host",
-            "host_interface": "enp3s0",
-            "container_pid": 42,
-        })
-        nic_repo.delete_config.assert_called_once_with("plc1")
-
-    @patch("use_cases.docker_manager.selfdestruct._send_netmon_command_sync")
-    def test_running_container_failure_response(self, mock_send):
-        """Netmon returns failure → logs warning, config still deleted."""
-        runtime = _make_runtime()
-        runtime.get_running_pid.return_value = 42
-        mock_send.return_value = {"success": False, "error": "fail"}
-
-        nic_repo = MagicMock()
-        nic_repo.load_all_configs.return_value = {
-            "plc1": _nic_config("enp3s0"),
-        }
-
-        _return_all_dedicated_nics(runtime, nic_repo)
-
-        nic_repo.delete_config.assert_called_once_with("plc1")
-
-    def test_container_not_running(self):
-        """Container not running → logs info, config deleted."""
-        runtime = _make_runtime()
-        runtime.get_running_pid.return_value = None
-
-        nic_repo = MagicMock()
-        nic_repo.load_all_configs.return_value = {
-            "plc1": _nic_config("enp3s0"),
-        }
-
-        _return_all_dedicated_nics(runtime, nic_repo)
-
-        nic_repo.delete_config.assert_called_once_with("plc1")
-
-    def test_container_not_found(self):
-        """Container NotFoundError → logs info, config deleted."""
-        runtime = _make_runtime()
-        runtime.get_running_pid.side_effect = _NotFoundError("gone")
-
-        nic_repo = MagicMock()
-        nic_repo.load_all_configs.return_value = {
-            "plc1": _nic_config("enp3s0"),
-        }
-
-        _return_all_dedicated_nics(runtime, nic_repo)
-
-        nic_repo.delete_config.assert_called_once_with("plc1")
-
-    def test_generic_exception(self):
-        """Generic exception → logs warning, config deleted."""
-        runtime = _make_runtime()
-        runtime.get_running_pid.side_effect = RuntimeError("unexpected")
-
-        nic_repo = MagicMock()
-        nic_repo.load_all_configs.return_value = {
-            "plc1": _nic_config("enp3s0"),
-        }
-
-        _return_all_dedicated_nics(runtime, nic_repo)
-
-        nic_repo.delete_config.assert_called_once_with("plc1")
-
-
 class TestSelfDestruct:
     @patch("use_cases.docker_manager.selfdestruct._delete_orchestrator_container")
     @patch("use_cases.docker_manager.selfdestruct._delete_shared_volume")
@@ -472,10 +366,8 @@ class TestSelfDestruct:
     @patch("use_cases.docker_manager.selfdestruct._cleanup_proxy_arp_veths")
     @patch("use_cases.docker_manager.selfdestruct._cleanup_orchestrator_networks")
     @patch("use_cases.docker_manager.selfdestruct._delete_all_runtime_containers")
-    @patch("use_cases.docker_manager.selfdestruct._return_all_dedicated_nics")
     def test_full_sequence(
         self,
-        mock_return_nics,
         mock_delete_all,
         mock_cleanup_nets,
         mock_cleanup_veths,
@@ -490,7 +382,6 @@ class TestSelfDestruct:
         ops = MagicMock()
         buffer = MagicMock()
         socket_repo = MagicMock()
-        nic_repo = MagicMock()
 
         self_destruct(
             container_runtime=runtime,
@@ -499,10 +390,8 @@ class TestSelfDestruct:
             operations_state=ops,
             devices_usage_buffer=buffer,
             socket_repo=socket_repo,
-            dedicated_nic_repo=nic_repo,
         )
 
-        mock_return_nics.assert_called_once_with(runtime, nic_repo)
         mock_delete_all.assert_called_once_with(runtime, registry, vnic_repo, buffer, socket_repo)
         mock_cleanup_nets.assert_called_once_with(runtime)
         mock_cleanup_veths.assert_called_once()
@@ -511,14 +400,12 @@ class TestSelfDestruct:
         mock_delete_orch.assert_called_once_with(runtime, socket_repo)
 
         # Verify steps were set
-        ops.set_step.assert_any_call(ORCHESTRATOR_STATUS_ID, "returning_dedicated_nics")
         ops.set_step.assert_any_call(ORCHESTRATOR_STATUS_ID, "deleting_runtimes")
         ops.set_step.assert_any_call(ORCHESTRATOR_STATUS_ID, "cleaning_networks")
         ops.set_step.assert_any_call(ORCHESTRATOR_STATUS_ID, "removing_self")
 
-    @patch("use_cases.docker_manager.selfdestruct._return_all_dedicated_nics")
     @patch("use_cases.docker_manager.selfdestruct._delete_all_runtime_containers")
-    def test_error_sets_state(self, mock_delete_all, mock_return_nics):
+    def test_error_sets_state(self, mock_delete_all):
         """Exception → operations_state.set_error."""
         runtime = _make_runtime()
         registry = MagicMock()
@@ -526,7 +413,6 @@ class TestSelfDestruct:
         ops = MagicMock()
         buffer = MagicMock()
         socket_repo = MagicMock()
-        nic_repo = MagicMock()
         mock_delete_all.side_effect = RuntimeError("Docker error")
 
         with pytest.raises(RuntimeError):
@@ -537,7 +423,6 @@ class TestSelfDestruct:
                 operations_state=ops,
                 devices_usage_buffer=buffer,
                 socket_repo=socket_repo,
-                dedicated_nic_repo=nic_repo,
             )
 
         ops.set_error.assert_called_once_with(

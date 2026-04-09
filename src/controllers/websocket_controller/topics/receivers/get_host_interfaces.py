@@ -41,5 +41,4 @@ def init(client, ctx):
         return get_host_interfaces_data(
             include_virtual, detailed,
             interface_cache=ctx.network_interface_cache,
-            dedicated_nic_repo=ctx.dedicated_nic_repo,
         )
