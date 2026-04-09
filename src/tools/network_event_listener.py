@@ -158,29 +158,20 @@ class NetworkEventListener:
                     if not interface_name:
                         continue
 
-                    if ipv4_addresses:
-                        subnet = ipv4_addresses[0].get("subnet")
+                    subnet = ipv4_addresses[0].get("subnet") if ipv4_addresses else None
 
-                        self.interface_cache.set_interface(interface_name, {
-                            "subnet": subnet,
-                            "gateway": gateway,
-                            "type": iface_type,
-                            "addresses": ipv4_addresses,
-                        })
+                    self.interface_cache.set_interface(interface_name, {
+                        "subnet": subnet,
+                        "gateway": gateway,
+                        "type": iface_type,
+                        "addresses": ipv4_addresses,
+                    })
 
-                        log_debug(
-                            f"Cached interface {interface_name}: "
-                            f"subnet={subnet}, gateway={gateway}, type={iface_type}, "
-                            f"{len(ipv4_addresses)} IPv4 address(es)"
-                        )
-                    else:
-                        log_debug(
-                            f"Interface {interface_name} has no IPv4 addresses, skipping cache"
-                        )
-                        self.interface_cache.remove_interface(interface_name)
-                        log_debug(
-                            f"Removed {interface_name} from cache (no addresses)"
-                        )
+                    log_debug(
+                        f"Cached interface {interface_name}: "
+                        f"subnet={subnet}, gateway={gateway}, type={iface_type}, "
+                        f"{len(ipv4_addresses)} IPv4 address(es)"
+                    )
 
             elif event_type == "dhcp_update":
                 log_info("Received DHCP update event")
@@ -199,33 +190,26 @@ class NetworkEventListener:
                 if not interface:
                     return
 
-                if ipv4_addresses:
-                    log_info(
-                        f"Network change detected on {interface}: "
-                        f"{len(ipv4_addresses)} IPv4 address(es), gateway: {gateway}"
-                    )
+                log_info(
+                    f"Network change detected on {interface}: "
+                    f"{len(ipv4_addresses)} IPv4 address(es), gateway: {gateway}"
+                )
 
-                    subnet = ipv4_addresses[0].get("subnet")
-                    self.interface_cache.set_interface(interface, {
-                        "subnet": subnet,
-                        "gateway": gateway,
-                        "type": iface_type,
-                        "addresses": ipv4_addresses,
-                    })
-                    log_debug(
-                        f"Updated cache for interface {interface}: subnet={subnet}, gateway={gateway}, type={iface_type}"
-                    )
+                subnet = ipv4_addresses[0].get("subnet") if ipv4_addresses else None
+                self.interface_cache.set_interface(interface, {
+                    "subnet": subnet,
+                    "gateway": gateway,
+                    "type": iface_type,
+                    "addresses": ipv4_addresses,
+                })
+                log_debug(
+                    f"Updated cache for interface {interface}: subnet={subnet}, gateway={gateway}, type={iface_type}"
+                )
 
-                    self.pending_changes[interface] = iface_data
-                    self.last_event_time[interface] = asyncio.get_event_loop().time()
+                self.pending_changes[interface] = iface_data
+                self.last_event_time[interface] = asyncio.get_event_loop().time()
 
-                    asyncio.create_task(self._process_pending_changes(interface))
-                else:
-                    log_debug(
-                        f"Interface {interface} has no IPv4 addresses after change, skipping cache update"
-                    )
-                    self.interface_cache.remove_interface(interface)
-                    log_debug(f"Removed {interface} from cache (no addresses)")
+                asyncio.create_task(self._process_pending_changes(interface))
 
             elif event_type == "device_discovery":
                 log_info("Received device discovery event")

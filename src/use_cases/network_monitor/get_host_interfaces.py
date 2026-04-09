@@ -15,6 +15,8 @@ VIRTUAL_INTERFACE_PREFIXES = [
     "wg",
     "cilium",
     "macvtap",
+    "sit",
+    "can",
 ]
 
 
@@ -136,16 +138,13 @@ def get_host_interfaces_data(
                 interface_name, cache_data, detailed
             )
 
-            if interface_info["ipv4_addresses"] or include_virtual:
-                interfaces.append(interface_info)
-                log_debug(
-                    f"Added interface {interface_name}: "
-                    f"IP={interface_info['ip_address']}, "
-                    f"subnet={interface_info.get('subnet')}, "
-                    f"gateway={interface_info.get('gateway')}"
-                )
-            else:
-                log_debug(f"Skipping interface {interface_name} (no IPv4 addresses)")
+            interfaces.append(interface_info)
+            log_debug(
+                f"Added interface {interface_name}: "
+                f"IP={interface_info['ip_address']}, "
+                f"subnet={interface_info.get('subnet')}, "
+                f"gateway={interface_info.get('gateway')}"
+            )
 
         interfaces.sort(key=lambda x: x["name"])
 
