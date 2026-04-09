@@ -14,8 +14,17 @@ from tools.dns_utils import (
     perform_dns_health_check,
     calculate_backoff,
     is_dns_error,
+    INITIAL_SETUP_RETRY_DELAY,
 )
 from time import sleep
+
+# Shared connection state dict attached to the client so that event handlers
+# (connect, disconnect) can communicate with the outer reconnection loop.
+# Keys:
+#   has_ever_connected (bool): True once the first successful connection is made.
+#                              Controls whether to use rapid retry (initial setup)
+#                              or exponential backoff (normal reconnection).
+_connection_state = {"has_ever_connected": False}
 
 
 async def main_websocket_task(server_url: str, dns_ttl: int = 30):
@@ -38,6 +47,9 @@ async def main_websocket_task(server_url: str, dns_ttl: int = 30):
 
         # Create fresh client with new HTTP session for DNS refresh
         client = await get_websocket_client(dns_ttl=dns_ttl)
+
+        # Attach connection state so event handlers can set has_ever_connected
+        client._connection_state = _connection_state
 
         # Initialize WebSocket controller (existing topics)
         init_websocket_controller(client, ctx)
@@ -94,6 +106,11 @@ def run_websocket_with_reconnection(server_url: str, run_task):
     Manages the reconnection loop with exponential backoff and DNS health checks
     to handle network transitions gracefully.
 
+    During initial setup (before the first successful connection), uses a short
+    fixed retry delay to maximize connection attempts within the 5-minute window
+    where the user links the orchestrator ID in the UI. After the first successful
+    connection, switches to exponential backoff for normal reconnection.
+
     Args:
         server_url: The server URL to connect to (host:port format)
         run_task: Function to run the async task (e.g., asyncio.run)
@@ -123,8 +140,16 @@ def run_websocket_with_reconnection(server_url: str, run_task):
         except Exception as e:
             log_error(f"Error on websocket interface: {e}")
 
-            # DNS errors get longer delays to allow network to stabilize
-            if is_dns_error(e):
+            if not _connection_state["has_ever_connected"]:
+                # Initial setup: backend may not have accepted us yet.
+                # Use short fixed delay to maximize attempts within the
+                # 5-minute activation window.
+                delay = INITIAL_SETUP_RETRY_DELAY
+                log_warning(
+                    f"Waiting for backend to accept connection... "
+                    f"retrying in {delay:.0f}s"
+                )
+            elif is_dns_error(e):
                 delay = calculate_backoff(reconnect_attempt + 2)
                 log_warning(
                     f"DNS-related error detected. Waiting {delay:.1f}s to allow network to stabilize..."

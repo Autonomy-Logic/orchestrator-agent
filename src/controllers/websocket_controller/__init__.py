@@ -58,10 +58,7 @@ async def get_client(dns_ttl: int = 30):
     http_session = get_ssl_session(ttl_dns_cache=dns_ttl)
 
     client = socketio.AsyncClient(
-        reconnection=True,
-        reconnection_attempts=0,
-        reconnection_delay=1,
-        reconnection_delay_max=5,
+        reconnection=False,
         http_session=http_session,
         logger=True,
         engineio_logger=True,

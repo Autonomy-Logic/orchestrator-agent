@@ -19,6 +19,10 @@ RECONNECT_DELAY_BASE = 1.0  # Initial delay in seconds
 RECONNECT_DELAY_MAX = 30.0  # Maximum delay in seconds
 RECONNECT_JITTER = 0.3  # Jitter factor (30%)
 
+# Initial setup: short fixed delay while waiting for user to link the orchestrator
+# ID in the UI (up to 5 minutes). No exponential backoff during this window.
+INITIAL_SETUP_RETRY_DELAY = 5.0
+
 
 def parse_server_address(server_url: str) -> tuple[str, int]:
     """
