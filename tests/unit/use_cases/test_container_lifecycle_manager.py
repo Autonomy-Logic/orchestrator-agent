@@ -235,6 +235,31 @@ class TestHandleContainerExit:
         # Should not raise
         await mgr._handle_container_exit("plc-1")
 
+    @pytest.mark.asyncio
+    async def test_stops_retrying_after_crash_loop(self):
+        """After MAX_RAPID_RESTARTS, stop restarting and log error."""
+        runtime = _make_runtime()
+        container = _make_container(status="exited")
+        runtime.get_container.return_value = container
+
+        ops = MagicMock()
+        ops.is_operation_in_progress.return_value = (False, None)
+
+        mgr = _make_manager(container_runtime=runtime, operations_state=ops)
+        mgr.RESTART_DELAY = 0
+        mgr.MAX_RAPID_RESTARTS = 3
+        mgr.RAPID_RESTART_WINDOW = 600
+
+        # First 3 restarts should work
+        for _ in range(3):
+            await mgr._handle_container_exit("plc-loop")
+        assert container.start.call_count == 3
+
+        # 4th attempt should be blocked by crash-loop protection
+        container.start.reset_mock()
+        await mgr._handle_container_exit("plc-loop")
+        container.start.assert_not_called()
+
 
 # ── Health Poll ──────────────────────────────────────────────────────────
 

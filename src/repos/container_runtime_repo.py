@@ -219,6 +219,15 @@ class ContainerRuntimeRepo(ContainerRuntimeRepoInterface):
     def docker_events(self, **kwargs) -> Any:
         return self._client.events(**kwargs)
 
+    def create_event_stream(self, **kwargs):
+        """Create a dedicated Docker event stream on a fresh client.
+
+        Docker's events() blocks the HTTP connection, so it must not share the
+        client used for other operations. Returns (event_iterator, close_fn).
+        """
+        client = docker.from_env()
+        return client.events(**kwargs), client.close
+
     def get_running_pid(self, container_name: str) -> Optional[int]:
         """
         Return the PID of a running container, or None if not running.

@@ -12,8 +12,7 @@ running PLC container disrupts industrial processes.
 """
 
 import asyncio
-
-import docker
+import time
 
 from tools.logger import log_debug, log_error, log_info, log_warning
 from use_cases.docker_manager import get_self_container
@@ -32,6 +31,11 @@ class ContainerLifecycleManager:
     # Avoids restart storms if a container is crash-looping.
     RESTART_DELAY = 3
 
+    # Crash-loop protection: after MAX_RAPID_RESTARTS restarts within
+    # RAPID_RESTART_WINDOW seconds, stop retrying and log an error.
+    MAX_RAPID_RESTARTS = 5
+    RAPID_RESTART_WINDOW = 600  # 10 minutes
+
     def __init__(
         self,
         container_runtime,
@@ -47,6 +51,9 @@ class ContainerLifecycleManager:
         self._event_task = None
         self._poll_task = None
         self._startup_done = asyncio.Event()
+        self._loop = None
+        # Per-container restart timestamps for crash-loop detection
+        self._restart_history = {}
 
     async def start(self):
         """Start lifecycle management: Docker event watchdog + health poll."""
@@ -223,9 +230,13 @@ class ContainerLifecycleManager:
     async def _docker_event_loop(self):
         """Stream Docker container events and restart crashed vPLC containers.
 
-        Uses a separate Docker client since events() blocks the connection.
-        Only monitors containers in the client registry (managed vPLCs).
+        Uses a dedicated event stream (separate Docker client) since events()
+        blocks the HTTP connection. Only monitors containers in the client
+        registry (managed vPLCs).
         """
+        # Capture the running loop before entering the blocking thread
+        # (asyncio.get_event_loop() is deprecated in threads on Python 3.10+)
+        self._loop = asyncio.get_running_loop()
         log_info("Docker event watchdog started")
         try:
             while self.running:
@@ -242,12 +253,12 @@ class ContainerLifecycleManager:
 
     def _consume_docker_events(self):
         """Blocking: consume Docker events in a thread."""
-        client = docker.from_env()
+        event_stream, close_fn = self.container_runtime.create_event_stream(
+            decode=True,
+            filters={"type": "container", "event": ["die"]},
+        )
         try:
-            for event in client.events(
-                decode=True,
-                filters={"type": "container", "event": ["die"]},
-            ):
+            for event in event_stream:
                 if not self.running:
                     break
 
@@ -263,13 +274,12 @@ class ContainerLifecycleManager:
                     f"(exit code: {exit_code}), scheduling restart"
                 )
 
-                loop = asyncio.get_event_loop()
-                loop.call_soon_threadsafe(
+                self._loop.call_soon_threadsafe(
                     asyncio.ensure_future,
                     self._handle_container_exit(container_name),
                 )
         finally:
-            client.close()
+            close_fn()
 
     # ── Health Poll Fallback ─────────────────────────────────────────────
 
@@ -323,11 +333,33 @@ class ContainerLifecycleManager:
 
     # ── Container Restart ────────────────────────────────────────────────
 
+    def _is_crash_looping(self, container_name):
+        """Check if a container is crash-looping (too many restarts recently).
+
+        Returns True if the container has exceeded MAX_RAPID_RESTARTS within
+        RAPID_RESTART_WINDOW seconds and should not be restarted.
+        """
+        now = time.time()
+        history = self._restart_history.get(container_name, [])
+        # Keep only recent timestamps
+        history = [t for t in history if now - t < self.RAPID_RESTART_WINDOW]
+        self._restart_history[container_name] = history
+
+        if len(history) >= self.MAX_RAPID_RESTARTS:
+            return True
+        return False
+
+    def _record_restart(self, container_name):
+        """Record a restart timestamp for crash-loop detection."""
+        history = self._restart_history.setdefault(container_name, [])
+        history.append(time.time())
+
     async def _handle_container_exit(self, container_name):
         """Restart a container that has exited/died unexpectedly.
 
-        Skips restart if a create/delete operation is in progress.
-        Brief delay avoids restart storms for crash-looping containers.
+        Skips restart if a create/delete operation is in progress or if the
+        container is crash-looping (exceeded MAX_RAPID_RESTARTS within
+        RAPID_RESTART_WINDOW).
         """
         in_progress, op_type = self.operations_state.is_operation_in_progress(
             container_name
@@ -336,6 +368,15 @@ class ContainerLifecycleManager:
             log_debug(
                 f"Container {container_name} has {op_type} in progress, "
                 f"skipping automatic restart"
+            )
+            return
+
+        if self._is_crash_looping(container_name):
+            log_error(
+                f"Container {container_name} has crashed "
+                f"{self.MAX_RAPID_RESTARTS} times within "
+                f"{self.RAPID_RESTART_WINDOW}s, giving up automatic restarts. "
+                f"Check container logs for the root cause."
             )
             return
 
@@ -356,6 +397,7 @@ class ContainerLifecycleManager:
 
             log_info(f"Starting crashed container {container_name}")
             await asyncio.to_thread(container.start)
+            self._record_restart(container_name)
 
             await asyncio.sleep(2)
             await self._reconnect_orchestrator_to_bridge(container_name)
