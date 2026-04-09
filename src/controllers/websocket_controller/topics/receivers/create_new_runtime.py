@@ -3,7 +3,6 @@ from tools.logger import *
 from tools.contract_validation import (
     StringType,
     NonEmptyStringType,
-    InterfaceNameType,
     ListType,
     OptionalType,
     BASE_MESSAGE,
@@ -30,7 +29,6 @@ MESSAGE_TYPE = {
     "vnic_configs": ListType(VNIC_CONFIG_TYPE),
     "serial_configs": OptionalType(ListType(SERIAL_CONFIG_TYPE)),
     "runtime_version": OptionalType(StringType),
-    "dedicated_interface": OptionalType(InterfaceNameType),
 }
 
 
@@ -52,11 +50,9 @@ def init(client, ctx):
         vnic_configs = message.get("vnic_configs", [])
         serial_configs = message.get("serial_configs", [])
         runtime_version = message.get("runtime_version")
-        dedicated_interface = message.get("dedicated_interface")
 
         result, started = await start_creation(
-            container_name, vnic_configs, serial_configs, runtime_version,
-            dedicated_interface, ctx=ctx,
+            container_name, vnic_configs, serial_configs, runtime_version, ctx=ctx
         )
         if started and serial_configs:
             result["serial_configs_count"] = len(serial_configs)
