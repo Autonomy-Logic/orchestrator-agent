@@ -54,6 +54,9 @@ async def main_websocket_task(server_url: str, dns_ttl: int = 30):
         await ctx.network_event_listener.start()
         log_info("Network event listener started")
 
+        # Start container lifecycle manager (boot startup + watchdog)
+        await ctx.lifecycle_manager.start()
+
         # Start WebRTC session manager background tasks
         await start_webrtc_controller(session_manager)
         log_info("WebRTC controller started")
@@ -69,6 +72,7 @@ async def main_websocket_task(server_url: str, dns_ttl: int = 30):
     finally:
         # Cleanup controllers on disconnect
         log_info("Cleaning up controllers...")
+        await ctx.lifecycle_manager.stop()
         await ctx.debug_session_manager.stop()
         await stop_webrtc_controller(session_manager)
         log_info("Controllers stopped")

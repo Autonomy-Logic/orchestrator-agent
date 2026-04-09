@@ -135,8 +135,8 @@ class TestHandleEvent:
         listener.interface_cache.set_interface.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_network_change_no_addresses_removed_status(self):
-        """network_change with status=removed removes from cache."""
+    async def test_network_change_no_addresses_still_cached(self):
+        """network_change with empty addresses still caches the interface."""
         listener = _make_listener()
         listener.interface_cache.get_all_interfaces.return_value = {}
 
@@ -145,11 +145,13 @@ class TestHandleEvent:
             "data": {"interface": "eth0", "ipv4_addresses": [], "status": "removed"},
         })
 
-        listener.interface_cache.remove_interface.assert_called_once_with("eth0")
+        # Interface is always cached regardless of IP status
+        listener.interface_cache.set_interface.assert_called_once()
+        listener.interface_cache.remove_interface.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_network_change_no_addresses_keeps_in_cache(self):
-        """network_change with empty addresses but no removed/down status keeps interface."""
+        """network_change with empty addresses keeps interface in cache."""
         listener = _make_listener()
         listener.interface_cache.get_all_interfaces.return_value = {
             "enp4s0": {"type": "ethernet"},

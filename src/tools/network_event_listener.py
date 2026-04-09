@@ -36,6 +36,7 @@ class NetworkEventListener:
         self.reconnection_manager = reconnection_manager
         self.serial_device_manager = serial_device_manager
         self.dedicated_nic_manager = dedicated_nic_manager
+        self.lifecycle_manager = None  # Set by bootstrap after creation
 
     # ========== Lifecycle ==========
 
@@ -89,6 +90,12 @@ class NetworkEventListener:
 
                     self.netmon_client.writer = writer
                     log_info("Connected to network monitor, listening for events...")
+
+                    # Start/manage existing containers now that network is ready.
+                    # Must run BEFORE DHCP resync so containers have valid network
+                    # namespaces when DHCP clients are started.
+                    if self.lifecycle_manager:
+                        await self.lifecycle_manager.on_network_ready()
 
                     # Resync DHCP for existing containers on startup/reconnect
                     await self.dhcp_manager.resync_dhcp_for_existing_containers()

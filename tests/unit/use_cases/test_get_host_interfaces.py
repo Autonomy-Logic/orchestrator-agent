@@ -145,8 +145,8 @@ class TestGetHostInterfacesData:
         assert "eth0" in names
         assert "docker0" in names
 
-    def test_interface_no_ipv4_skipped_when_not_ethernet(self):
-        """Non-ethernet interface with no IPv4 addresses is skipped."""
+    def test_interface_no_ipv4_still_included(self):
+        """Physical interface without IPv4 is still included (visible in UI)."""
         cache = MagicMock()
         cache.get_all_interfaces.return_value = {
             "wlan0": {"addresses": [], "type": "wifi"},
@@ -157,7 +157,9 @@ class TestGetHostInterfacesData:
         )
 
         assert result["status"] == "success"
-        assert len(result["interfaces"]) == 0
+        assert len(result["interfaces"]) == 1
+        assert result["interfaces"][0]["name"] == "wlan0"
+        assert result["interfaces"][0]["ipv4_addresses"] == []
 
     def test_ethernet_no_ipv4_included_as_dedicated_only(self):
         """Ethernet interface without IPv4 is included with dedicated_only=True."""
