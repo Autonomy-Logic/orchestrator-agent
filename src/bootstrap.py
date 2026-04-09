@@ -28,6 +28,7 @@ from tools.logger import log_info
 from use_cases.dhcp_manager import DHCPManager
 from use_cases.network_reconnection import NetworkReconnectionManager
 from use_cases.serial_device_manager import SerialDeviceManager
+from use_cases.container_lifecycle_manager import ContainerLifecycleManager
 from use_cases.dedicated_nic_manager import DedicatedNICManager
 
 
@@ -63,6 +64,17 @@ class AppContext:
             serial_device_manager=self.serial_device_manager,
             dedicated_nic_manager=self.dedicated_nic_manager,
         )
+
+        self.lifecycle_manager = ContainerLifecycleManager(
+            container_runtime=self.container_runtime,
+            client_registry=self.client_registry,
+            socket_repo=self.socket_repo,
+            operations_state=self.operations_state,
+        )
+
+        # Wire lifecycle manager into network event listener (property injection
+        # to avoid circular dependency)
+        self.network_event_listener.lifecycle_manager = self.lifecycle_manager
 
         # Factory callables for creating fresh repo instances per debug session
         self.http_client_factory = HTTPClientRepo

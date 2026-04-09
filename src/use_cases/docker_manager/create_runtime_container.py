@@ -326,7 +326,7 @@ def _create_and_start_container(
         "image": image_name,
         "name": container_name,
         "detach": True,
-        "restart_policy": {"Name": "always"},
+        "restart_policy": {"Name": "no"},
         "network": internal_network.name,
         # Real-time scheduling capabilities for PLC deterministic execution
         # SYS_NICE: Required for sched_setscheduler(SCHED_FIFO) in the PLC core
