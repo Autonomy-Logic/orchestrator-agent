@@ -77,8 +77,18 @@ case "$1" in
             prefix=24
         fi
 
-        # Add new address
-        ip addr add "$ip/$prefix" dev "$interface"
+        # Add new address (with broadcast if available)
+        if [ -n "$broadcast" ]; then
+            ip addr add "$ip/$prefix" broadcast "$broadcast" dev "$interface"
+        else
+            ip addr add "$ip/$prefix" dev "$interface"
+        fi
+
+        # Set MTU if provided by the DHCP server
+        if [ -n "$mtu" ] && [ "$mtu" -gt 0 ] 2>/dev/null; then
+            ip link set dev "$interface" mtu "$mtu"
+            log "Set MTU=$mtu on $interface"
+        fi
 
         # Add default route if router is provided
         if [ -n "$router" ]; then
@@ -88,17 +98,37 @@ case "$1" in
             ip route add default via "$router" dev "$interface" metric 100
         fi
 
-        # Configure DNS if provided
-        if [ -n "$dns" ]; then
-            log "DNS servers: $dns"
-            # Write resolv.conf for the container's network namespace
-            : > /etc/resolv.conf
-            for server in $dns; do
-                echo "nameserver $server" >> /etc/resolv.conf
+        # Add DHCP-provided static routes (option 121 / option 249)
+        if [ -n "$staticroutes" ]; then
+            log "Adding static routes: $staticroutes"
+            # Format: "dest/prefix gateway dest/prefix gateway ..."
+            set -- $staticroutes
+            while [ -n "$1" ] && [ -n "$2" ]; do
+                ip route add "$1" via "$2" dev "$interface" 2>/dev/null
+                shift 2
             done
-            if [ -n "$domain" ]; then
-                echo "search $domain" >> /etc/resolv.conf
+        fi
+
+        # Configure DNS inside the vPLC container's filesystem.
+        # udhcpc runs via nsenter -n (network namespace only), so /etc/resolv.conf
+        # here refers to netmon's filesystem. We write to /proc/<pid>/root/etc/resolv.conf
+        # to reach the container's actual filesystem (netmon runs with --pid=host).
+        if [ -n "$dns" ] && [ -n "$ORCH_CONTAINER_PID" ]; then
+            resolv_path="/proc/$ORCH_CONTAINER_PID/root/etc/resolv.conf"
+            if [ -d "/proc/$ORCH_CONTAINER_PID/root/etc" ]; then
+                : > "$resolv_path"
+                for server in $dns; do
+                    echo "nameserver $server" >> "$resolv_path"
+                done
+                if [ -n "$domain" ]; then
+                    echo "search $domain" >> "$resolv_path"
+                fi
+                log "DNS configured in container (PID=$ORCH_CONTAINER_PID): $dns"
+            else
+                log "WARNING: Cannot write DNS - container proc path not found"
             fi
+        elif [ -n "$dns" ]; then
+            log "WARNING: DNS servers available ($dns) but ORCH_CONTAINER_PID not set, cannot configure container DNS"
         fi
         
         # Write lease information to file for netmon to read
@@ -109,9 +139,13 @@ case "$1" in
     "subnet": "$subnet",
     "mask": "$mask",
     "prefix": $prefix,
+    "broadcast": "$broadcast",
     "router": "$router",
     "dns": "$dns",
     "domain": "$domain",
+    "mtu": "$mtu",
+    "hostname": "$hostname",
+    "ntpsrv": "$ntpsrv",
     "lease": "$lease",
     "serverid": "$serverid",
     "timestamp": "$(date -Iseconds)",
