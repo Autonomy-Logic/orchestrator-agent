@@ -33,10 +33,9 @@ async def main_websocket_task(server_url: str, dns_ttl: int = 30):
                 changes but increase DNS queries.
     """
     client = None
+    ctx = get_context()
+    session_manager = None
     try:
-        # Initialize composition root (creates all adapters)
-        ctx = get_context()
-
         # Create fresh client with new HTTP session for DNS refresh
         client = await get_websocket_client(dns_ttl=dns_ttl)
 
@@ -75,7 +74,8 @@ async def main_websocket_task(server_url: str, dns_ttl: int = 30):
         log_info("Cleaning up controllers...")
         await ctx.lifecycle_manager.stop()
         await ctx.debug_session_manager.stop()
-        await stop_webrtc_controller(session_manager)
+        if session_manager is not None:
+            await stop_webrtc_controller(session_manager)
         log_info("Controllers stopped")
 
         # Cleanup: close HTTP session to release resources
