@@ -18,9 +18,10 @@ def init(client, ctx):
     async def callback():
         log_info("Connection established with the server.")
 
-        # Signal to the outer reconnection loop that we've been accepted.
+        # Signal to the reconnection loop that we've been accepted.
         # Switches from rapid-retry (initial setup) to exponential backoff.
         ctx.connection_state["has_ever_connected"] = True
+        ctx._reconnect_attempt = 0
 
         # Cancel any orphaned heartbeat task from a previous connection
         if ctx.heartbeat_task:
