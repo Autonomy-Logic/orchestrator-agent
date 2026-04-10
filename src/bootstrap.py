@@ -19,6 +19,7 @@ from repos import (
 )
 from repos.debug_socket_repo import DebugSocketRepo
 from controllers.websocket_controller.debug_session_manager import DebugSessionManager
+from tools.connection_state import ConnectionStateTracker
 from tools.operations_state import OperationsStateTracker
 from tools.devices_usage_buffer import DevicesUsageBuffer
 from tools.network_event_listener import NetworkEventListener
@@ -75,6 +76,10 @@ class AppContext:
         # Wire lifecycle manager into network event listener (property injection
         # to avoid circular dependency)
         self.network_event_listener.lifecycle_manager = self.lifecycle_manager
+
+        # Connection state shared between the reconnection loop and
+        # Socket.IO event handlers (connect/disconnect).
+        self.connection_state = ConnectionStateTracker()
 
         # Factory callables for creating fresh repo instances per debug session
         self.http_client_factory = HTTPClientRepo

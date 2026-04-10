@@ -4,15 +4,28 @@ from use_cases.collect_device_stats import collect_all_device_stats
 import asyncio
 from datetime import datetime
 
+# Stop the heartbeat task after this many consecutive emit failures.
+# Tolerates transient errors (1-2 glitches) but stops if the connection
+# is genuinely dead to avoid infinite error log spam.
+MAX_CONSECUTIVE_FAILURES = 3
+
 
 async def emit_heartbeat(client, agent_id, usage_buffer, devices_usage_buffer, container_runtime):
     """
     Emit a heartbeat message at regular intervals.
     Also logs CPU and memory usage to the circular buffer for both
     the orchestrator agent and all managed devices.
+
+    Tolerates transient emit failures and only stops after
+    MAX_CONSECUTIVE_FAILURES in a row or when the client disconnects.
     """
-    while True:
+    consecutive_failures = 0
+
+    while client.connected:
         await asyncio.sleep(5)
+
+        if not client.connected:
+            break
 
         metrics = get_all_metrics()
 
@@ -37,6 +50,13 @@ async def emit_heartbeat(client, agent_id, usage_buffer, devices_usage_buffer, c
 
         try:
             await client.emit("heartbeat", heartbeat_data)
+            consecutive_failures = 0
         except Exception as e:
-            log_error(f"Failed to emit heartbeat: {e}")
-            break
+            consecutive_failures += 1
+            log_error(
+                f"Failed to emit heartbeat "
+                f"({consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}): {e}"
+            )
+            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                log_error("Heartbeat failed too many times, stopping")
+                break

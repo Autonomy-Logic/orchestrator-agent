@@ -261,6 +261,22 @@ class TestHandleContainerExit:
         await mgr._handle_container_exit("plc-loop")
         container.start.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_generic_exception_during_restart(self):
+        """Generic exception during container.start should be caught."""
+        runtime = _make_runtime()
+        container = _make_container(status="exited")
+        container.start.side_effect = RuntimeError("Docker daemon error")
+        runtime.get_container.return_value = container
+
+        ops = MagicMock()
+        ops.is_operation_in_progress.return_value = (False, None)
+
+        mgr = _make_manager(container_runtime=runtime, operations_state=ops)
+        mgr.RESTART_DELAY = 0
+        # Should not raise
+        await mgr._handle_container_exit("plc-1")
+
 
 # ── Health Poll ──────────────────────────────────────────────────────────
 

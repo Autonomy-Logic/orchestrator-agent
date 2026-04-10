@@ -551,6 +551,7 @@ class DHCPManager:
             # This ensures each container:vnic gets its own lease file
             env = os.environ.copy()
             env["ORCH_DHCP_KEY"] = lease_key
+            env["ORCH_CONTAINER_PID"] = str(container_pid)
 
             # Build udhcpc command
             # -f: foreground, -i: interface, -s: script, -t: retries, -T: timeout

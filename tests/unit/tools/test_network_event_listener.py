@@ -406,6 +406,42 @@ class TestDedicatedNicManagerIntegration:
 
         nic_mgr.start.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_listen_loop_calls_lifecycle_manager_on_network_ready(self):
+        """_listen_loop calls lifecycle_manager.on_network_ready() after connecting."""
+        lifecycle_mgr = MagicMock()
+        lifecycle_mgr.on_network_ready = AsyncMock()
+        dhcp_mgr = MagicMock()
+        dhcp_mgr.resync_dhcp_for_existing_containers = AsyncMock()
+        dhcp_mgr.pending_dhcp_resyncs = {}
+        dhcp_mgr.dhcp_retry_task = None
+        netmon_client = MagicMock()
+
+        listener = NetworkEventListener(
+            interface_cache=MagicMock(),
+            netmon_client=netmon_client,
+            dhcp_manager=dhcp_mgr,
+            reconnection_manager=MagicMock(),
+            serial_device_manager=MagicMock(),
+        )
+        listener.lifecycle_manager = lifecycle_mgr
+        listener.running = True
+
+        mock_reader = AsyncMock()
+        mock_writer = MagicMock()
+
+        with patch("tools.network_event_listener.asyncio.open_unix_connection",
+                    return_value=(mock_reader, mock_writer)):
+            with patch("tools.network_event_listener.os.path.exists", return_value=True):
+                async def _stop_after_empty(*args, **kwargs):
+                    listener.running = False
+                    return b""
+                mock_reader.readline.side_effect = _stop_after_empty
+
+                await listener._listen_loop()
+
+        lifecycle_mgr.on_network_ready.assert_awaited_once()
+
 
 class TestProcessPendingChanges:
     @pytest.mark.asyncio
