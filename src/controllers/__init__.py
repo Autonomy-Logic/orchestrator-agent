@@ -46,9 +46,10 @@ async def main_websocket_task(server_url: str, dns_ttl: int = 30):
     try:
         while True:
             client = None
+            http_session = None
             try:
                 # Create fresh client with new HTTP session for DNS refresh
-                client = await get_websocket_client(dns_ttl=dns_ttl)
+                client, http_session = await get_websocket_client(dns_ttl=dns_ttl)
 
                 # Initialize WebSocket controller (existing topics)
                 init_websocket_controller(client, ctx)
@@ -70,11 +71,12 @@ async def main_websocket_task(server_url: str, dns_ttl: int = 30):
             except Exception as e:
                 log_error(f"Connection error: {e}")
             finally:
-                # Close only the HTTP session for this connection attempt
-                if client is not None:
+                # Always close the HTTP session to prevent leaks.
+                # We hold our own reference since client.http may not be set
+                # if the connection failed before socketio stored it.
+                if http_session is not None and not http_session.closed:
                     try:
-                        if client.http and not client.http.closed:
-                            await client.http.close()
+                        await http_session.close()
                     except Exception:
                         pass
 

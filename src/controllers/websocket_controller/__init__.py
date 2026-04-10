@@ -49,7 +49,8 @@ async def get_client(dns_ttl: int = 30):
                 Lower values help recover from network changes faster.
 
     Returns:
-        Configured AsyncClient ready to connect
+        Tuple of (AsyncClient, aiohttp.ClientSession). The caller must close
+        the session when done (even if the connection fails).
     """
     _configure_socketio_logging()
 
@@ -68,4 +69,4 @@ async def get_client(dns_ttl: int = 30):
     async def connect_error(data):
         log_error(f"Socket.IO connection error: {data}")
 
-    return client
+    return client, http_session
