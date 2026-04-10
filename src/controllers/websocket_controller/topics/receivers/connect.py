@@ -20,14 +20,13 @@ def init(client, ctx):
 
         # Signal to the outer reconnection loop that we've been accepted.
         # Switches from rapid-retry (initial setup) to exponential backoff.
-        if hasattr(client, "_connection_state"):
-            client._connection_state["has_ever_connected"] = True
+        ctx.connection_state["has_ever_connected"] = True
 
         # Cancel any orphaned heartbeat task from a previous connection
-        if hasattr(client, "_heartbeat_task") and client._heartbeat_task:
-            client._heartbeat_task.cancel()
+        if ctx.heartbeat_task:
+            ctx.heartbeat_task.cancel()
 
-        client._heartbeat_task = asyncio.create_task(emit_heartbeat(
+        ctx.heartbeat_task = asyncio.create_task(emit_heartbeat(
             client,
             agent_id,
             ctx.usage_buffer,

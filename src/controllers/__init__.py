@@ -18,14 +18,6 @@ from tools.dns_utils import (
 )
 from time import sleep
 
-# Shared connection state dict attached to the client so that event handlers
-# (connect, disconnect) can communicate with the outer reconnection loop.
-# Keys:
-#   has_ever_connected (bool): True once the first successful connection is made.
-#                              Controls whether to use rapid retry (initial setup)
-#                              or exponential backoff (normal reconnection).
-_connection_state = {"has_ever_connected": False}
-
 
 async def main_websocket_task(server_url: str, dns_ttl: int = 30):
     """
@@ -47,9 +39,6 @@ async def main_websocket_task(server_url: str, dns_ttl: int = 30):
 
         # Create fresh client with new HTTP session for DNS refresh
         client = await get_websocket_client(dns_ttl=dns_ttl)
-
-        # Attach connection state so event handlers can set has_ever_connected
-        client._connection_state = _connection_state
 
         # Initialize WebSocket controller (existing topics)
         init_websocket_controller(client, ctx)
@@ -140,10 +129,11 @@ def run_websocket_with_reconnection(server_url: str, run_task):
         except Exception as e:
             log_error(f"Error on websocket interface: {e}")
 
-            if not _connection_state["has_ever_connected"]:
+            if not ctx.connection_state["has_ever_connected"]:
                 # Initial setup: backend may not have accepted us yet.
                 # Use short fixed delay to maximize attempts within the
-                # 5-minute activation window.
+                # 5-minute activation window. Don't increment attempt counter
+                # so the first real reconnection after activation starts at 0.
                 delay = INITIAL_SETUP_RETRY_DELAY
                 log_warning(
                     f"Waiting for backend to accept connection... "
@@ -154,12 +144,13 @@ def run_websocket_with_reconnection(server_url: str, run_task):
                 log_warning(
                     f"DNS-related error detected. Waiting {delay:.1f}s to allow network to stabilize..."
                 )
+                reconnect_attempt += 1
             else:
                 delay = calculate_backoff(reconnect_attempt)
                 log_warning(f"Reconnecting in {delay:.1f}s (attempt {reconnect_attempt + 1})...")
+                reconnect_attempt += 1
 
             sleep(delay)
-            reconnect_attempt += 1
 
 
 async def main_webrtc_task(*args, **kwargs):

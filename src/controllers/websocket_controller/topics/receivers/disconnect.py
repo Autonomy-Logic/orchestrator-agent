@@ -5,7 +5,7 @@ NAME = "disconnect"
 
 
 @topic(NAME)
-def init(client):
+def init(client, ctx):
     """
     Handle the 'disconnect' topic to log connection ending.
     """
@@ -15,6 +15,6 @@ def init(client):
         log_info("Connection ended by the server.")
 
         # Cancel the heartbeat task to prevent orphaned emit attempts
-        if hasattr(client, "_heartbeat_task") and client._heartbeat_task:
-            client._heartbeat_task.cancel()
-            client._heartbeat_task = None
+        if ctx.heartbeat_task:
+            ctx.heartbeat_task.cancel()
+            ctx.heartbeat_task = None

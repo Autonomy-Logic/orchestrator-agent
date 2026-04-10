@@ -76,6 +76,11 @@ class AppContext:
         # to avoid circular dependency)
         self.network_event_listener.lifecycle_manager = self.lifecycle_manager
 
+        # Connection state shared between the outer reconnection loop and
+        # Socket.IO event handlers (connect/disconnect).
+        self.connection_state = {"has_ever_connected": False}
+        self.heartbeat_task = None
+
         # Factory callables for creating fresh repo instances per debug session
         self.http_client_factory = HTTPClientRepo
         self.debug_socket_factory = DebugSocketRepo

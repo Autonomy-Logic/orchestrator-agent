@@ -19,7 +19,7 @@ def initialize_all(client, ctx):
     init_connect(client, ctx)
     init_create_new_runtime(client, ctx)
     init_run_command(client, ctx)
-    init_disconnect(client)
+    init_disconnect(client, ctx)
     init_delete_device(client, ctx)
     init_delete_orchestrator(client, ctx)
     init_get_consumption_device(client, ctx)
