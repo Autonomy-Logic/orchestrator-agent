@@ -185,7 +185,6 @@ def _spawn_upgrader(container_runtime, socket_repo, operations_state):
         image=ORCHESTRATOR_IMAGE,
         name=UPGRADER_CONTAINER_NAME,
         detach=True,
-        auto_remove=True,
         command=["python", "src/tools/upgrade_self.py"],
         environment=env_vars,
         volumes={

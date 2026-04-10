@@ -54,8 +54,12 @@ def main():
     time.sleep(3)
 
     # Stop and remove old orchestrator
+    # IMPORTANT: Disable restart policy BEFORE stopping to prevent Docker from
+    # restarting the container between stop() and remove().
     try:
         old = client.containers.get(target_container)
+        print(f"Disabling restart policy on '{target_container}'...")
+        old.update(restart_policy={"Name": "no"})
         print(f"Stopping old orchestrator '{target_container}'...")
         old.stop(timeout=15)
         print(f"Removing old orchestrator '{target_container}'...")
