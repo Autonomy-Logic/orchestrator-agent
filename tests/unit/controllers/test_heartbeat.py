@@ -34,6 +34,24 @@ class TestEmitHeartbeat:
     @patch("controllers.websocket_controller.topics.emitters.heartbeat.get_all_metrics", return_value=_mock_metrics())
     @patch("controllers.websocket_controller.topics.emitters.heartbeat.asyncio.sleep", new_callable=AsyncMock)
     @patch("controllers.websocket_controller.topics.emitters.heartbeat.asyncio.to_thread", new_callable=AsyncMock)
+    async def test_heartbeat_includes_agent_version(self, mock_to_thread, mock_sleep, mock_metrics, mock_stats):
+        """Heartbeat payload includes agent_version from env var."""
+        client = _make_client()
+        connected_values = [True, True, False]
+        type(client).connected = property(lambda self: connected_values.pop(0) if connected_values else False)
+
+        with patch.dict("os.environ", {"AGENT_VERSION": "v1.2.3"}):
+            await emit_heartbeat(client, "agent-1", MagicMock(), MagicMock(), MagicMock())
+
+        assert client.emit.call_count == 1
+        heartbeat_data = client.emit.call_args[0][1]
+        assert heartbeat_data["agent_version"] == "v1.2.3"
+
+    @pytest.mark.asyncio
+    @patch("controllers.websocket_controller.topics.emitters.heartbeat.collect_all_device_stats")
+    @patch("controllers.websocket_controller.topics.emitters.heartbeat.get_all_metrics", return_value=_mock_metrics())
+    @patch("controllers.websocket_controller.topics.emitters.heartbeat.asyncio.sleep", new_callable=AsyncMock)
+    @patch("controllers.websocket_controller.topics.emitters.heartbeat.asyncio.to_thread", new_callable=AsyncMock)
     async def test_emits_heartbeat_successfully(self, mock_to_thread, mock_sleep, mock_metrics, mock_stats):
         """Heartbeat emits and resets failure counter on success."""
         client = _make_client()

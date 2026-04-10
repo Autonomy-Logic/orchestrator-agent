@@ -2,6 +2,7 @@ from tools.logger import log_error
 from tools.system_metrics import get_all_metrics
 from use_cases.collect_device_stats import collect_all_device_stats
 import asyncio
+import os
 from datetime import datetime
 
 # Stop the heartbeat task after this many consecutive emit failures.
@@ -38,6 +39,7 @@ async def emit_heartbeat(client, agent_id, usage_buffer, devices_usage_buffer, c
 
         heartbeat_data = {
             "agent_id": agent_id,
+            "agent_version": os.getenv("AGENT_VERSION", "unknown"),
             "cpu_usage": metrics["cpu_usage"],
             "memory_usage": metrics["memory_usage"],
             "memory_total": metrics["memory_total"],

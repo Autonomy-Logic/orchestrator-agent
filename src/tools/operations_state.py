@@ -53,7 +53,7 @@ class OperationsStateTracker:
                 # Only block if there's an active operation in progress
                 # Allow overwriting error/terminal states with new operation
                 current_status = self._operations[container_name].get("status")
-                if current_status in ["creating", "deleting"]:
+                if current_status in ["creating", "deleting", "upgrading"]:
                     return False
 
             now = datetime.now().isoformat()
@@ -80,13 +80,38 @@ class OperationsStateTracker:
                 # Only block if there's an active operation in progress
                 # Allow overwriting error/terminal states with new operation
                 current_status = self._operations[container_name].get("status")
-                if current_status in ["creating", "deleting"]:
+                if current_status in ["creating", "deleting", "upgrading"]:
                     return False
 
             now = datetime.now().isoformat()
             self._operations[container_name] = {
                 "status": "deleting",
                 "operation": "delete",
+                "step": None,
+                "error": None,
+                "started_at": now,
+                "updated_at": now,
+            }
+            return True
+
+    def set_upgrading(self, container_name: str) -> bool:
+        """
+        Mark a container as being upgraded.
+
+        Returns:
+            True if state was set successfully
+            False if container already has an active operation in progress
+        """
+        with self._lock:
+            if container_name in self._operations:
+                current_status = self._operations[container_name].get("status")
+                if current_status in ["creating", "deleting", "upgrading"]:
+                    return False
+
+            now = datetime.now().isoformat()
+            self._operations[container_name] = {
+                "status": "upgrading",
+                "operation": "upgrade",
                 "step": None,
                 "error": None,
                 "started_at": now,
@@ -170,7 +195,7 @@ class OperationsStateTracker:
         with self._lock:
             if container_name in self._operations:
                 op = self._operations[container_name]
-                if op["status"] in ["creating", "deleting"]:
+                if op["status"] in ["creating", "deleting", "upgrading"]:
                     return True, op["operation"]
             return False, None
 

@@ -19,6 +19,13 @@ class TestOperationsStateTracker:
         assert state["status"] == "deleting"
         assert state["operation"] == "delete"
 
+    def test_set_upgrading(self):
+        tracker = OperationsStateTracker()
+        assert tracker.set_upgrading("plc1") is True
+        state = tracker.get_state("plc1")
+        assert state["status"] == "upgrading"
+        assert state["operation"] == "upgrade"
+
     def test_set_creating_blocked_by_active_creating(self):
         tracker = OperationsStateTracker()
         tracker.set_creating("plc1")
@@ -33,6 +40,26 @@ class TestOperationsStateTracker:
         tracker = OperationsStateTracker()
         tracker.set_creating("plc1")
         assert tracker.set_deleting("plc1") is False
+
+    def test_set_upgrading_blocked_by_active_creating(self):
+        tracker = OperationsStateTracker()
+        tracker.set_creating("plc1")
+        assert tracker.set_upgrading("plc1") is False
+
+    def test_set_upgrading_blocked_by_active_upgrading(self):
+        tracker = OperationsStateTracker()
+        tracker.set_upgrading("plc1")
+        assert tracker.set_upgrading("plc1") is False
+
+    def test_set_creating_blocked_by_active_upgrading(self):
+        tracker = OperationsStateTracker()
+        tracker.set_upgrading("plc1")
+        assert tracker.set_creating("plc1") is False
+
+    def test_set_upgrading_allowed_after_error(self):
+        tracker = OperationsStateTracker()
+        tracker.set_error("plc1", "something failed", "upgrade")
+        assert tracker.set_upgrading("plc1") is True
 
     def test_set_creating_allowed_after_error(self):
         tracker = OperationsStateTracker()
@@ -104,6 +131,13 @@ class TestOperationsStateTracker:
         in_progress, op_type = tracker.is_operation_in_progress("plc1")
         assert in_progress is True
         assert op_type == "create"
+
+    def test_is_operation_in_progress_upgrading(self):
+        tracker = OperationsStateTracker()
+        tracker.set_upgrading("plc1")
+        in_progress, op_type = tracker.is_operation_in_progress("plc1")
+        assert in_progress is True
+        assert op_type == "upgrade"
 
     def test_is_operation_not_in_progress_when_error(self):
         tracker = OperationsStateTracker()

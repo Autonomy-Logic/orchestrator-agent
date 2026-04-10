@@ -16,6 +16,9 @@ RUN apt-get update && \
     update-alternatives --set iptables /usr/sbin/iptables-legacy && \
     pip install --no-cache-dir pyroute2 pyudev
 
+ARG VERSION=dev
+ENV AGENT_VERSION=${VERSION}
+
 WORKDIR /app
 
 COPY autonomy-netmon.py /app/autonomy-netmon.py

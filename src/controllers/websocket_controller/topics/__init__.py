@@ -9,8 +9,10 @@ from .receivers.get_consumption_orchestrator import (
 )
 from .receivers.get_device_status import init as init_get_device_status
 from .receivers.get_host_interfaces import init as init_get_host_interfaces
+from .receivers.get_orchestrator_version import init as init_get_orchestrator_version
 from .receivers.get_serial_devices import init as init_get_serial_devices
 from .receivers.run_command import init as init_run_command
+from .receivers.upgrade_orchestrator import init as init_upgrade_orchestrator
 
 
 def initialize_all(client, ctx):
@@ -26,4 +28,6 @@ def initialize_all(client, ctx):
     init_get_consumption_orchestrator(client, ctx)
     init_get_device_status(client, ctx)
     init_get_host_interfaces(client, ctx)
+    init_get_orchestrator_version(client, ctx)
     init_get_serial_devices(client, ctx)
+    init_upgrade_orchestrator(client, ctx)

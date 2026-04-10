@@ -51,7 +51,9 @@ FROM base AS final
 COPY --from=builder /wheels /wheels
 RUN pip install --no-cache-dir /wheels/*
 
+ARG VERSION=dev
 ENV HOST_NAME=orchestrator_agent
+ENV AGENT_VERSION=${VERSION}
 
 # Copy source code
 COPY src/ ./src

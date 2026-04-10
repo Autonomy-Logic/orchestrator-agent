@@ -1,0 +1,143 @@
+name: Release - Build and Publish Docker Images
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: 'Platforms to build (comma-separated)'
+        default: 'linux/amd64,linux/arm64,linux/arm/v7'
+        required: false
+        type: string
+      release_tag:
+        description: 'Release version tag (e.g., v1.2.3). If provided, also tags as latest.'
+        required: false
+        type: string
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate VERSION file matches git tag
+        id: version
+        run: |
+          FILE_VERSION=$(cat VERSION | tr -d '[:space:]')
+          echo "VERSION file contains: $FILE_VERSION"
+
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            TAG_VERSION="${{ github.ref_name }}"
+            TAG_VERSION_STRIPPED="${TAG_VERSION#v}"
+            if [[ "$FILE_VERSION" != "$TAG_VERSION_STRIPPED" ]]; then
+              echo "::error::VERSION file ($FILE_VERSION) does not match git tag ($TAG_VERSION_STRIPPED)"
+              exit 1
+            fi
+            echo "version=$TAG_VERSION" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${{ inputs.release_tag }}" ]]; then
+            echo "version=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=v${FILE_VERSION}" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-orchestrator:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.GHCR_USERNAME }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/autonomy-logic/orchestrator-agent
+          tags: |
+            # latest tag only for stable releases (no pre-release suffix)
+            type=raw,value=latest,enable=${{ (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-')) || inputs.release_tag != '' }}
+            # Version tag from git tag
+            type=semver,pattern={{raw}}
+            # Version tag for manual runs with release_tag
+            type=raw,value=${{ inputs.release_tag }},enable=${{ inputs.release_tag != '' }}
+
+      - name: Build and Push Orchestrator Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: ${{ inputs.platforms || 'linux/amd64,linux/arm64,linux/arm/v7' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ needs.validate.outputs.version }}
+
+  build-netmon:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.GHCR_USERNAME }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/autonomy-logic/autonomy-netmon
+          tags: |
+            # latest tag only for stable releases (no pre-release suffix)
+            type=raw,value=latest,enable=${{ (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-')) || inputs.release_tag != '' }}
+            # Version tag from git tag
+            type=semver,pattern={{raw}}
+            # Version tag for manual runs with release_tag
+            type=raw,value=${{ inputs.release_tag }},enable=${{ inputs.release_tag != '' }}
+
+      - name: Build and Push Netmon Image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./install
+          file: ./install/Dockerfile.netmon
+          push: true
+          platforms: ${{ inputs.platforms || 'linux/amd64,linux/arm64,linux/arm/v7' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ needs.validate.outputs.version }}
