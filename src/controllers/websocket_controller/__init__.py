@@ -1,5 +1,5 @@
 from .topics import initialize_all
-from tools.ssl import get_ssl_session
+from tools.ssl_config import get_ssl_session
 from tools.logger import *
 import socketio
 import logging

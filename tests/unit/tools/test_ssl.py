@@ -8,7 +8,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
 import datetime
 
-import tools.ssl as ssl_mod
+import tools.ssl_config as ssl_mod
 
 
 def _create_test_cert_and_key(cn="test-agent-123"):

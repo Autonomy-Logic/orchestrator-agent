@@ -1,5 +1,5 @@
 from tools.logger import *
-from tools.ssl import get_agent_id
+from tools.ssl_config import get_agent_id
 from . import topic
 from ..emitters.heartbeat import emit_heartbeat
 import asyncio
