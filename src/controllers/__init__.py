@@ -61,10 +61,11 @@ async def main_websocket_task(server_url: str, dns_ttl: int = 30):
                     debug_socket_factory=ctx.debug_socket_factory,
                 )
 
+                log_info(f"[main] Calling client.connect(), client id={id(client)}, handlers={list(client.handlers.get('/', {}).keys()) if hasattr(client, 'handlers') else 'N/A'}")
                 await client.connect(
                     f"https://{server_url}",
                 )
-                log_info(f"Connected to WebSocket server at {server_url}")
+                log_info(f"Connected to WebSocket server at {server_url}, connected={client.connected}")
                 await client.wait()
 
             except Exception as e:
