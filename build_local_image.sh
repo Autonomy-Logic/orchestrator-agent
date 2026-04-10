@@ -15,10 +15,6 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "=== Stopping containers ==="
-docker stop orchestrator_agent 2>/dev/null || true
-docker stop autonomy_netmon 2>/dev/null || true
-
 echo "=== Removing existing images ==="
 docker rmi ghcr.io/autonomy-logic/orchestrator-agent:latest 2>/dev/null || true
 docker rmi ghcr.io/autonomy-logic/autonomy-netmon:latest 2>/dev/null || true
@@ -42,10 +38,9 @@ else
     echo "Added ghcr.io block to /etc/hosts"
 fi
 
-echo "=== Restarting containers ==="
-docker start autonomy_netmon
-docker start orchestrator_agent
-
 echo ""
-echo "Done. Local images are now in use."
-echo "To undo: sudo sed -i '/ghcr.io/d' /etc/hosts"
+echo "Done. Local images built successfully."
+echo "Restart containers manually to use the new images:"
+echo "  sudo docker restart autonomy_netmon orchestrator_agent"
+echo ""
+echo "To undo ghcr.io block: sudo bash remove_ghcr_block.sh"
