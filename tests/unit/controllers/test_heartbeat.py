@@ -37,7 +37,8 @@ class TestEmitHeartbeat:
     async def test_heartbeat_includes_agent_version(self, mock_to_thread, mock_sleep, mock_metrics, mock_stats):
         """Heartbeat payload includes agent_version from env var."""
         client = _make_client()
-        connected_values = [True, True, False]
+        # connected checked once per iteration (after sleep): True for 1 iter, then False to exit
+        connected_values = [True, False]
         type(client).connected = property(lambda self: connected_values.pop(0) if connected_values else False)
 
         with patch.dict("os.environ", {"AGENT_VERSION": "v1.2.3"}):
@@ -55,9 +56,8 @@ class TestEmitHeartbeat:
     async def test_emits_heartbeat_successfully(self, mock_to_thread, mock_sleep, mock_metrics, mock_stats):
         """Heartbeat emits and resets failure counter on success."""
         client = _make_client()
-        # connected is checked twice per iteration (while + if), plus once for final while
-        # 2 iterations = 2*(while+if) + 1 final while = 5 checks
-        connected_values = [True, True, True, True, False]
+        # connected checked once per iteration (after sleep): True for 2 iters, then False
+        connected_values = [True, True, False]
         type(client).connected = property(lambda self: connected_values.pop(0) if connected_values else False)
 
         await emit_heartbeat(client, "agent-1", MagicMock(), MagicMock(), MagicMock())
@@ -72,8 +72,8 @@ class TestEmitHeartbeat:
     async def test_tolerates_transient_failures(self, mock_to_thread, mock_sleep, mock_metrics, mock_stats):
         """1-2 emit failures should not kill the heartbeat task."""
         client = _make_client()
-        # 3 iterations: while+if per iter + final while = 3*2 + 1 = 7 checks
-        connected_values = [True, True, True, True, True, True, False]
+        # connected checked once per iteration: True for 3 iters, then False
+        connected_values = [True, True, True, False]
         type(client).connected = property(lambda self: connected_values.pop(0) if connected_values else False)
 
         # Fail once, succeed, succeed -- should NOT break after the failure
@@ -102,33 +102,15 @@ class TestEmitHeartbeat:
         assert client.emit.call_count == MAX_CONSECUTIVE_FAILURES
 
     @pytest.mark.asyncio
-    async def test_exits_immediately_if_not_connected(self):
-        """If client is not connected, heartbeat should not emit."""
+    @patch("controllers.websocket_controller.topics.emitters.heartbeat.asyncio.sleep", new_callable=AsyncMock)
+    async def test_exits_after_sleep_if_not_connected(self, mock_sleep):
+        """If client is not connected after sleep, heartbeat should exit without emitting."""
         client = _make_client(connected=False)
 
         await emit_heartbeat(client, "agent-1", MagicMock(), MagicMock(), MagicMock())
 
-        client.emit.assert_not_called()
-
-    @pytest.mark.asyncio
-    @patch("controllers.websocket_controller.topics.emitters.heartbeat.asyncio.sleep", new_callable=AsyncMock)
-    async def test_exits_when_disconnected_during_sleep(self, mock_sleep):
-        """If client disconnects during sleep, heartbeat should exit."""
-        client = _make_client()
-        # Connected on loop entry, disconnected after sleep
-        call_count = 0
-
-        def _connected():
-            nonlocal call_count
-            call_count += 1
-            # First check (while condition): True
-            # Second check (after sleep): False
-            return call_count <= 1
-
-        type(client).connected = property(lambda self: _connected())
-
-        await emit_heartbeat(client, "agent-1", MagicMock(), MagicMock(), MagicMock())
-
+        # Loop runs once: sleep -> check connected (False) -> break
+        mock_sleep.assert_called_once()
         client.emit.assert_not_called()
 
 

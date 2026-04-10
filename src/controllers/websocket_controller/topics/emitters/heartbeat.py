@@ -22,7 +22,7 @@ async def emit_heartbeat(client, agent_id, usage_buffer, devices_usage_buffer, c
     """
     consecutive_failures = 0
 
-    while client.connected:
+    while True:
         await asyncio.sleep(5)
 
         if not client.connected:

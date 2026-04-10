@@ -13,11 +13,9 @@ def init(client, ctx):
     Handle the 'connect' topic to log connection establishment.
     """
     agent_id = get_agent_id()
-    log_info(f"[connect] Registering connect handler on client {id(client)}")
 
     @client.on(NAME)
     async def callback():
-        log_info(f"[connect] Connect event fired on client {id(client)}, connected={client.connected}")
         log_info("Connection established with the server.")
 
         # Signal to the reconnection loop that we've been accepted.
