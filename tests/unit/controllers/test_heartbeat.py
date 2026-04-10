@@ -123,13 +123,13 @@ def _make_mock_client_with_handler_capture():
     handlers = {}
     client = MagicMock()
 
-    def mock_on(name):
+    def _on_decorator(name):
         def decorator(fn):
             handlers[name] = fn
             return fn
         return decorator
 
-    client.on = mock_on
+    client.on = _on_decorator
     return client, handlers
 
 
