@@ -15,9 +15,11 @@ from repos import (
     NetworkInterfaceCacheRepo,
     NetmonClientRepo,
     SocketRepo,
+    DedicatedNicRepo,
 )
 from repos.debug_socket_repo import DebugSocketRepo
 from controllers.websocket_controller.debug_session_manager import DebugSessionManager
+from tools.connection_state import ConnectionStateTracker
 from tools.operations_state import OperationsStateTracker
 from tools.devices_usage_buffer import DevicesUsageBuffer
 from tools.network_event_listener import NetworkEventListener
@@ -27,6 +29,8 @@ from tools.logger import log_info
 from use_cases.dhcp_manager import DHCPManager
 from use_cases.network_reconnection import NetworkReconnectionManager
 from use_cases.serial_device_manager import SerialDeviceManager
+from use_cases.container_lifecycle_manager import ContainerLifecycleManager
+from use_cases.dedicated_nic_manager import DedicatedNICManager
 
 
 class AppContext:
@@ -48,14 +52,34 @@ class AppContext:
         self.reconnection_manager = NetworkReconnectionManager(
             self.netmon_client, self.container_runtime, self.vnic_repo, self.network_interface_cache
         )
+        self.dedicated_nic_repo = DedicatedNicRepo()
         self.serial_device_manager = SerialDeviceManager(self.serial_repo, self.container_runtime)
+        self.dedicated_nic_manager = DedicatedNICManager(
+            self.netmon_client, self.container_runtime, self.dedicated_nic_repo
+        )
         self.network_event_listener = NetworkEventListener(
             interface_cache=self.network_interface_cache,
             netmon_client=self.netmon_client,
             dhcp_manager=self.dhcp_manager,
             reconnection_manager=self.reconnection_manager,
             serial_device_manager=self.serial_device_manager,
+            dedicated_nic_manager=self.dedicated_nic_manager,
         )
+
+        self.lifecycle_manager = ContainerLifecycleManager(
+            container_runtime=self.container_runtime,
+            client_registry=self.client_registry,
+            socket_repo=self.socket_repo,
+            operations_state=self.operations_state,
+        )
+
+        # Wire lifecycle manager into network event listener (property injection
+        # to avoid circular dependency)
+        self.network_event_listener.lifecycle_manager = self.lifecycle_manager
+
+        # Connection state shared between the reconnection loop and
+        # Socket.IO event handlers (connect/disconnect).
+        self.connection_state = ConnectionStateTracker()
 
         # Factory callables for creating fresh repo instances per debug session
         self.http_client_factory = HTTPClientRepo

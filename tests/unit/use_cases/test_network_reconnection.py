@@ -469,6 +469,85 @@ class TestReconnectWifiVnic:
         mgr.netmon_client.request_wifi_dhcp.assert_not_called()
         mgr.netmon_client.setup_proxy_arp_bridge.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_same_network_skips_reconnect(self):
+        """Same interface, gateway, and subnet → skip reconnect."""
+        mgr = _make_manager()
+        container = MagicMock()
+        container.attrs = {"State": {"Pid": 1234}}
+
+        vnic_config = {
+            "name": "wifi_v1",
+            "parent_interface": "wlan0",
+            "network_mode": "dhcp",
+            "_proxy_arp_config": {
+                "ip_address": "192.168.1.50",
+                "gateway": "192.168.1.1",
+                "parent_interface": "wlan0",
+                "veth_host": "veth-plc1",
+            },
+        }
+
+        await mgr._reconnect_wifi_vnic(
+            container, "plc1", vnic_config, "wlan0", "192.168.1.0/24", "192.168.1.1"
+        )
+
+        # Should return early — no cleanup, no DHCP request
+        mgr.netmon_client.cleanup_proxy_arp_bridge.assert_not_called()
+        mgr.netmon_client.request_wifi_dhcp.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_different_subnet_proceeds(self):
+        """Same interface and gateway but different subnet → reconnects."""
+        mgr = _make_manager()
+        container = MagicMock()
+        container.attrs = {"State": {"Pid": 1234}}
+
+        vnic_config = {
+            "name": "wifi_v1",
+            "parent_interface": "wlan0",
+            "network_mode": "dhcp",
+            "_proxy_arp_config": {
+                "ip_address": "192.168.1.50",
+                "gateway": "192.168.1.1",
+                "parent_interface": "wlan0",
+                "veth_host": "veth-plc1",
+            },
+        }
+
+        await mgr._reconnect_wifi_vnic(
+            container, "plc1", vnic_config, "wlan0", "10.0.0.0/24", "192.168.1.1"
+        )
+
+        # Different subnet — should proceed with reconnect
+        mgr.netmon_client.request_wifi_dhcp.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_malformed_ip_proceeds(self):
+        """Malformed IP in old config → proceed with reconnect (ValueError caught)."""
+        mgr = _make_manager()
+        container = MagicMock()
+        container.attrs = {"State": {"Pid": 1234}}
+
+        vnic_config = {
+            "name": "wifi_v1",
+            "parent_interface": "wlan0",
+            "network_mode": "dhcp",
+            "_proxy_arp_config": {
+                "ip_address": "not-an-ip",
+                "gateway": "192.168.1.1",
+                "parent_interface": "wlan0",
+                "veth_host": "veth-plc1",
+            },
+        }
+
+        await mgr._reconnect_wifi_vnic(
+            container, "plc1", vnic_config, "wlan0", "192.168.1.0/24", "192.168.1.1"
+        )
+
+        # Malformed IP → proceed with reconnect
+        mgr.netmon_client.request_wifi_dhcp.assert_called_once()
+
 
 class TestGetNetworkSubnet:
     def test_returns_subnet(self):

@@ -212,7 +212,7 @@ class TestEventHandlerRegistration:
         repo.connect("https://1.2.3.4:8443", "token", timeout=1.0)
 
         # Check that .on() was called for each event
-        on_calls = mock_sio.on.call_args_list
+        on_calls = mock_sio.on.call_args_list  # pylint: disable=no-member
         events_registered = [c[0][0] for c in on_calls]
         assert "connected" in events_registered
         assert "debug_response" in events_registered

@@ -17,10 +17,21 @@ def init(client, ctx):
     @client.on(NAME)
     async def callback():
         log_info("Connection established with the server.")
-        asyncio.create_task(emit_heartbeat(
-            client,
-            agent_id,
-            ctx.usage_buffer,
-            ctx.devices_usage_buffer,
-            ctx.container_runtime,
+
+        # Signal to the reconnection loop that we've been accepted.
+        # Switches from rapid-retry (initial setup) to exponential backoff
+        # and resets the reconnect attempt counter.
+        ctx.connection_state.mark_connected()
+
+        # Cancel any orphaned heartbeat task from a previous connection
+        ctx.connection_state.cancel_heartbeat_task()
+
+        ctx.connection_state.set_heartbeat_task(asyncio.create_task(
+            emit_heartbeat(
+                client,
+                agent_id,
+                ctx.usage_buffer,
+                ctx.devices_usage_buffer,
+                ctx.container_runtime,
+            )
         ))

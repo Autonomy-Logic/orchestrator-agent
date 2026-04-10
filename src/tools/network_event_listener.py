@@ -22,7 +22,7 @@ class NetworkEventListener:
 
     def __init__(self, interface_cache=None, netmon_client=None,
                  dhcp_manager=None, reconnection_manager=None,
-                 serial_device_manager=None):
+                 serial_device_manager=None, dedicated_nic_manager=None):
         self.socket_path = SOCKET_PATH
         self.running = False
         self.listener_task = None
@@ -35,6 +35,8 @@ class NetworkEventListener:
         self.dhcp_manager = dhcp_manager
         self.reconnection_manager = reconnection_manager
         self.serial_device_manager = serial_device_manager
+        self.dedicated_nic_manager = dedicated_nic_manager
+        self.lifecycle_manager = None  # Set by bootstrap after creation
 
     # ========== Lifecycle ==========
 
@@ -64,6 +66,8 @@ class NetworkEventListener:
             except asyncio.CancelledError:
                 pass
         await self.dhcp_manager.stop()
+        if self.dedicated_nic_manager:
+            await self.dedicated_nic_manager.stop()
         log_info("Network event listener stopped")
 
     async def _listen_loop(self):
@@ -87,8 +91,18 @@ class NetworkEventListener:
                     self.netmon_client.writer = writer
                     log_info("Connected to network monitor, listening for events...")
 
+                    # Start/manage existing containers now that network is ready.
+                    # Must run BEFORE DHCP resync so containers have valid network
+                    # namespaces when DHCP clients are started.
+                    if self.lifecycle_manager:
+                        await self.lifecycle_manager.on_network_ready()
+
                     # Resync DHCP for existing containers on startup/reconnect
                     await self.dhcp_manager.resync_dhcp_for_existing_containers()
+
+                    # Resync dedicated NICs and start Docker event listener
+                    if self.dedicated_nic_manager:
+                        await self.dedicated_nic_manager.start()
 
                     # Start background retry task for failed DHCP resyncs
                     if self.dhcp_manager.pending_dhcp_resyncs and not self.dhcp_manager.dhcp_retry_task:
@@ -143,6 +157,11 @@ class NetworkEventListener:
         """Handle a network event from the monitor by dispatching to sub-managers."""
         try:
             event_type = event_data.get("type")
+
+            # Route command responses (no "type" field) to netmon client
+            if event_type is None:
+                self.netmon_client.deliver_response(event_data)
+                return
 
             if event_type == "network_discovery":
                 log_info("Received network discovery event")
@@ -300,6 +319,15 @@ class NetworkEventListener:
 
     async def cleanup_all_proxy_arp(self) -> dict:
         return await self.netmon_client.cleanup_all_proxy_arp()
+
+    async def move_nic_to_container(self, host_interface: str, container_pid: int) -> dict:
+        return await self.netmon_client.move_nic_to_container(host_interface, container_pid)
+
+    async def return_nic_to_host(self, host_interface: str, container_pid: int) -> dict:
+        return await self.netmon_client.return_nic_to_host(host_interface, container_pid)
+
+    async def check_nic_in_container(self, host_interface: str, container_pid: int) -> dict:
+        return await self.netmon_client.check_nic_in_container(host_interface, container_pid)
 
     def get_dhcp_ip(self, container_name: str, vnic_name: str) -> Optional[str]:
         return self.netmon_client.get_dhcp_ip(container_name, vnic_name)

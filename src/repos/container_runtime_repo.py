@@ -216,6 +216,34 @@ class ContainerRuntimeRepo(ContainerRuntimeRepoInterface):
                 log_error(f"Failed to create internal network {network_name}: {e}")
                 raise
 
+    def docker_events(self, **kwargs) -> Any:
+        return self._client.events(**kwargs)
+
+    def create_event_stream(self, **kwargs):
+        """Create a dedicated Docker event stream on a fresh client.
+
+        Docker's events() blocks the HTTP connection, so it must not share the
+        client used for other operations. Returns (event_iterator, close_fn).
+        """
+        client = docker.from_env()
+        return client.events(**kwargs), client.close
+
+    def get_running_pid(self, container_name: str) -> Optional[int]:
+        """
+        Return the PID of a running container, or None if not running.
+
+        Reloads container state from Docker to get the current PID.
+        """
+        try:
+            container = self._client.containers.get(container_name)
+            container.reload()
+            pid = container.attrs.get("State", {}).get("Pid", 0)
+            if pid > 0 and container.status == "running":
+                return pid
+            return None
+        except docker.errors.NotFound:
+            return None
+
     def get_existing_mac_addresses_on_interface(
         self, parent_interface: str
     ) -> Dict[str, str]:

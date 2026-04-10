@@ -5,6 +5,7 @@ from tools.contract_validation import (
     BaseType,
     StringType,
     NonEmptyStringType,
+    InterfaceNameType,
     NumberType,
     BooleanType,
     DateType,
@@ -297,3 +298,32 @@ class TestValidateContractGenericException:
         assert error["status"] == "error"
         assert "Validation error" in error["error"]
         assert "something went wrong" in error["error"]
+
+
+class TestInterfaceNameType:
+    def test_valid_simple(self):
+        InterfaceNameType.validate("eth0")
+
+    def test_valid_with_dots_dashes_underscores(self):
+        InterfaceNameType.validate("wlan0.1")
+        InterfaceNameType.validate("br-lan")
+        InterfaceNameType.validate("veth_abc")
+
+    def test_valid_max_length(self):
+        InterfaceNameType.validate("a" * 15)
+
+    def test_invalid_not_string(self):
+        with pytest.raises(TypeError, match="must be a string"):
+            InterfaceNameType.validate(123)
+
+    def test_invalid_empty(self):
+        with pytest.raises(TypeError, match="valid Linux interface name"):
+            InterfaceNameType.validate("")
+
+    def test_invalid_too_long(self):
+        with pytest.raises(TypeError, match="valid Linux interface name"):
+            InterfaceNameType.validate("a" * 16)
+
+    def test_invalid_special_chars(self):
+        with pytest.raises(TypeError, match="valid Linux interface name"):
+            InterfaceNameType.validate("eth0/foo")

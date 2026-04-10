@@ -60,20 +60,25 @@ class TestHandleEvent:
         })
 
     @pytest.mark.asyncio
-    async def test_network_discovery_no_addresses(self):
-        """Interface with no IPv4 addresses removed from cache."""
+    async def test_network_discovery_no_addresses_still_cached(self):
+        """Interface with no IPv4 addresses is still cached (for dedicated NIC eligibility)."""
         listener = _make_listener()
 
         await listener._handle_event({
             "type": "network_discovery",
             "data": {
                 "interfaces": [
-                    {"interface": "eth0", "ipv4_addresses": [], "gateway": None}
+                    {"interface": "enp4s0", "ipv4_addresses": [], "gateway": None, "type": "ethernet"}
                 ]
             },
         })
 
-        listener.interface_cache.remove_interface.assert_called_once_with("eth0")
+        listener.interface_cache.set_interface.assert_called_once_with("enp4s0", {
+            "subnet": None,
+            "gateway": None,
+            "type": "ethernet",
+            "addresses": [],
+        })
 
     @pytest.mark.asyncio
     async def test_network_discovery_skips_no_name(self):
@@ -130,16 +135,40 @@ class TestHandleEvent:
         listener.interface_cache.set_interface.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_network_change_no_addresses(self):
-        """network_change with empty addresses removes from cache."""
+    async def test_network_change_no_addresses_still_cached(self):
+        """network_change with empty addresses still caches the interface."""
         listener = _make_listener()
+        listener.interface_cache.get_all_interfaces.return_value = {}
 
         await listener._handle_event({
             "type": "network_change",
-            "data": {"interface": "eth0", "ipv4_addresses": []},
+            "data": {"interface": "eth0", "ipv4_addresses": [], "status": "removed"},
         })
 
-        listener.interface_cache.remove_interface.assert_called_once_with("eth0")
+        # Interface is always cached regardless of IP status
+        listener.interface_cache.set_interface.assert_called_once()
+        listener.interface_cache.remove_interface.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_network_change_no_addresses_keeps_in_cache(self):
+        """network_change with empty addresses keeps interface in cache."""
+        listener = _make_listener()
+        listener.interface_cache.get_all_interfaces.return_value = {
+            "enp4s0": {"type": "ethernet"},
+        }
+
+        await listener._handle_event({
+            "type": "network_change",
+            "data": {"interface": "enp4s0", "ipv4_addresses": []},
+        })
+
+        listener.interface_cache.remove_interface.assert_not_called()
+        listener.interface_cache.set_interface.assert_called_once_with("enp4s0", {
+            "subnet": None,
+            "gateway": None,
+            "type": "ethernet",
+            "addresses": [],
+        })
 
     @pytest.mark.asyncio
     async def test_device_discovery(self):
@@ -168,6 +197,26 @@ class TestHandleEvent:
 
         # Should not raise
         await listener._handle_event({"type": "unknown_event", "data": {}})
+
+    @pytest.mark.asyncio
+    async def test_command_response_routed_to_netmon_client(self):
+        """Message without 'type' field is a command response, delivered to netmon_client."""
+        listener = _make_listener()
+        response = {"success": True, "message": "NIC moved"}
+
+        await listener._handle_event(response)
+
+        listener.netmon_client.deliver_response.assert_called_once_with(response)
+
+    @pytest.mark.asyncio
+    async def test_command_error_response_routed(self):
+        """Error responses from netmon also routed to netmon_client."""
+        listener = _make_listener()
+        response = {"success": False, "error": "Interface not found"}
+
+        await listener._handle_event(response)
+
+        listener.netmon_client.deliver_response.assert_called_once_with(response)
 
 
 class TestDelegatedApi:
@@ -265,6 +314,133 @@ class TestDelegatedApi:
         listener.register_device_callback(cb)
 
         listener.serial_device_manager.register_device_callback.assert_called_once_with(cb)
+
+    @pytest.mark.asyncio
+    async def test_move_nic_to_container(self):
+        listener = _make_listener()
+        listener.netmon_client.move_nic_to_container = AsyncMock(return_value={"success": True})
+
+        result = await listener.move_nic_to_container("enp3s0", 42)
+
+        listener.netmon_client.move_nic_to_container.assert_called_once_with("enp3s0", 42)
+        assert result == {"success": True}
+
+    @pytest.mark.asyncio
+    async def test_return_nic_to_host(self):
+        listener = _make_listener()
+        listener.netmon_client.return_nic_to_host = AsyncMock(return_value={"success": True})
+
+        result = await listener.return_nic_to_host("enp3s0", 42)
+
+        listener.netmon_client.return_nic_to_host.assert_called_once_with("enp3s0", 42)
+        assert result == {"success": True}
+
+    @pytest.mark.asyncio
+    async def test_check_nic_in_container(self):
+        listener = _make_listener()
+        listener.netmon_client.check_nic_in_container = AsyncMock(return_value={"present": True})
+
+        result = await listener.check_nic_in_container("enp3s0", 42)
+
+        listener.netmon_client.check_nic_in_container.assert_called_once_with("enp3s0", 42)
+        assert result == {"present": True}
+
+
+class TestDedicatedNicManagerIntegration:
+    @pytest.mark.asyncio
+    async def test_stop_calls_dedicated_nic_manager_stop(self):
+        """stop() calls dedicated_nic_manager.stop() when present."""
+        nic_mgr = MagicMock()
+        nic_mgr.stop = AsyncMock()
+        listener = NetworkEventListener(
+            interface_cache=MagicMock(),
+            netmon_client=MagicMock(),
+            dhcp_manager=MagicMock(stop=AsyncMock()),
+            reconnection_manager=MagicMock(),
+            serial_device_manager=MagicMock(),
+            dedicated_nic_manager=nic_mgr,
+        )
+        listener.running = False
+        listener.listener_task = None
+
+        await listener.stop()
+
+        nic_mgr.stop.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_listen_loop_starts_dedicated_nic_manager(self):
+        """_listen_loop calls dedicated_nic_manager.start() after connecting."""
+        nic_mgr = MagicMock()
+        nic_mgr.start = AsyncMock()
+        dhcp_mgr = MagicMock()
+        dhcp_mgr.resync_dhcp_for_existing_containers = AsyncMock()
+        dhcp_mgr.pending_dhcp_resyncs = {}
+        dhcp_mgr.dhcp_retry_task = None
+        netmon_client = MagicMock()
+
+        listener = NetworkEventListener(
+            interface_cache=MagicMock(),
+            netmon_client=netmon_client,
+            dhcp_manager=dhcp_mgr,
+            reconnection_manager=MagicMock(),
+            serial_device_manager=MagicMock(),
+            dedicated_nic_manager=nic_mgr,
+        )
+        listener.running = True
+
+        mock_reader = AsyncMock()
+        # Make the reader return empty on first read to exit the loop
+        mock_reader.readline = AsyncMock(return_value=b"")
+        mock_writer = MagicMock()
+
+        with patch("tools.network_event_listener.asyncio.open_unix_connection",
+                    return_value=(mock_reader, mock_writer)):
+            with patch("tools.network_event_listener.os.path.exists", return_value=True):
+                # Stop after first iteration
+                async def _stop_after_empty(*args, **kwargs):
+                    listener.running = False
+                    return b""
+                mock_reader.readline.side_effect = _stop_after_empty
+
+                await listener._listen_loop()
+
+        nic_mgr.start.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_listen_loop_calls_lifecycle_manager_on_network_ready(self):
+        """_listen_loop calls lifecycle_manager.on_network_ready() after connecting."""
+        lifecycle_mgr = MagicMock()
+        lifecycle_mgr.on_network_ready = AsyncMock()
+        dhcp_mgr = MagicMock()
+        dhcp_mgr.resync_dhcp_for_existing_containers = AsyncMock()
+        dhcp_mgr.pending_dhcp_resyncs = {}
+        dhcp_mgr.dhcp_retry_task = None
+        netmon_client = MagicMock()
+
+        listener = NetworkEventListener(
+            interface_cache=MagicMock(),
+            netmon_client=netmon_client,
+            dhcp_manager=dhcp_mgr,
+            reconnection_manager=MagicMock(),
+            serial_device_manager=MagicMock(),
+        )
+        listener.lifecycle_manager = lifecycle_mgr
+        listener.running = True
+
+        mock_reader = AsyncMock()
+        mock_writer = MagicMock()
+
+        with patch("tools.network_event_listener.asyncio.open_unix_connection",
+                    return_value=(mock_reader, mock_writer)):
+            with patch("tools.network_event_listener.os.path.exists", return_value=True):
+                async def _stop_after_empty(*args, **kwargs):
+                    listener.running = False
+                    return b""
+                mock_reader.readline.side_effect = _stop_after_empty
+
+                await listener._listen_loop()
+
+        lifecycle_mgr.on_network_ready.assert_awaited_once()
 
 
 class TestProcessPendingChanges:
