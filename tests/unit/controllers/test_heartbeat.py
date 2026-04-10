@@ -114,48 +114,73 @@ class TestEmitHeartbeat:
         client.emit.assert_not_called()
 
 
+def _make_mock_client_with_handler_capture():
+    """Create a mock client that captures handlers registered via @client.on(name).
+
+    Returns (client, handlers_dict) where handlers_dict maps event names
+    to the async callback functions registered by topic init().
+    """
+    handlers = {}
+    client = MagicMock()
+
+    def mock_on(name):
+        def decorator(fn):
+            handlers[name] = fn
+            return fn
+        return decorator
+
+    client.on = mock_on
+    return client, handlers
+
+
 class TestConnectHandler:
     @pytest.mark.asyncio
-    async def test_sets_has_ever_connected(self):
-        """Connect handler should set has_ever_connected on ctx."""
+    @patch("controllers.websocket_controller.topics.receivers.connect.emit_heartbeat",
+           new_callable=AsyncMock)
+    @patch("controllers.websocket_controller.topics.receivers.connect.get_agent_id",
+           return_value="test-agent")
+    async def test_marks_connected_and_starts_heartbeat(self, mock_agent_id, mock_heartbeat):
+        """Connect handler should call mark_connected() and start heartbeat."""
         from controllers.websocket_controller.topics.receivers.connect import init
+        from tools.connection_state import ConnectionStateTracker
 
-        client = MagicMock()
+        client, handlers = _make_mock_client_with_handler_capture()
         ctx = MagicMock()
-        ctx.connection_state = {"has_ever_connected": False}
-        ctx.heartbeat_task = None
+        ctx.connection_state = ConnectionStateTracker()
+        ctx.usage_buffer = MagicMock()
+        ctx.devices_usage_buffer = MagicMock()
+        ctx.container_runtime = MagicMock()
 
-        # Register the handler
         init(client, ctx)
+        assert "connect" in handlers
 
-        # Find the registered callback
-        callback = client.on.call_args[0][0] if client.on.call_args else None
-        # The @client.on decorator was called, get the actual function
-        on_call = client.on
-        assert on_call.called
+        await handlers["connect"]()
 
-        # Execute the callback directly
-        handler = on_call.call_args_list[0][1].get("handler") if on_call.call_args_list[0][1] else None
-
-        # Alternative: call the registered function via the decorator mock
-        # The init function registers via @client.on(NAME), which means
-        # client.on is called with NAME, and returns a decorator.
-        # Let's just verify the state change by simulating.
-        ctx.connection_state["has_ever_connected"] = True
-        assert ctx.connection_state["has_ever_connected"] is True
+        assert ctx.connection_state.has_ever_connected is True
+        assert ctx.connection_state.reconnect_attempt == 0
 
     @pytest.mark.asyncio
-    async def test_cancels_orphaned_heartbeat_task(self):
-        """Connect handler should cancel existing heartbeat task."""
-        ctx = MagicMock()
-        ctx.connection_state = {"has_ever_connected": False}
-        old_task = MagicMock()
-        ctx.heartbeat_task = old_task
+    @patch("controllers.websocket_controller.topics.receivers.connect.emit_heartbeat",
+           new_callable=AsyncMock)
+    @patch("controllers.websocket_controller.topics.receivers.connect.get_agent_id",
+           return_value="test-agent")
+    async def test_cancels_orphaned_heartbeat(self, mock_agent_id, mock_heartbeat):
+        """Connect handler should cancel previous heartbeat task."""
+        from controllers.websocket_controller.topics.receivers.connect import init
+        from tools.connection_state import ConnectionStateTracker
 
-        # Simulate what the connect handler does
-        if ctx.heartbeat_task:
-            ctx.heartbeat_task.cancel()
-        ctx.heartbeat_task = None
+        client, handlers = _make_mock_client_with_handler_capture()
+        ctx = MagicMock()
+        ctx.connection_state = ConnectionStateTracker()
+        ctx.usage_buffer = MagicMock()
+        ctx.devices_usage_buffer = MagicMock()
+        ctx.container_runtime = MagicMock()
+
+        old_task = MagicMock()
+        ctx.connection_state.set_heartbeat_task(old_task)
+
+        init(client, ctx)
+        await handlers["connect"]()
 
         old_task.cancel.assert_called_once()
 
@@ -164,68 +189,80 @@ class TestDisconnectHandler:
     @pytest.mark.asyncio
     async def test_cancels_heartbeat_task(self):
         """Disconnect handler should cancel heartbeat task."""
-        ctx = MagicMock()
-        task = MagicMock()
-        ctx.heartbeat_task = task
+        from controllers.websocket_controller.topics.receivers.disconnect import init
+        from tools.connection_state import ConnectionStateTracker
 
-        # Simulate what the disconnect handler does
-        if ctx.heartbeat_task:
-            ctx.heartbeat_task.cancel()
-            ctx.heartbeat_task = None
+        client, handlers = _make_mock_client_with_handler_capture()
+        ctx = MagicMock()
+        ctx.connection_state = ConnectionStateTracker()
+
+        task = MagicMock()
+        ctx.connection_state.set_heartbeat_task(task)
+
+        init(client, ctx)
+        assert "disconnect" in handlers
+
+        await handlers["disconnect"]()
 
         task.cancel.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_no_crash_when_no_heartbeat_task(self):
         """Disconnect handler should not crash if no heartbeat task."""
-        ctx = MagicMock()
-        ctx.heartbeat_task = None
+        from controllers.websocket_controller.topics.receivers.disconnect import init
+        from tools.connection_state import ConnectionStateTracker
 
-        # Simulate what the disconnect handler does
-        if ctx.heartbeat_task:
-            ctx.heartbeat_task.cancel()
-            ctx.heartbeat_task = None
-        # No exception
+        client, handlers = _make_mock_client_with_handler_capture()
+        ctx = MagicMock()
+        ctx.connection_state = ConnectionStateTracker()
+
+        init(client, ctx)
+        # Should not raise
+        await handlers["disconnect"]()
 
 
 class TestReconnectionBranching:
     def test_initial_setup_uses_fixed_delay(self):
         """Before first connection, should use INITIAL_SETUP_RETRY_DELAY."""
+        from tools.connection_state import ConnectionStateTracker
         from tools.dns_utils import INITIAL_SETUP_RETRY_DELAY, calculate_backoff
 
-        connection_state = {"has_ever_connected": False}
+        state = ConnectionStateTracker()
 
-        if not connection_state["has_ever_connected"]:
+        if not state.has_ever_connected:
             delay = INITIAL_SETUP_RETRY_DELAY
         else:
-            delay = calculate_backoff(0)
+            delay = calculate_backoff(state.reconnect_attempt)
 
         assert delay == INITIAL_SETUP_RETRY_DELAY
 
     def test_after_connection_uses_backoff(self):
         """After first connection, should use exponential backoff."""
+        from tools.connection_state import ConnectionStateTracker
         from tools.dns_utils import INITIAL_SETUP_RETRY_DELAY, calculate_backoff
 
-        connection_state = {"has_ever_connected": True}
+        state = ConnectionStateTracker()
+        state.mark_connected()
 
-        if not connection_state["has_ever_connected"]:
+        if not state.has_ever_connected:
             delay = INITIAL_SETUP_RETRY_DELAY
         else:
-            delay = calculate_backoff(0)
+            delay = calculate_backoff(state.reconnect_attempt)
 
         assert delay != INITIAL_SETUP_RETRY_DELAY
         assert delay >= 0.7  # RECONNECT_DELAY_BASE with negative jitter
 
     def test_attempt_counter_not_incremented_during_initial_setup(self):
         """reconnect_attempt should not grow during initial setup."""
-        connection_state = {"has_ever_connected": False}
-        reconnect_attempt = 0
+        from tools.connection_state import ConnectionStateTracker
+
+        state = ConnectionStateTracker()
 
         # Simulate 10 iterations of the initial-setup branch
         for _ in range(10):
-            if not connection_state["has_ever_connected"]:
+            if not state.has_ever_connected:
                 pass  # No increment in initial setup branch
             else:
-                reconnect_attempt += 1
+                state.increment_reconnect_attempt()
 
-        assert reconnect_attempt == 0
+        assert state.reconnect_attempt == 0

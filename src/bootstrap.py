@@ -19,6 +19,7 @@ from repos import (
 )
 from repos.debug_socket_repo import DebugSocketRepo
 from controllers.websocket_controller.debug_session_manager import DebugSessionManager
+from tools.connection_state import ConnectionStateTracker
 from tools.operations_state import OperationsStateTracker
 from tools.devices_usage_buffer import DevicesUsageBuffer
 from tools.network_event_listener import NetworkEventListener
@@ -78,9 +79,7 @@ class AppContext:
 
         # Connection state shared between the reconnection loop and
         # Socket.IO event handlers (connect/disconnect).
-        self.connection_state = {"has_ever_connected": False}
-        self.heartbeat_task = None
-        self._reconnect_attempt = 0
+        self.connection_state = ConnectionStateTracker()
 
         # Factory callables for creating fresh repo instances per debug session
         self.http_client_factory = HTTPClientRepo

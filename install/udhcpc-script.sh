@@ -116,14 +116,19 @@ case "$1" in
         if [ -n "$dns" ] && [ -n "$ORCH_CONTAINER_PID" ]; then
             resolv_path="/proc/$ORCH_CONTAINER_PID/root/etc/resolv.conf"
             if [ -d "/proc/$ORCH_CONTAINER_PID/root/etc" ]; then
-                : > "$resolv_path"
-                for server in $dns; do
-                    echo "nameserver $server" >> "$resolv_path"
-                done
-                if [ -n "$domain" ]; then
-                    echo "search $domain" >> "$resolv_path"
+                # Suppress errors on writes in case the container restarts
+                # between the directory check and the write (PID becomes stale).
+                if : > "$resolv_path" 2>/dev/null; then
+                    for server in $dns; do
+                        echo "nameserver $server" >> "$resolv_path" 2>/dev/null
+                    done
+                    if [ -n "$domain" ]; then
+                        echo "search $domain" >> "$resolv_path" 2>/dev/null
+                    fi
+                    log "DNS configured in container (PID=$ORCH_CONTAINER_PID): $dns"
+                else
+                    log "WARNING: Failed to write DNS - container may have restarted (stale PID)"
                 fi
-                log "DNS configured in container (PID=$ORCH_CONTAINER_PID): $dns"
             else
                 log "WARNING: Cannot write DNS - container proc path not found"
             fi

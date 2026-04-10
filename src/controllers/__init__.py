@@ -65,7 +65,6 @@ async def main_websocket_task(server_url: str, dns_ttl: int = 30):
                     f"https://{server_url}",
                 )
                 log_info(f"Connected to WebSocket server at {server_url}")
-                ctx.connection_state["has_ever_connected"] = True
                 await client.wait()
 
             except Exception as e:
@@ -81,16 +80,16 @@ async def main_websocket_task(server_url: str, dns_ttl: int = 30):
                         pass
 
             # Calculate retry delay
-            if not ctx.connection_state["has_ever_connected"]:
+            if not ctx.connection_state.has_ever_connected:
                 delay = INITIAL_SETUP_RETRY_DELAY
                 log_warning(
                     f"Waiting for backend to accept connection... "
                     f"retrying in {delay:.0f}s"
                 )
             else:
-                delay = calculate_backoff(ctx._reconnect_attempt)
+                delay = calculate_backoff(ctx.connection_state.reconnect_attempt)
                 log_warning(f"Reconnecting in {delay:.1f}s...")
-                ctx._reconnect_attempt += 1
+                ctx.connection_state.increment_reconnect_attempt()
 
             await asyncio.sleep(delay)
 

@@ -15,6 +15,4 @@ def init(client, ctx):
         log_info("Connection ended by the server.")
 
         # Cancel the heartbeat task to prevent orphaned emit attempts
-        if ctx.heartbeat_task:
-            ctx.heartbeat_task.cancel()
-            ctx.heartbeat_task = None
+        ctx.connection_state.cancel_heartbeat_task()
