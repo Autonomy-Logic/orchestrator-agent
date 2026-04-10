@@ -29,32 +29,57 @@ case "$1" in
         ;;
 
     bound|renew)
-        log "Configuring interface $interface: IP=$ip, mask=$mask, router=$router (key=$ORCH_DHCP_KEY)"
-        
+        log "Configuring interface $interface: IP=$ip, subnet=$subnet, mask=$mask, router=$router, dns=$dns (key=$ORCH_DHCP_KEY)"
+
         # Remove old addresses
         ip addr flush dev "$interface" 2>/dev/null
-        
-        # Calculate prefix length from netmask
-        if [ -n "$mask" ]; then
-            prefix=$(echo "$mask" | awk -F. '{
-                split($0, a, ".");
+
+        # Determine prefix length from DHCP response.
+        # udhcpc may provide the mask in different ways depending on the version:
+        #   - $subnet: dotted-decimal (e.g., "255.255.255.0") on some builds
+        #   - $mask: dotted-decimal or plain prefix length (e.g., "24")
+        # We handle all cases.
+        prefix=""
+
+        # Try $subnet first (dotted-decimal netmask)
+        if [ -n "$subnet" ] && echo "$subnet" | grep -q '\.'; then
+            prefix=$(echo "$subnet" | awk -F. '{
                 bits = 0;
-                for (i = 1; i <= 4; i++) {
-                    n = a[i];
-                    while (n > 0) {
-                        bits += n % 2;
-                        n = int(n / 2);
-                    }
+                for (i = 1; i <= NF; i++) {
+                    n = $i;
+                    while (n > 0) { bits += n % 2; n = int(n / 2); }
                 }
                 print bits;
             }')
-        else
+        fi
+
+        # Try $mask if $subnet didn't work
+        if [ -z "$prefix" ] && [ -n "$mask" ]; then
+            if echo "$mask" | grep -q '\.'; then
+                # Dotted-decimal mask (e.g., "255.255.255.0")
+                prefix=$(echo "$mask" | awk -F. '{
+                    bits = 0;
+                    for (i = 1; i <= NF; i++) {
+                        n = $i;
+                        while (n > 0) { bits += n % 2; n = int(n / 2); }
+                    }
+                    print bits;
+                }')
+            else
+                # Plain prefix length (e.g., "24")
+                prefix="$mask"
+            fi
+        fi
+
+        # Default to /24 if nothing worked
+        if [ -z "$prefix" ] || [ "$prefix" -lt 1 ] 2>/dev/null || [ "$prefix" -gt 32 ] 2>/dev/null; then
+            log "WARNING: Could not determine prefix length (subnet=$subnet, mask=$mask), defaulting to /24"
             prefix=24
         fi
-        
+
         # Add new address
         ip addr add "$ip/$prefix" dev "$interface"
-        
+
         # Add default route if router is provided
         if [ -n "$router" ]; then
             # Remove old default routes via this interface
@@ -62,10 +87,18 @@ case "$1" in
             # Add new default route with lower metric to not override main route
             ip route add default via "$router" dev "$interface" metric 100
         fi
-        
+
         # Configure DNS if provided
         if [ -n "$dns" ]; then
             log "DNS servers: $dns"
+            # Write resolv.conf for the container's network namespace
+            : > /etc/resolv.conf
+            for server in $dns; do
+                echo "nameserver $server" >> /etc/resolv.conf
+            done
+            if [ -n "$domain" ]; then
+                echo "search $domain" >> /etc/resolv.conf
+            fi
         fi
         
         # Write lease information to file for netmon to read
@@ -73,6 +106,7 @@ case "$1" in
 {
     "interface": "$interface",
     "ip": "$ip",
+    "subnet": "$subnet",
     "mask": "$mask",
     "prefix": $prefix,
     "router": "$router",
